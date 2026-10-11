@@ -339,3 +339,14 @@ def test_search_unavailable_pauses_job(online_tower, conn):
     out = runner.start(job.id, extra={"auto_approve": True})
     assert out.status == "paused" and "internet" in out.reason
     runner.close()
+
+
+def test_newly_denied_domains_never_reach_agents(online_tower, conn, monkeypatch):
+    from watchtower.engine.beacon import glass as glass_mod
+    Knowledge(conn).add("Fresnel lenses compared in depth for lighthouses.", "https://spam.example/old")
+    monkeypatch.setattr(glass_mod, "load_glass_rules", lambda floor: glass_mod.GlassRules(
+        "f1", deny_domains=("spam.example",), allow_domains=()))
+    runner, model, job = online_tower(FakeBeacon(conn), {"f1.lead": [{"tasks": ["fresnel lenses compared"]}]})
+    runner.start(job.id, extra={"auto_approve": True})
+    assert not any("spam.example" in p for p in model.prompts)
+    runner.close()

@@ -79,3 +79,20 @@ def test_injection_bypasses_are_caught(attack):
     for word in ("instructions", "act as", "Disregard", "Pretend"):
         if word in attack:
             assert word not in v.text
+
+
+def test_domain_allowed_rechecks_current_rules():
+    glass = Glass(GlassRules("f1", deny_domains=("spam.example",), allow_domains=()))
+    assert glass.domain_allowed("https://a.example/x") is True
+    assert glass.domain_allowed("https://www.spam.example/x") is False
+    assert glass.domain_allowed("file:///notes.md") is True
+
+
+def test_bad_relevance_output_rejects_page_not_job():
+    from watchtower.engine.model_socket import BadModelOutput
+
+    def broken(prompt):
+        raise BadModelOutput("not json")
+
+    v = Glass(RULES, ask=broken).inspect("https://a.example/x", GOOD, "t")
+    assert not v.passed and "relevance check failed" in v.reasons[0]

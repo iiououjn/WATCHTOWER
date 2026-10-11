@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from watchtower.engine.beacon import glass as glass_mod
 from watchtower.engine.beacon.beacon import Beacon
 from watchtower.engine.bus import Bus
 from watchtower.engine.floor import Floor, strs, untrusted
@@ -114,7 +115,7 @@ class TowerPipeline:
         raise NeedsOwner(f"gate rejected floor 1 {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")
 
     def _context(self, task: str) -> str:
-        return "\n".join(
-            untrusted(h.source, h.text[:CONTEXT_CHARS])
-            for h in self._knowledge.search(task, limit=3, distinct=False)
-        )
+        # re-check stored sources against the CURRENT glass rules: a site denied later never reaches agents
+        glass = glass_mod.Glass(glass_mod.load_glass_rules("f1"))
+        hits = [h for h in self._knowledge.search(task, limit=6, distinct=False) if glass.domain_allowed(h.source)]
+        return "\n".join(untrusted(h.source, h.text[:CONTEXT_CHARS]) for h in hits[:3])

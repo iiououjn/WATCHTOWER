@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 import yaml
 
 from watchtower.engine.floor import truthy, untrusted
+from watchtower.engine.model_socket import BadModelOutput
 
 GLASS_DIR = Path(__file__).resolve().parents[2] / "glass"
 INJECTION = re.compile(
@@ -76,6 +77,16 @@ class Glass:
         self._rules = rules
         self._ask = ask
 
+    def domain_allowed(self, url: str) -> bool:
+        """Re-check a source against the current domain rules (non-web sources always pass)."""
+        parts = urlsplit(url)
+        if parts.scheme not in ("http", "https"):
+            return True
+        host = (parts.hostname or "").lower()
+        if _matches(host, self._rules.deny_domains):
+            return False
+        return not self._rules.allow_domains or _matches(host, self._rules.allow_domains)
+
     def inspect(self, url: str, text: str, task: str) -> GlassVerdict:
         host = (urlsplit(url).hostname or "").lower()
         if _matches(host, self._rules.deny_domains):
@@ -99,7 +110,10 @@ class Glass:
             return self._reject("too little readable text")
         notes = [f"removed {len(flagged)} instruction-like paragraph(s)"] if flagged else []
         if self._ask is not None:
-            verdict = self._ask(RELEVANCE_PROMPT.format(task=task, page=untrusted(url, clean[:2000])))
+            try:
+                verdict = self._ask(RELEVANCE_PROMPT.format(task=task, page=untrusted(url, clean[:2000])))
+            except BadModelOutput:
+                return self._reject("relevance check failed (model gave no usable answer)")
             if not truthy(verdict.get("relevant")):
                 return self._reject(f"not relevant: {str(verdict.get('reason') or 'no reason given')[:200]}")
         return GlassVerdict(True, notes, clean)
