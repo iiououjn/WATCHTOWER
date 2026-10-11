@@ -1,0 +1,203 @@
+# THE WATCHTOWER — Master Design Spec
+
+- **Date:** 2026-10-12
+- **Owner:** Rishi
+- **Status:** Draft, awaiting owner review
+- **Type:** Architectural (master spec; each build phase gets its own spec → plan → build)
+
+---
+
+## 1. Intent
+
+### What the owner said
+- A full agentic ecosystem shaped like a lighthouse: a Ground Engine, five working floors, and a rotating Beacon with five Glass layers on top.
+- Floors: F1 Research, F2 Development, F3 Build (MVP → full app), F4 Deploy + QA, F5 Oversight (cross-checks all floors against guardrails).
+- Ground Engine powers and connects everything: models, connectors, MCPs, RAG, ML, memory.
+- Beacon scans the internet for what is needed, filters out what is not, detects threats, and acts as the tower's NLP layer.
+- Each Glass layer protects its floor from bogus or hallucinated input.
+- Each floor works like an office: employees, team leads, managers, HR (orchestrator), C-suite.
+- "Break" = agents are not all active at once; idle agents do no work. Context is never lost; it is saved to the Engine.
+- Produces all kinds of work: web, mobile, CLI, API, ML, and non-software (research, plans, content).
+- Personal project first (alongside Dip, Closet, Maps-for-flats); may become SaaS or open source later.
+- Security, multi-user readiness, and interface quality must be SaaS-grade from day one.
+- Runs locally on the owner's Mac first, hybrid cloud later.
+- Must cost $0 to run. Paid models are optional, never required.
+
+### Success criteria
+1. The owner runs `watchtower run "<idea>"` on their Mac and the tower carries it through spec → research → dev → build → deploy/QA → oversight, with $0 spend by default.
+2. Every floor handoff is gated by F5 Oversight; failed work is sent back, not restarted.
+3. No web content can act as an instruction to any agent.
+4. A crash or model-limit pause never loses work; jobs resume from the last checkpoint.
+5. The owner sees and controls everything from a CLI and a live lighthouse dashboard.
+
+### Assumptions (owner may correct)
+- v1 targets web apps end to end; other output types are added later as toolkits.
+- Owner is the sole user in v1, but auth and data model are multi-user ready.
+
+---
+
+## 2. Constraints
+
+| Constraint | Value | Design impact |
+|---|---|---|
+| Hardware | Apple M2, **8 GB RAM**, ~64 GB free disk | One local model loaded at a time; small models (~3–4B); deterministic checks before LLM checks |
+| Budget | **$0** by default | Local models via Ollama; free self-hosted search; paid providers off by default with hard caps |
+| Available paid options | Anthropic API credits (~$100–200), Claude Pro plan | Optional plug-ins only; never required |
+| Installed tools | Ollama, Docker, Claude Code, Node 25, Python 3.10 | Used directly; Python ≥3.11 recommended for the Engine (to install) |
+| Runtime | Local Mac first → hybrid cloud → SaaS | All infra behind swappable adapters |
+
+**Honest expectation:** on 8 GB with local models only, the tower works but produces simpler apps slowly. Quality scales with better hardware (swap in larger local models) or optional cloud models, with zero code changes.
+
+---
+
+## 3. Architecture overview
+
+```
+Owner ─▶ CLI / Dashboard  (FastAPI + WebSocket ⇄ Engine)
+              │
+        [Step 0: CPO writes spec ⇄ asks Owner questions]
+              │
+ Beacon ─▶ Glass1 ─▶ F1 Research   ─▶ ✓Gate
+           Glass2 ─▶ F2 Dev        ─▶ ✓Gate   ◀── fail = send back (max 3), then Owner decides
+           Glass3 ─▶ F3 Build      ─▶ ✓Gate
+           Glass4 ─▶ F4 Deploy/QA  ─▶ ✓Gate
+           Glass5 ─▶ F5 Oversight  (runs every ✓Gate + final audit)
+              │
+ ═════════════ GROUND ENGINE (under and around everything) ═════════════
+```
+
+Job lifecycle: `draft → spec_approved → F1 → F2 → F3 → F4 → final_audit → owner_signoff → done`, with backward transitions allowed on gate failure (bounded by retry limits).
+
+---
+
+## 4. Ground Engine
+
+A single Python service on the Mac. Eight modules, each with one job and a narrow interface.
+
+| Module | Responsibility | v1 implementation | Swap path |
+|---|---|---|---|
+| **Model Socket** | Single interface to any LLM; routes by task tier; enforces one-local-model-in-RAM | LiteLLM + Ollama | Add Claude/Gemini/etc. via config |
+| **Memory** | Agent context save/restore on idle; long-term memory; post-job lessons | SQLite | Postgres |
+| **Knowledge (RAG)** | Searchable store of Beacon findings and project files | Chroma (local, persistent) | pgvector / managed vector DB |
+| **Bus** | Messages and events between floors/agents/UI | In-process async queue | Redis |
+| **Scheduler** | Wakes/idles agents; concurrency limit; pause/resume on model limits | LangGraph with checkpointer | Distributed workers |
+| **Tool Hub** | MCP servers and tools (fs, git, browser, shell) with per-floor permissions | MCP client | Same |
+| **Sandbox** | All agent-executed code runs isolated, never on owner's real files | Docker | Cloud runners |
+| **Governor** | Budgets (tokens/time/$), approval queue, secrets, append-only audit log | SQLite + macOS Keychain | Postgres + cloud secret manager |
+
+### Model tiers (default config, all local, $0)
+- **tier-small** (glass filters, summarizing, classifying): ~3B local model (e.g. Llama 3.2 3B / Qwen 2.5 3B).
+- **tier-work** (coding, planning): best local model that fits RAM.
+- **tier-review** (F5): a *different model family* from tier-work, loaded sequentially.
+- **tier-cloud** (optional, off): Claude / Gemini / others. Requires owner approval and a per-job $ cap.
+- **Free-tier privacy rule:** providers that may train on prompts never receive private code or secrets; the Glass layers enforce this.
+
+### Crash safety
+Every step writes a checkpoint. On crash or restart, the Scheduler resumes each job from its last good checkpoint. Health check endpoint + auto-restart (launchd in v1).
+
+---
+
+## 5. Floor framework (shared by every floor)
+
+- **Roles as config:** each role is a YAML file — name, model tier, allowed tools, prompt, output schema. The org chart changes without code changes.
+- **Per floor:** 1 **Lead** (plans, splits work), N **Workers** (execute tasks), 1 **HR** (in-floor quality and process check before handoff).
+- **Tower-wide C-suite:** **CPO** (turns the owner's prompt into a spec via clarifying questions), **CTO** (approves tech choices), **CEO** (final sign-off). All report to the **Owner**.
+- **HR vs F5:** HR checks quality *inside* one floor. F5 checks *across* floors plus guardrails and security.
+- **Idle agents ("breaks"):** agents exist only when the Scheduler assigns a task. On completion they persist context to Memory and go idle (no compute, no tokens). Concurrency default = 1 active thinking agent (8 GB limit), configurable.
+- **Work package (handoff contract):** structured output of each floor — `summary`, `artifacts` (files), `sources`, `checks_run` + results, `open_questions`. Validated against a schema; invalid packages are rejected.
+- **Gate:** F5 evaluates each package → `pass` or `send_back(reasons)`. Max 3 send-backs per gate, then escalate to Owner.
+
+---
+
+## 6. The five floors (v1 = web apps)
+
+| Floor | Input → Output | Objective checks (reality first) |
+|---|---|---|
+| **F1 Research** | Spec → research brief | Every claim has a source link; sources passed Glass 1 |
+| **F2 Dev** | Brief → architecture + code | Lint, type check, unit tests pass in Sandbox |
+| **F3 Build** | Code → MVP → full app | App builds and runs in Sandbox; smoke test |
+| **F4 Deploy/QA** | App → deployed + QA report | Playwright E2E pass; health check; rollback ready. Default deploy target: local Docker. Vercel (free plan) optional, owner-approved, token from Keychain |
+| **F5 Oversight** | Every package → verdict | Guardrails, Semgrep + gitleaks + `npm audit`/`pip-audit`, spec match, cross-family model review |
+
+**Toolkits:** output-type specific tool bundles plugged into F2–F4. v1 ships the **web toolkit**. Later: mobile (simulators; store publishing needs paid accounts and owner approval), CLI, API, ML, docs.
+
+**Learning:** after each job, F5 writes a short retrospective to Memory; future jobs retrieve relevant lessons.
+
+---
+
+## 7. Beacon + Glass layers
+
+### Beacon (two sides)
+- **Search side:** targeted search on floor request via **SearXNG** (self-hosted in Docker, free) + page fetch/extract.
+- **Watch side:** scheduled watch list (security advisories for used dependencies, library releases). Not a continuous full-internet crawl.
+- All results stored in Knowledge (RAG) with provenance (URL, fetch time, hash).
+
+### Quarantine rule
+All web content is labeled **untrusted data**. It is never executed or followed as instructions. Instruction-like text is stripped or flagged before any agent sees it.
+
+### Glass layers (one per floor)
+Pipeline, cheapest checks first:
+1. **Deterministic:** domain allow/deny lists, schema/format checks, regex injection patterns, secret detection.
+2. **Relevance filter** against the floor's current task (tier-small).
+3. **Source credibility** scoring.
+4. **Cross-source agreement** for factual claims.
+5. **Fact check** against Knowledge.
+
+Each glass has floor-specific rules (e.g. Glass 2 only passes technical docs and API references). Rejected content is logged with a reason, never silently dropped.
+
+---
+
+## 8. Interface
+
+- **API:** FastAPI (REST) + WebSocket for live events.
+- **CLI:** `watchtower run "<idea>"`, `status`, `approve <id>`, `pause`, `resume`, `logs`, `budget`.
+- **Dashboard (Next.js, localhost):** animated lighthouse — floors light when active, agents shown working/idle, beacon rotates while searching. Panels: approval queue, job timeline, work packages, audit log, budget meters.
+- **Auth from day one:** local login; data model has `user` and `workspace` scoping so multi-user/SaaS needs no schema rewrite.
+
+---
+
+## 9. Security
+
+- Sandbox for all agent code execution; owner's files are mounted read-only and only when allowed.
+- Per-floor, per-role tool permissions (least privilege).
+- Secrets in macOS Keychain; agents receive scoped handles, never raw values in prompts.
+- Web content quarantine + injection scan (Glass).
+- **Owner approval required** for: deploy outside local Docker, deleting anything outside the Sandbox, any paid model spend, publishing, network calls to new domains from build code.
+- Append-only audit log of every agent action, tool call, and decision.
+
+## 10. Error handling
+
+- Retries with exponential backoff for transient failures.
+- Checkpoint resume after crash.
+- Model limit / rate limit → job pauses, resumes automatically when available.
+- Budget exhausted → hard stop, owner notified.
+- Gate retry limit hit or ambiguity → escalate to Owner via approval queue.
+
+## 11. Testing
+
+- Unit tests per Engine module.
+- Contract tests on work-package schemas.
+- Golden jobs (e.g. "build a todo app") as end-to-end tests.
+- Red-team suite: prompt-injection pages fed to Beacon/Glass must be blocked.
+- Load check: tower stays within 8 GB RAM during a golden job.
+
+---
+
+## 12. Build phases
+
+Each phase gets its own spec → plan → implementation cycle.
+
+1. **Ground Engine** + CLI skeleton (Model Socket, Memory, Bus, Scheduler, Governor, Sandbox, Tool Hub, Knowledge).
+2. **Floor framework** + Gate + C-suite (CPO spec step).
+3. **Beacon + Glass + F1 Research** → first real output (research brief).
+4. **F2 → F3 → F4** with the web toolkit.
+5. **F5 Oversight** complete (security scans, cross-family review, retrospectives).
+6. **Dashboard** (lighthouse UI, approvals, audit).
+7. More toolkits → hybrid cloud (adapters) → SaaS / open source.
+
+## 13. Out of scope for v1
+
+- Non-web toolkits (mobile, ML, CLI, docs).
+- Cloud deployment of the tower itself.
+- Multiple concurrent human users (data model is ready; UI/ops are not).
+- Paid app-store publishing.
