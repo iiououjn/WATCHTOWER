@@ -253,3 +253,17 @@ def test_cpo_questions_capped_at_three(tower):
     runner, model, job = make({"cpo": [{"questions": ["a?", "b?", "c?", "d?"]}]})
     assert runner.cpo_questions(job.id) == ["a?", "b?", "c?"]
     runner.close()
+
+
+def test_cpo_and_workers_see_full_untrusted_knowledge(tower, conn):
+    make, jobs, bus = tower
+    body = "Glass layers filter beacon input; lighthouse lenses compared. " + "Rules differ per floor. " * 30
+    Knowledge(conn).add(body, "file:///spec.md", trusted=True)
+    runner, model, job = make({"f1.lead": [{"tasks": ["glass layers"]}]})
+    runner.start(job.id, extra={"auto_approve": True})
+    cpo_prompt = model.prompts[model.calls.index("cpo")]
+    worker_prompt = model.prompts[model.calls.index("f1.worker")]
+    for prompt in (cpo_prompt, worker_prompt):
+        assert '<untrusted source="file:///spec.md">' in prompt
+        assert "Rules differ per floor. Rules differ per floor." in prompt
+    runner.close()

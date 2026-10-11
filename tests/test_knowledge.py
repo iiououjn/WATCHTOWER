@@ -66,3 +66,25 @@ def test_unicode_search(conn):
     kb = Knowledge(conn)
     doc = kb.add("Le phare de Cordouan éclaire l'estuaire.", "fr")
     assert kb.search("phare")[0].doc_id == doc
+
+
+def test_hits_carry_the_full_chunk_text(conn):
+    kb = Knowledge(conn)
+    text = "Glass layers filter what the beacon passes down. " + "Each floor has its own rules. " * 20
+    kb.add(text, "spec")
+    hit = kb.search("glass layers")[0]
+    assert hit.text.startswith("Glass layers filter") and len(hit.text) > len(hit.snippet)
+
+
+def test_common_words_do_not_drive_matches(conn):
+    kb = Knowledge(conn)
+    kb.add("The cat sat in the hall of the house of the king.", "noise")
+    lid = kb.add("Glass layer rules protect floor input.", "signal")
+    hits = kb.search("explain the glass layer of the tower")
+    assert [h.doc_id for h in hits] == [lid]
+
+
+def test_only_stopwords_returns_nothing(conn):
+    kb = Knowledge(conn)
+    kb.add(LIGHTHOUSE, "a")
+    assert kb.search("the of and in") == []

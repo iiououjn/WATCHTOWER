@@ -12,12 +12,14 @@ from watchtower.engine.workflow import Step
 from watchtower.roles import Role
 
 MAX_SEND_BACKS = 3
+CONTEXT_CHARS = 1500
 QUESTIONS_PROMPT = (
-    "Owner's goal:\n{goal}\n\nAsk at most 3 short clarifying questions whose answers would most change "
+    "Owner's goal:\n{goal}\n\nReference data:\n{context}\n\nAsk at most 3 short clarifying questions whose answers would most change "
     'the result. Reply as JSON: {{"questions": [string]}}'
 )
 SPEC_PROMPT = (
-    "Owner's goal:\n{goal}\n\nOwner's answers to your questions:\n{qa}\n\n"
+    "Owner's goal:\n{goal}\n\nReference data (use it to understand the owner's terms):\n{context}\n\n"
+    "Owner's answers to your questions:\n{qa}\n\n"
     "Write a short spec. Reply as JSON: "
     '{{"title": string, "goal": string, "acceptance": [string], "out_of_scope": [string]}}'
 )
@@ -49,12 +51,13 @@ class TowerPipeline:
         return [Step("spec", self._spec), Step("approval", self._approval), Step("f1", self._f1)]
 
     def questions(self, data: dict) -> list[str]:
-        out = self._ask(self._roles["cpo"], data, QUESTIONS_PROMPT.format(goal=data["prompt"]))
+        out = self._ask(self._roles["cpo"], data, QUESTIONS_PROMPT.format(goal=data["prompt"], context=self._context(data["prompt"]) or "(none)"))
         return strs(out.get("questions"), cap=3)
 
     def _spec(self, data: dict) -> dict:
         qa = "\n".join(f"Q: {x['q']}\nA: {x['a'] or '(no answer)'}" for x in data.get("answers") or []) or "(none)"
-        raw = self._ask(self._roles["cpo"], data, SPEC_PROMPT.format(goal=data["prompt"], qa=qa))
+        raw = self._ask(self._roles["cpo"], data, SPEC_PROMPT.format(goal=data["prompt"], qa=qa,
+                                                                        context=self._context(data["prompt"]) or "(none)"))
         spec = {
             "title": str(raw.get("title") or data["prompt"][:60]),
             "goal": str(raw.get("goal") or data["prompt"]),
@@ -92,6 +95,6 @@ class TowerPipeline:
 
     def _context(self, task: str) -> str:
         return "\n".join(
-            f'<untrusted source="{h.source}">\n{h.snippet}\n</untrusted>'
+            f'<untrusted source="{h.source}">\n{h.text[:CONTEXT_CHARS]}\n</untrusted>'
             for h in self._knowledge.search(task, limit=3)
         )

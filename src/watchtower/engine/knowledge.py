@@ -9,6 +9,11 @@ from watchtower.engine.db import now
 
 CHUNK_CHARS = 1200
 MAX_TERMS = 16
+STOPWORDS = frozenset(
+    "a an and are as at be but by can do does for from has have how i if in into is it its me my of on "
+    "or our so than that the their them then there these they this to us was we were what when where "
+    "which who why will with you your about explain describe summarise summarize tell".split()
+)
 
 
 @dataclass(frozen=True)
@@ -19,6 +24,7 @@ class Hit:
     snippet: str
     score: float
     trusted: bool
+    text: str = ""  # the full matching chunk, for agents; snippet is for display
 
 
 def _chunks(text: str) -> list[str]:
@@ -73,13 +79,14 @@ class Knowledge:
         return doc_id
 
     def search(self, query: str, limit: int = 5) -> list[Hit]:
-        terms = re.findall(r"\w+", query.lower())[:MAX_TERMS]
+        terms = [t for t in re.findall(r"\w+", query.lower()) if t not in STOPWORDS][:MAX_TERMS]
         if not terms:
             return []
         match = " OR ".join(f'"{t}"' for t in terms)
         rows = self._conn.execute(
             "SELECT d.id, d.title, d.source, d.trusted,"
-            " snippet(knowledge_fts, 1, '[', ']', '…', 12) AS snip, bm25(knowledge_fts) AS rank"
+            " snippet(knowledge_fts, 1, '[', ']', '…', 12) AS snip, knowledge_fts.body AS body,"
+            " bm25(knowledge_fts) AS rank"
             " FROM knowledge_fts JOIN knowledge_docs d ON d.id = knowledge_fts.doc_id"
             " WHERE knowledge_fts MATCH ? AND knowledge_fts.workspace_id = ?"
             " ORDER BY rank LIMIT ?",
@@ -90,7 +97,7 @@ class Knowledge:
             if r["id"] in seen:
                 continue
             seen.add(r["id"])
-            hits.append(Hit(r["id"], r["title"], r["source"], r["snip"], -r["rank"], bool(r["trusted"])))
+            hits.append(Hit(r["id"], r["title"], r["source"], r["snip"], -r["rank"], bool(r["trusted"]), r["body"]))
             if len(hits) == limit:
                 break
         return hits
