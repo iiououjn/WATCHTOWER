@@ -194,3 +194,59 @@ def test_unload_all_without_a_loaded_model_does_nothing(parts):
     unloaded = []
     low_ram_socket(parts, resident=["ollama/other-process"], pct=100, unloaded=unloaded).unload_all("j")
     assert unloaded == []
+
+
+from watchtower.engine.model_socket import BadModelOutput, parse_json
+
+
+@pytest.mark.parametrize("text,expected", [
+    ('{"a": 1}', {"a": 1}),
+    ('Sure! Here it is:\n```json\n{"a": 1}\n```\nHope that helps.', {"a": 1}),
+    ('prefix {"a": {"b": 2}} suffix', {"a": {"b": 2}}),
+])
+def test_parse_json_tolerates_wrapping(text, expected):
+    assert parse_json(text) == expected
+
+
+@pytest.mark.parametrize("text", ["", "no json here", "[1, 2]", "{broken"])
+def test_parse_json_rejects_non_objects(text):
+    with pytest.raises(ValueError):
+        parse_json(text)
+
+
+def scripted_socket(parts, texts, calls):
+    settings, budget, audit = parts
+    replies = iter(texts)
+
+    def completion(**kw):
+        calls.append(kw)
+        return fake_response(next(replies), 2, 2)
+
+    return ModelSocket(settings, budget, audit, completion_fn=completion, unload_fn=lambda m: None,
+                       resident_fn=lambda: [], free_ram_fn=lambda: 100)
+
+
+def test_ask_json_uses_json_mode(parts):
+    calls = []
+    sock = scripted_socket(parts, ['{"ok": true}'], calls)
+    assert sock.ask_json("small", [{"role": "user", "content": "x"}], "j") == {"ok": True}
+    assert calls[0]["response_format"] == {"type": "json_object"}
+
+
+def test_ask_json_retries_once_with_feedback(parts):
+    calls = []
+    sock = scripted_socket(parts, ["not json", '{"ok": 1}'], calls)
+    assert sock.ask_json("small", [{"role": "user", "content": "x"}], "j") == {"ok": 1}
+    assert "not valid JSON" in calls[1]["messages"][-1]["content"]
+
+
+def test_ask_json_gives_up(parts):
+    sock = scripted_socket(parts, ["nope", "still nope"], [])
+    with pytest.raises(BadModelOutput, match="valid JSON"):
+        sock.ask_json("small", [{"role": "user", "content": "x"}], "j")
+
+
+def test_plain_ask_has_no_json_mode(parts):
+    calls = []
+    scripted_socket(parts, ["hi"], calls).ask("small", [{"role": "user", "content": "x"}], "j")
+    assert "response_format" not in calls[0]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -22,6 +23,28 @@ class CloudDisabled(Exception):
 
 class LowMemory(Exception):
     pass
+
+
+class BadModelOutput(Exception):
+    pass
+
+
+def parse_json(text: str) -> dict:
+    """Parse a JSON object from model output, tolerating prose and ```json fences around it."""
+    text = (text or "").strip()
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            raise ValueError("no JSON object found") from None
+        try:
+            value = json.loads(text[start:end + 1])
+        except json.JSONDecodeError as e:
+            raise ValueError(f"invalid JSON: {e.msg}") from None
+    if not isinstance(value, dict):
+        raise ValueError("expected a JSON object")
+    return value
 
 
 @dataclass(frozen=True)
@@ -75,7 +98,7 @@ class ModelSocket:
     def loaded(self) -> str | None:
         return self._loaded
 
-    def ask(self, tier: str, messages: list[dict], job_id: str) -> Reply:
+    def ask(self, tier: str, messages: list[dict], job_id: str, json_mode: bool = False) -> Reply:
         if tier not in self._s.tiers:
             raise ValueError(f"unknown model tier {tier!r}; known: {sorted(self._s.tiers)}")
         model = self._s.tiers[tier]
@@ -96,6 +119,8 @@ class ModelSocket:
         }
         if local:
             kwargs["api_base"] = self._s.ollama_url
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
         start = self._clock()
         try:
             resp = self._complete(**kwargs)
@@ -122,6 +147,21 @@ class ModelSocket:
             {"model": model, "tokens": pt + ct, "seconds": round(seconds, 3), "usd": usd}, job_id,
         )
         return Reply(text, model, pt, ct, seconds, usd)
+
+    def ask_json(self, tier: str, messages: list[dict], job_id: str, retries: int = 1) -> dict:
+        """Ask for a JSON object; on unparseable output, retry once showing the model its error."""
+        convo = list(messages)
+        for _ in range(retries + 1):
+            reply = self.ask(tier, convo, job_id, json_mode=True)
+            try:
+                return parse_json(reply.text)
+            except ValueError as e:
+                self._audit.append("model_socket", "bad_json", {"model": reply.model, "error": str(e)}, job_id)
+                convo = convo + [
+                    {"role": "assistant", "content": reply.text},
+                    {"role": "user", "content": f"That was not valid JSON ({e}). Reply with only one JSON object."},
+                ]
+        raise BadModelOutput(f"{self._s.tiers[tier]} did not return valid JSON after {retries + 1} tries")
 
     def _swap_to(self, model: str, job_id: str) -> None:
         """Unload every other resident local model, then refuse to load a new one into low RAM."""
