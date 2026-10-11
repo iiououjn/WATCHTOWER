@@ -52,6 +52,7 @@ class ModelSocket:
         audit: AuditLog,
         completion_fn: Callable | None = None,
         unload_fn: Callable[[str], None] | None = None,
+        resident_fn: Callable[[], list[str]] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ):
         self._s = settings
@@ -59,6 +60,7 @@ class ModelSocket:
         self._audit = audit
         self._complete = completion_fn or _litellm_completion
         self._unload = unload_fn or self._unload_ollama
+        self._resident = resident_fn or self._resident_ollama
         self._clock = clock
         self._loaded: str | None = None
 
@@ -74,11 +76,17 @@ class ModelSocket:
         if not local and not self._s.cloud_enabled:
             raise CloudDisabled(f"cloud model {model} is disabled; enable cloud models explicitly")
         self._budget.check(job_id)
+        usage = self._budget.usage(job_id)
         if local:
             self._swap_to(model, job_id)
 
         self._audit.append("model_socket", "model_call", {"tier": tier, "model": model}, job_id)
-        kwargs = {"model": model, "messages": messages}
+        kwargs = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max(1, usage["max_tokens"] - usage["used_tokens"]),
+            "timeout": max(1.0, usage["max_seconds"] - usage["used_seconds"]),
+        }
         if local:
             kwargs["api_base"] = self._s.ollama_url
         start = self._clock()
@@ -93,25 +101,45 @@ class ModelSocket:
             raise ModelUnavailable(f"{model} unavailable ({type(e).__name__}).{hint}") from e
         seconds = self._clock() - start
 
-        pt = int(resp.usage.prompt_tokens or 0)
-        ct = int(resp.usage.completion_tokens or 0)
+        try:
+            text = resp.choices[0].message.content or ""
+            pt = int(resp.usage.prompt_tokens or 0)
+            ct = int(resp.usage.completion_tokens or 0)
+        except (AttributeError, IndexError, TypeError) as e:
+            self._audit.append("model_socket", "model_error", {"model": model, "error": "malformed response"}, job_id)
+            raise ModelUnavailable(f"{model} returned a malformed response") from e
         usd = 0.0 if local else _litellm_cost(resp)
         self._budget.charge(job_id, tokens=pt + ct, seconds=seconds, usd=usd)
         self._audit.append(
             "model_socket", "model_reply",
             {"model": model, "tokens": pt + ct, "seconds": round(seconds, 3), "usd": usd}, job_id,
         )
-        return Reply(resp.choices[0].message.content or "", model, pt, ct, seconds, usd)
+        return Reply(text, model, pt, ct, seconds, usd)
 
     def _swap_to(self, model: str, job_id: str) -> None:
-        if self._loaded and self._loaded != model:
+        """Unload every other resident local model, including ones left by other processes."""
+        try:
+            resident = self._resident()
+        except Exception as e:
+            resident = []
+            self._audit.append("model_socket", "resident_check_failed", {"error": str(e)[:200]}, job_id)
+        for other in resident:
+            if other == model:
+                continue
             try:
-                self._unload(self._loaded)
+                self._unload(other)
             except Exception as e:
                 self._audit.append(
-                    "model_socket", "unload_failed", {"model": self._loaded, "error": str(e)[:200]}, job_id
+                    "model_socket", "unload_failed", {"model": other, "error": str(e)[:200]}, job_id
                 )
         self._loaded = model
+
+    def _resident_ollama(self) -> list[str]:
+        import httpx
+
+        resp = httpx.get(f"{self._s.ollama_url}/api/ps", timeout=5)
+        resp.raise_for_status()
+        return [LOCAL_PREFIX + m["name"] for m in resp.json().get("models", [])]
 
     def _unload_ollama(self, model: str) -> None:
         import httpx

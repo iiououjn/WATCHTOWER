@@ -24,11 +24,20 @@ def _open():
     return settings, connect(settings.db_path)
 
 
+def _fail(jobs: JobStore, audit: AuditLog, job_id: str, reason: str) -> None:
+    """Never leave a job in 'running': mark it failed and audit it, best effort."""
+    try:
+        jobs.set_status(job_id, "failed", reason)
+        audit.append("engine", "job_failed", {"error": reason}, job_id)
+    finally:
+        typer.echo(f"Job {job_id} failed: {reason}", err=True)
+
+
 @app.command()
 def run(
     prompt: str,
     tier: str = typer.Option("small", help="Model tier: small | work | review"),
-    max_tokens: Optional[int] = typer.Option(None, help="Token budget for this job"),
+    max_tokens: Optional[int] = typer.Option(None, min=1, help="Token budget for this job"),
 ):
     """Send a prompt through the Ground Engine."""
     if not prompt.strip():
@@ -38,7 +47,7 @@ def run(
     jobs, audit, budget, memory = JobStore(conn), AuditLog(conn), Budget(conn), ContextStore(conn)
 
     job = jobs.create(prompt)
-    budget.open(job.id, max_tokens or settings.default_max_tokens,
+    budget.open(job.id, settings.default_max_tokens if max_tokens is None else max_tokens,
                 settings.default_max_seconds, settings.default_max_usd)
     audit.append("owner", "job_created", {"prompt": job.prompt, "tier": tier}, job.id)
     jobs.set_status(job.id, "running")
@@ -47,9 +56,13 @@ def run(
     try:
         reply = build_socket(settings, budget, audit).ask(tier, messages, job.id)
     except (ModelUnavailable, BudgetExceeded, CloudDisabled, ValueError) as e:
-        jobs.set_status(job.id, "failed", str(e))
-        audit.append("engine", "job_failed", {"error": str(e)}, job.id)
-        typer.echo(f"Job {job.id} failed: {e}", err=True)
+        _fail(jobs, audit, job.id, str(e))
+        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        _fail(jobs, audit, job.id, "interrupted by owner")
+        raise typer.Exit(130)
+    except Exception as e:
+        _fail(jobs, audit, job.id, f"unexpected error: {type(e).__name__}: {str(e)[:200]}")
         raise typer.Exit(1)
 
     messages.append({"role": "assistant", "content": reply.text})

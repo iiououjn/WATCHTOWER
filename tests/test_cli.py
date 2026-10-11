@@ -80,3 +80,25 @@ def test_logs_and_budget(monkeypatch):
 def test_budget_unknown_job():
     result = runner.invoke(cli.app, ["budget", "nope"])
     assert result.exit_code == 2
+
+
+@pytest.mark.parametrize("bad", ["0", "-5"])
+def test_run_rejects_non_positive_max_tokens(monkeypatch, bad):
+    use_completion(monkeypatch, lambda **kw: fake_response())
+    result = runner.invoke(cli.app, ["run", "hello", "--max-tokens", bad])
+    assert result.exit_code == 2
+    assert "No jobs" in runner.invoke(cli.app, ["status"]).output
+
+
+@pytest.mark.parametrize("exc,code", [(KeyboardInterrupt, 130), (RuntimeError, 1)])
+def test_unexpected_error_never_leaves_job_running(monkeypatch, exc, code):
+    class Exploding:
+        def ask(self, *a, **kw):
+            raise exc("boom")
+
+    monkeypatch.setattr(cli, "build_socket", lambda s, b, a: Exploding())
+    result = runner.invoke(cli.app, ["run", "hello"])
+    assert result.exit_code == code
+    status_field = runner.invoke(cli.app, ["status"]).output.split()[1]
+    assert status_field == "failed"
+    assert "job_failed" in runner.invoke(cli.app, ["logs"]).output

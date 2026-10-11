@@ -27,6 +27,7 @@ def make(parts, completion=None, unloaded=None):
         settings, budget, audit,
         completion_fn=completion or fake_completion,
         unload_fn=(unloaded.append if unloaded is not None else lambda m: None),
+        resident_fn=lambda: [sock.loaded] if sock.loaded else [],
         clock=iter([0.0, 2.0, 10.0, 12.0, 20.0, 22.0]).__next__,
     )
     return sock, calls
@@ -106,3 +107,37 @@ def test_default_completion_silences_litellm_banner(monkeypatch):
     monkeypatch.setattr(litellm, "completion", lambda **kw: "ok")
     assert model_socket._litellm_completion(model="m", messages=[]) == "ok"
     assert litellm.suppress_debug_info is True
+
+
+def test_passes_remaining_budget_as_hard_limits(conn, settings):
+    budget = Budget(conn)
+    budget.open("b", max_tokens=100, max_seconds=60, max_usd=0.0)
+    budget.charge("b", tokens=30, seconds=10)
+    calls = []
+    sock = ModelSocket(settings, budget, AuditLog(conn),
+                       completion_fn=lambda **kw: calls.append(kw) or fake_response("x", 1, 1),
+                       unload_fn=lambda m: None, resident_fn=lambda: [])
+    sock.ask("small", [{"role": "user", "content": "x"}], "b")
+    assert calls[0]["max_tokens"] == 70
+    assert calls[0]["timeout"] == 50
+
+
+def test_unloads_models_left_resident_by_other_processes(parts):
+    settings, budget, audit = parts
+    unloaded = []
+    sock = ModelSocket(settings, budget, audit, completion_fn=lambda **kw: fake_response(),
+                       unload_fn=unloaded.append,
+                       resident_fn=lambda: ["ollama/qwen2.5-coder:3b", "ollama/llama3.2:3b"])
+    sock.ask("small", [{"role": "user", "content": "x"}], "j")
+    assert unloaded == ["ollama/qwen2.5-coder:3b"]
+
+
+@pytest.mark.parametrize("bad", [
+    __import__("types").SimpleNamespace(choices=[], usage=None),
+    __import__("types").SimpleNamespace(choices=None, usage=__import__("types").SimpleNamespace(
+        prompt_tokens=1, completion_tokens=1)),
+])
+def test_malformed_response_is_model_unavailable(parts, bad):
+    sock, _ = make(parts, completion=lambda **kw: bad)
+    with pytest.raises(ModelUnavailable, match="malformed"):
+        sock.ask("small", [{"role": "user", "content": "x"}], "j")
