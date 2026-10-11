@@ -63,6 +63,17 @@ class AuditLog:
             ).fetchall()
         return [AuditEntry(**{**dict(r), "detail": json.loads(r["detail"])}) for r in rows]
 
+    def since(
+        self, seq: int = 0, job_id: str | None = None, actor: str | None = None, limit: int = 500
+    ) -> list[AuditEntry]:
+        sql, args = "SELECT * FROM audit_log WHERE seq > ?", [seq]
+        if job_id is not None:
+            sql, args = sql + " AND job_id = ?", args + [job_id]
+        if actor is not None:
+            sql, args = sql + " AND actor = ?", args + [actor]
+        rows = self._conn.execute(sql + " ORDER BY seq LIMIT ?", args + [limit]).fetchall()
+        return [AuditEntry(**{**dict(r), "detail": json.loads(r["detail"])}) for r in rows]
+
     def verify(self) -> bool:
         prev = GENESIS
         for r in self._conn.execute("SELECT * FROM audit_log ORDER BY seq"):
