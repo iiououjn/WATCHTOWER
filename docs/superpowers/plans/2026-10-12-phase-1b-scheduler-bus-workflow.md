@@ -22,7 +22,7 @@
 
 ## Review Focus
 
-1. **Process killed or Ctrl-C mid-step** → job `paused`, finished steps never re-run on resume. (Task 5, Task 6)
+1. **Ctrl-C mid-step** → job `paused`; **power loss / kill -9** → job stuck `running`, recoverable with `resume --force`; finished steps never re-run. (Task 5, Task 6, Task 7)
 2. **Two terminals running jobs at once** → second waits for the slot, then pauses with `SchedulerBusy` instead of loading a second model. (Task 4)
 3. **Low RAM measured while our own model is loaded** → no self-block; gate applies only to loading a non-resident model. (Task 3)
 4. **Old Phase 1a database** → migrates in place, no data loss, safe if two processes start together. (Task 1)
@@ -982,7 +982,7 @@ git commit -m "feat(engine): add checkpointed workflow with pause/resume (LangGr
 
 **Interfaces:**
 - Consumes: `JobStore` (incl. `pause_requested`, `clear_pause`), `ModelSocket` (+ `unload_all`, `LowMemory`, `ModelUnavailable`, `CloudDisabled`), `BudgetExceeded`, `Scheduler`/`SchedulerBusy`, `Bus`, `Workflow`/`Step`.
-- Produces: `RunOutcome(job_id: str, status: str, answer: str | None, reason: str | None)`; `JobRunner(settings, conn, socket, scheduler, bus)` with `start(job_id: str, tier: str) -> RunOutcome` and `resume(job_id: str) -> RunOutcome` (`KeyError` unknown job, `ValueError` if status ≠ `paused`), `close() -> None`. Pause-type errors (`ModelUnavailable`, `LowMemory`, `SchedulerBusy`, `KeyboardInterrupt`, owner pause) → status `paused`, topic `job.paused`. `BudgetExceeded`, `CloudDisabled`, anything else → `failed`, topic `job.failed`. Success → `done`, topic `job.done`. Every outcome unloads models (`socket.unload_all`).
+- Produces: `RunOutcome(job_id: str, status: str, answer: str | None, reason: str | None)`; `JobRunner(settings, conn, socket, scheduler, bus)` with `start(job_id: str, tier: str) -> RunOutcome` and `resume(job_id: str, force: bool = False) -> RunOutcome` (`KeyError` unknown job, `ValueError` if status ≠ `paused`; with `force=True` a stuck `running` job is also accepted), `close() -> None`. Pause-type errors (`ModelUnavailable`, `LowMemory`, `SchedulerBusy`, `KeyboardInterrupt`, owner pause) → status `paused`, topic `job.paused`. `BudgetExceeded`, `CloudDisabled`, anything else → `failed`, topic `job.failed`. Success → `done`, topic `job.done`. Every outcome unloads models (`socket.unload_all`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1100,6 +1100,18 @@ def test_resume_requires_paused(env):
         runner.resume("nope")
 
 
+def test_force_resume_recovers_job_stuck_running(env):
+    runner, jobs, bus, model, unloaded, job = env
+    model.fail_on, model.fail_exc = "answer", ConnectionError
+    runner.start(job.id, "small")
+    jobs.set_status(job.id, "running")  # simulate power loss mid-job
+    with pytest.raises(ValueError, match="--force"):
+        runner.resume(job.id)
+    model.fail_on = None
+    assert runner.resume(job.id, force=True).status == "done"
+    assert model.calls["plan"] == 1
+
+
 def test_agents_restore_context_per_step(env, conn):
     runner, jobs, bus, model, unloaded, job = env
     runner.start(job.id, "small")
@@ -1170,12 +1182,16 @@ class JobRunner:
         data = {"job_id": job_id, "prompt": job.prompt, "tier": tier}
         return self._drive(job_id, lambda: self._wf.run(job_id, data))
 
-    def resume(self, job_id: str) -> RunOutcome:
+    def resume(self, job_id: str, force: bool = False) -> RunOutcome:
+        """Resume from the last finished step. force=True also accepts a job stuck in
+        'running' after power loss or kill -9 (the owner asserts its process is gone)."""
         job = self._jobs.get(job_id)
         if job is None:
             raise KeyError(job_id)
-        if job.status != "paused":
-            raise ValueError(f"job {job_id} is {job.status}; only paused jobs can be resumed")
+        allowed = {"paused", "running"} if force else {"paused"}
+        if job.status not in allowed:
+            hint = " (use --force if its process died)" if job.status == "running" else ""
+            raise ValueError(f"job {job_id} is {job.status}; only paused jobs can be resumed{hint}")
         self._jobs.clear_pause(job_id)
         self._jobs.set_status(job_id, "running")
         self._bus.publish("job.resumed", {}, job_id)
@@ -1307,6 +1323,27 @@ def test_resume_rejects_unknown_and_done_jobs(monkeypatch):
     assert "only paused jobs" in result.output
 
 
+def test_force_resume_stuck_running_job(monkeypatch):
+    state = {"down": True}
+
+    def flaky(**kw):
+        if state["down"]:
+            raise ConnectionError("refused")
+        return fake_response("recovered", 1, 1)
+
+    use_completion(monkeypatch, flaky)
+    runner.invoke(cli.app, ["run", "hello"])
+    job_id = latest_job_id()
+    from watchtower.config import load_settings
+    from watchtower.engine.db import connect
+    from watchtower.engine.jobs import JobStore
+    JobStore(connect(load_settings().db_path)).set_status(job_id, "running")
+    state["down"] = False
+    assert runner.invoke(cli.app, ["resume", job_id]).exit_code == 2
+    result = runner.invoke(cli.app, ["resume", job_id, "--force"])
+    assert result.exit_code == 0 and "recovered" in result.output
+
+
 def test_pause_requires_running_job(monkeypatch):
     use_completion(monkeypatch, lambda **kw: fake_response("ok", 1, 1))
     assert runner.invoke(cli.app, ["pause", "nope"]).exit_code == 2
@@ -1430,12 +1467,15 @@ def pause(job_id: str):
 
 
 @app.command()
-def resume(job_id: str):
+def resume(
+    job_id: str,
+    force: bool = typer.Option(False, "--force", help="Also resume a job stuck 'running' after power loss"),
+):
     """Resume a paused job from its last finished step."""
     settings, conn = _open()
     runner = _runner(settings, conn)
     try:
-        outcome = runner.resume(job_id)
+        outcome = runner.resume(job_id, force=force)
     except KeyError:
         typer.echo(f"Error: no job {job_id}", err=True)
         raise typer.Exit(2)
