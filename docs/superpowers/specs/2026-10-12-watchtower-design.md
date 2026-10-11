@@ -91,8 +91,8 @@ A single Python service on the Mac. Nine modules, each with one job and a narrow
 | **Model Socket** | Single interface to any LLM; routes by task tier; enforces one-local-model-in-RAM | LiteLLM + Ollama | Add Claude/Gemini/etc. via config |
 | **Memory** | Agent context save/restore on idle; long-term memory; post-job lessons | SQLite | Postgres |
 | **Knowledge (RAG)** | Searchable store of Beacon findings and project files | Chroma (local, persistent) | pgvector / managed vector DB |
-| **Bus** | Messages and events between floors/agents/UI | In-process async queue | Redis |
-| **Scheduler** | Wakes/idles agents; concurrency limit; RAM-aware start; pause/resume on model limits | Custom module (Python asyncio) | Distributed workers |
+| **Bus** | Messages and events between floors/agents/UI | Topics written to the audit log (one ordered, tamper-evident stream any process can read) | Redis |
+| **Scheduler** | Wakes/idles agents; concurrency limit across processes; pause/resume | Custom module (file-lock slots) | Distributed workers |
 | **Workflow** | Floor-to-floor job graph, gates, send-backs, checkpoints | LangGraph + SQLite checkpointer | Postgres checkpointer |
 | **Tool Hub** | MCP servers and tools (fs, git, browser, shell) with per-floor permissions | MCP client | Same |
 | **Sandbox** | All agent-executed code runs isolated, never on owner's real files | Docker | Cloud runners |
