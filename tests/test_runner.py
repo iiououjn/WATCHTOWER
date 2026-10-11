@@ -403,3 +403,11 @@ def test_docker_down_pauses_app_job(app_tower):
     out = runner.start(job.id, extra={"auto_approve": True})
     assert out.status == "paused" and "Docker" in out.reason
     runner.close()
+
+
+def test_smoke_failure_output_reaches_the_coder(app_tower):
+    runner, model, sandbox, job = app_tower(http="500\nNameError: name 'json' is not defined")
+    runner.start(job.id, extra={"auto_approve": True})
+    coder_prompts = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert any("NameError: name 'json' is not defined" in p for p in coder_prompts[1:])
+    runner.close()

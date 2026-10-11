@@ -80,7 +80,7 @@ class TowerPipeline:
         research = (data.get("f1") or {}).get("summary", "")
         plan, feedback = dev.plan(spec, research, []), []
         for attempt in range(MAX_SEND_BACKS + 1):
-            package = dev.build(spec, plan, feedback)
+            package, f3 = dev.build(spec, plan, feedback), None
             if package.checks_run and package.checks_run[-1].get("pass"):
                 f3 = smoke_test(run, plan["entry"])
                 package = WorkPackage("dev", f"{package.summary}\n\n{f3.summary}\n\nCode:\n{ws.snapshot(3000)}",
@@ -94,6 +94,8 @@ class TowerPipeline:
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
                                    f"Run it: cd \"{ws.root}\" && python {plan['entry']}  (then open http://127.0.0.1:8000)")}
             feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]
+            if f3 is not None and not f3.checks_run[-1]["pass"]:  # show the coder the app's real error
+                feedback = feedback + ["Floor 3 started the app and it failed:\n" + untrusted("sandbox", f3.summary)]
             if verdict.route in ("design", "research"):
                 plan = dev.plan(spec, research, feedback)
         raise NeedsOwner(f"gate rejected the app {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")
