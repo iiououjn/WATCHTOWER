@@ -1,0 +1,11 @@
+# Glass 1 — what the Beacon may pass to the Research floor. Owner-editable.
+name: f1
+deny_domains:
+  - pinterest.com
+  - quora.com
+  - facebook.com
+  - tiktok.com
+  - instagram.com
+allow_domains: []      # empty = any public site that passes the other checks
+min_chars: 200
+max_injection_ratio: 0.3
