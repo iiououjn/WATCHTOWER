@@ -159,3 +159,15 @@ def test_refuses_job_running_in_another_process(env, settings):
             runner.resume(job.id, force=True)
     model.fail_on = None
     assert runner.resume(job.id).status == "done"
+
+
+def test_sandbox_unavailable_pauses(env):
+    from watchtower.engine.sandbox import SandboxUnavailable
+    runner, jobs, bus, model, unloaded, job = env
+
+    def go():
+        raise SandboxUnavailable("Docker is not running; start Docker Desktop, then resume")
+
+    jobs.set_status(job.id, "running")
+    out = runner._drive(job.id, go)
+    assert out.status == "paused" and "Docker" in out.reason

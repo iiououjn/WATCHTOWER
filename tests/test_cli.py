@@ -188,3 +188,39 @@ def test_pause_flags_running_job():
     assert result.exit_code == 0
     assert "after its current step" in result.output
     assert store.pause_requested(job.id) is True
+
+
+def test_doctor_all_ok(monkeypatch):
+    monkeypatch.setattr(cli, "ollama_status", lambda s: (True, "Ollama 0.32 · models ok"))
+    monkeypatch.setattr(cli, "docker_status", lambda s, a: (True, "ready"))
+    monkeypatch.setattr(cli, "free_ram_pct", lambda: 55)
+    result = runner.invoke(cli.app, ["doctor"])
+    assert result.exit_code == 0, result.output
+    for word in ("Ollama", "Docker", "RAM", "55%", "Audit chain"):
+        assert word in result.output
+
+
+def test_doctor_reports_docker_down(monkeypatch):
+    monkeypatch.setattr(cli, "ollama_status", lambda s: (True, "ok"))
+    monkeypatch.setattr(cli, "docker_status", lambda s, a: (False, "Docker is not running; start Docker Desktop"))
+    monkeypatch.setattr(cli, "free_ram_pct", lambda: 55)
+    result = runner.invoke(cli.app, ["doctor"])
+    assert result.exit_code == 1
+    assert "start Docker Desktop" in result.output
+
+
+def test_knowledge_add_and_search(tmp_path):
+    note = tmp_path / "lights.md"
+    note.write_text("The Fresnel lens made lighthouse beams visible for miles.")
+    added = runner.invoke(cli.app, ["knowledge", "add", str(note), "--title", "Lenses"])
+    assert added.exit_code == 0, added.output
+    found = runner.invoke(cli.app, ["knowledge", "search", "fresnel lens"])
+    assert "Lenses" in found.output and "[Fresnel]" in found.output and "untrusted" in found.output
+    assert "No matches" in runner.invoke(cli.app, ["knowledge", "search", "sourdough"]).output
+
+
+def test_knowledge_add_rejects_missing_or_huge_files(tmp_path):
+    assert runner.invoke(cli.app, ["knowledge", "add", str(tmp_path / "nope.md")]).exit_code == 2
+    big = tmp_path / "big.txt"
+    big.write_bytes(b"x" * (5 * 1024 * 1024 + 1))
+    assert runner.invoke(cli.app, ["knowledge", "add", str(big)]).exit_code == 2

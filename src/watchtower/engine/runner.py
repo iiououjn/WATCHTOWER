@@ -11,6 +11,7 @@ from watchtower.engine.bus import Bus
 from watchtower.engine.governor.budget import BudgetExceeded
 from watchtower.engine.jobs import JobStore
 from watchtower.engine.model_socket import CloudDisabled, LowMemory, ModelSocket, ModelUnavailable
+from watchtower.engine.sandbox import SandboxUnavailable
 from watchtower.engine.scheduler import Scheduler, SchedulerBusy
 from watchtower.engine.workflow import Step, Workflow, WorkflowResult
 
@@ -19,7 +20,7 @@ PLAN_PROMPT = (
     "Do not answer it yet.\n\nRequest: {prompt}"
 )
 ANSWER_PROMPT = "Request: {prompt}\n\nPlan:\n{plan}\n\nFollow the plan and answer the request concisely."
-PAUSE_ERRORS = (ModelUnavailable, LowMemory, SchedulerBusy)
+PAUSE_ERRORS = (ModelUnavailable, LowMemory, SchedulerBusy, SandboxUnavailable)
 FAIL_ERRORS = (BudgetExceeded, CloudDisabled)
 
 

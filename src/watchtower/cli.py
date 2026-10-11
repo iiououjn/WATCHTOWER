@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -10,10 +11,13 @@ from watchtower.engine.db import connect
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.governor.budget import Budget
 from watchtower.engine.jobs import JobStore
+from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.memory import ContextStore
 from watchtower.engine.model_socket import ModelSocket
 from watchtower.engine.runner import JobRunner, RunOutcome
+from watchtower.engine.sandbox import Sandbox
 from watchtower.engine.scheduler import Scheduler
+from watchtower.engine.system import free_ram_pct
 
 app = typer.Typer(no_args_is_help=True, help="THE WATCHTOWER — local agentic ecosystem.")
 EXIT = {"done": 0, "failed": 1, "paused": 3}
@@ -145,3 +149,83 @@ def budget(job_id: str):
     typer.echo(f"tokens: {u['used_tokens']} / {u['max_tokens']}")
     typer.echo(f"seconds: {u['used_seconds']:.1f} / {u['max_seconds']}")
     typer.echo(f"usd: ${u['used_usd']:.4f} / ${u['max_usd']:.4f}")
+
+
+MAX_KNOWLEDGE_BYTES = 5 * 1024 * 1024
+knowledge_app = typer.Typer(help="Local knowledge store (full-text search with sources).")
+app.add_typer(knowledge_app, name="knowledge")
+
+
+def ollama_status(settings: Settings) -> tuple[bool, str]:
+    import httpx
+
+    try:
+        version = httpx.get(f"{settings.ollama_url}/api/version", timeout=3).json()["version"]
+        names = {m["name"] for m in httpx.get(f"{settings.ollama_url}/api/tags", timeout=3).json()["models"]}
+    except Exception:
+        return False, "not reachable — open the Ollama app"
+    missing = sorted({m.removeprefix("ollama/") for m in settings.tiers.values()} - names)
+    if missing:
+        return True, f"{version} · missing models: {', '.join(missing)} (ollama pull <name>)"
+    return True, f"{version} · all tier models present"
+
+
+def docker_status(settings: Settings, audit: AuditLog) -> tuple[bool, str]:
+    problem = Sandbox(settings, audit).check()
+    return (problem is None), (problem or f"ready ({settings.sandbox_image})")
+
+
+@app.command()
+def doctor():
+    """Check that the tower's engine parts are healthy."""
+    settings, conn = _open()
+    audit = AuditLog(conn)
+    ram = free_ram_pct()
+    checks = [
+        ("Ollama", *ollama_status(settings)),
+        ("Docker", *docker_status(settings, audit)),
+        ("RAM", ram is None or ram >= settings.min_free_ram_pct,
+         "unknown" if ram is None else f"{ram}% free (need {settings.min_free_ram_pct}%)"),
+        ("Audit chain", audit.verify(), "ok" if audit.verify() else "BROKEN"),
+    ]
+    for name, ok, detail in checks:
+        typer.echo(f"{'✓' if ok else '✗'} {name:<12} {detail}")
+    raise typer.Exit(0 if all(ok for _, ok, _ in checks) else 1)
+
+
+@knowledge_app.command("add")
+def knowledge_add(
+    path: Path,
+    source: Optional[str] = typer.Option(None, help="Where this came from (default: the file URI)"),
+    title: Optional[str] = typer.Option(None),
+    trusted: bool = typer.Option(False, "--trusted", help="Mark as owner-verified"),
+):
+    """Add a text file to the knowledge store."""
+    if not path.is_file():
+        typer.echo(f"Error: {path} is not a file", err=True)
+        raise typer.Exit(2)
+    if path.stat().st_size > MAX_KNOWLEDGE_BYTES:
+        typer.echo("Error: file is larger than 5 MB", err=True)
+        raise typer.Exit(2)
+    _, conn = _open()
+    src = source or path.resolve().as_uri()
+    try:
+        doc_id = Knowledge(conn).add(path.read_text(errors="replace"), src, title or path.name, trusted)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
+    AuditLog(conn).append("owner", "knowledge_added", {"doc_id": doc_id, "source": src, "trusted": trusted})
+    typer.echo(f"Added document {doc_id} from {src}")
+
+
+@knowledge_app.command("search")
+def knowledge_search(query: str, limit: int = typer.Option(5, min=1, max=50)):
+    """Search the knowledge store."""
+    _, conn = _open()
+    hits = Knowledge(conn).search(query, limit)
+    if not hits:
+        typer.echo("No matches.")
+        return
+    for h in hits:
+        typer.echo(f"[{h.doc_id}] {h.title} — {h.source}{'' if h.trusted else ' (untrusted)'}")
+        typer.echo(f"    {h.snippet}")
