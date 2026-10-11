@@ -46,10 +46,10 @@ def test_run_ollama_down(monkeypatch):
 
     use_completion(monkeypatch, broken)
     result = runner.invoke(cli.app, ["run", "hello"])
-    assert result.exit_code == 1
+    assert result.exit_code == 3
     assert "ollama pull" in result.output
     assert "Traceback" not in result.output
-    assert "failed" in runner.invoke(cli.app, ["status"]).output
+    assert "paused" in runner.invoke(cli.app, ["status"]).output
 
 
 def test_run_budget_exceeded(monkeypatch):
@@ -69,13 +69,13 @@ def test_logs_and_budget(monkeypatch):
 
     logs = runner.invoke(cli.app, ["logs", job_id])
     assert logs.exit_code == 0
-    for action in ("job_created", "model_call", "model_reply", "job_done"):
+    for action in ("job_created", "model_call", "model_reply", "job.done"):
         assert action in logs.output
     assert "chain: ok" in logs.output
 
     budget = runner.invoke(cli.app, ["budget", job_id])
     assert budget.exit_code == 0
-    assert "tokens: 2 / 50000" in budget.output
+    assert "tokens: 4 / 50000" in budget.output
 
 
 def test_budget_unknown_job():
@@ -91,15 +91,100 @@ def test_run_rejects_non_positive_max_tokens(monkeypatch, bad):
     assert "No jobs" in runner.invoke(cli.app, ["status"]).output
 
 
-@pytest.mark.parametrize("exc,code", [(KeyboardInterrupt, 130), (RuntimeError, 1)])
-def test_unexpected_error_never_leaves_job_running(monkeypatch, exc, code):
+@pytest.mark.parametrize("exc,code,status", [(KeyboardInterrupt, 3, "paused"), (RuntimeError, 1, "failed")])
+def test_unexpected_error_never_leaves_job_running(monkeypatch, exc, code, status):
     class Exploding:
         def ask(self, *a, **kw):
             raise exc("boom")
 
+        def unload_all(self, job_id=None):
+            pass
+
     monkeypatch.setattr(cli, "build_socket", lambda s, b, a: Exploding())
     result = runner.invoke(cli.app, ["run", "hello"])
     assert result.exit_code == code
-    status_field = runner.invoke(cli.app, ["status"]).output.split()[1]
-    assert status_field == "failed"
-    assert "job_failed" in runner.invoke(cli.app, ["logs"]).output
+    assert runner.invoke(cli.app, ["status"]).output.split()[1] == status
+    assert f"job.{status}" in runner.invoke(cli.app, ["logs"]).output
+
+
+def latest_job_id():
+    from watchtower.config import load_settings
+    from watchtower.engine.db import connect
+    from watchtower.engine.jobs import JobStore
+    return JobStore(connect(load_settings().db_path)).list()[0].id
+
+
+def test_run_rejects_unknown_tier_before_creating_job(monkeypatch):
+    use_completion(monkeypatch, lambda **kw: fake_response())
+    result = runner.invoke(cli.app, ["run", "hello", "--tier", "giant"])
+    assert result.exit_code == 2
+    assert "No jobs" in runner.invoke(cli.app, ["status"]).output
+
+
+def test_paused_job_resumes_to_done(monkeypatch):
+    state = {"down": True}
+
+    def flaky(**kw):
+        if state["down"]:
+            raise ConnectionError("refused")
+        return fake_response("final answer", 1, 1)
+
+    use_completion(monkeypatch, flaky)
+    assert runner.invoke(cli.app, ["run", "hello"]).exit_code == 3
+    job_id = latest_job_id()
+    state["down"] = False
+    result = runner.invoke(cli.app, ["resume", job_id])
+    assert result.exit_code == 0, result.output
+    assert "final answer" in result.output
+
+
+def test_resume_rejects_unknown_and_done_jobs(monkeypatch):
+    use_completion(monkeypatch, lambda **kw: fake_response("ok", 1, 1))
+    assert runner.invoke(cli.app, ["resume", "nope"]).exit_code == 2
+    runner.invoke(cli.app, ["run", "hello"])
+    result = runner.invoke(cli.app, ["resume", latest_job_id()])
+    assert result.exit_code == 2
+    assert "only paused jobs" in result.output
+
+
+def test_force_resume_stuck_running_job(monkeypatch):
+    state = {"down": True}
+
+    def flaky(**kw):
+        if state["down"]:
+            raise ConnectionError("refused")
+        return fake_response("recovered", 1, 1)
+
+    use_completion(monkeypatch, flaky)
+    runner.invoke(cli.app, ["run", "hello"])
+    job_id = latest_job_id()
+    from watchtower.config import load_settings
+    from watchtower.engine.db import connect
+    from watchtower.engine.jobs import JobStore
+    JobStore(connect(load_settings().db_path)).set_status(job_id, "running")
+    state["down"] = False
+    assert runner.invoke(cli.app, ["resume", job_id]).exit_code == 2
+    result = runner.invoke(cli.app, ["resume", job_id, "--force"])
+    assert result.exit_code == 0 and "recovered" in result.output
+
+
+def test_pause_requires_running_job(monkeypatch):
+    use_completion(monkeypatch, lambda **kw: fake_response("ok", 1, 1))
+    assert runner.invoke(cli.app, ["pause", "nope"]).exit_code == 2
+    runner.invoke(cli.app, ["run", "hello"])
+    result = runner.invoke(cli.app, ["pause", latest_job_id()])
+    assert result.exit_code == 2
+    assert "not running" in result.output
+
+
+def test_pause_flags_running_job():
+    from watchtower.config import load_settings
+    from watchtower.engine.db import connect
+    from watchtower.engine.jobs import JobStore
+    store = JobStore(connect(load_settings().db_path))
+    job = store.create("long job")
+    store.set_status(job.id, "running")
+    result = runner.invoke(cli.app, ["pause", job.id])
+    assert result.exit_code == 0
+    assert "after its current step" in result.output
+    assert store.pause_requested(job.id) is True
