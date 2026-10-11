@@ -8,19 +8,23 @@ from typing import Iterator
 
 from watchtower.config import Settings
 from watchtower.engine.bus import Bus
+from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.governor.budget import BudgetExceeded
 from watchtower.engine.jobs import JobStore
-from watchtower.engine.model_socket import CloudDisabled, LowMemory, ModelSocket, ModelUnavailable
+from watchtower.engine.knowledge import Knowledge
+from watchtower.engine.model_socket import BadModelOutput, CloudDisabled, LowMemory, ModelSocket, ModelUnavailable
+from watchtower.engine.pipeline import NeedsOwner, TowerPipeline
 from watchtower.engine.sandbox import SandboxUnavailable
 from watchtower.engine.scheduler import Scheduler, SchedulerBusy
 from watchtower.engine.workflow import Step, Workflow, WorkflowResult
+from watchtower.roles import Role, load_roles
 
 PLAN_PROMPT = (
     "Write a short numbered plan (max 3 steps) for answering this request. "
     "Do not answer it yet.\n\nRequest: {prompt}"
 )
 ANSWER_PROMPT = "Request: {prompt}\n\nPlan:\n{plan}\n\nFollow the plan and answer the request concisely."
-PAUSE_ERRORS = (ModelUnavailable, LowMemory, SchedulerBusy, SandboxUnavailable)
+PAUSE_ERRORS = (ModelUnavailable, LowMemory, SchedulerBusy, SandboxUnavailable, BadModelOutput, NeedsOwner)
 FAIL_ERRORS = (BudgetExceeded, CloudDisabled)
 
 
@@ -43,21 +47,25 @@ class JobRunner:
         self._bus = bus
         self._lock_dir = settings.home / "jobs"
         self._lock_dir.mkdir(parents=True, exist_ok=True)
-        self._wf = Workflow(
-            [Step("plan", self._plan), Step("answer", self._answer)],
-            settings.home / "checkpoints.db",
-            should_pause=self._jobs.pause_requested,
-        )
+        self._tower = TowerPipeline(self._ask_role, load_roles(tiers=settings.tiers), Approvals(conn), bus,
+                                    Knowledge(conn))
+        checkpoints = settings.home / "checkpoints.db"
+        self._wfs = {
+            "demo": Workflow([Step("plan", self._plan), Step("answer", self._answer)], checkpoints,
+                             should_pause=self._jobs.pause_requested),
+            "tower": Workflow(self._tower.steps(), checkpoints, should_pause=self._jobs.pause_requested),
+        }
 
-    def start(self, job_id: str, tier: str) -> RunOutcome:
+    def start(self, job_id: str, tier: str = "small", extra: dict | None = None) -> RunOutcome:
         job = self._jobs.get(job_id)
         if job is None:
             raise KeyError(job_id)
-        data = {"job_id": job_id, "prompt": job.prompt, "tier": tier}
+        data = {"job_id": job_id, "prompt": job.prompt, "tier": tier, **(extra or {})}
+        wf = self._wfs[job.pipeline]
         with self._job_lock(job_id):
             self._jobs.set_status(job_id, "running")
-            self._bus.publish("job.started", {"tier": tier}, job_id)
-            return self._drive(job_id, lambda: self._wf.run(job_id, data))
+            self._bus.publish("job.started", {"tier": tier, "pipeline": job.pipeline}, job_id)
+            return self._drive(job_id, lambda: wf.run(job_id, data))
 
     def resume(self, job_id: str, force: bool = False) -> RunOutcome:
         """Resume from the last finished step. force=True also accepts a job stuck in
@@ -73,10 +81,11 @@ class JobRunner:
             self._jobs.clear_pause(job_id)
             self._jobs.set_status(job_id, "running")
             self._bus.publish("job.resumed", {}, job_id)
-            return self._drive(job_id, lambda: self._wf.resume(job_id))
+            return self._drive(job_id, lambda: self._wfs[job.pipeline].resume(job_id))
 
     def close(self) -> None:
-        self._wf.close()
+        for wf in self._wfs.values():
+            wf.close()
 
     @contextmanager
     def _job_lock(self, job_id: str) -> Iterator[None]:
@@ -118,6 +127,19 @@ class JobRunner:
         except KeyboardInterrupt:
             pass
         return RunOutcome(job_id, status, answer, reason)
+
+    def cpo_questions(self, job_id: str) -> list[str]:
+        job = self._jobs.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return self._tower.questions({"job_id": job_id, "prompt": job.prompt})
+
+    def _ask_role(self, role: Role, data: dict, prompt: str) -> dict:
+        with self._scheduler.agent(role.id, data["job_id"]) as session:
+            messages = [{"role": "system", "content": role.system}, {"role": "user", "content": prompt}]
+            out = self._socket.ask_json(role.tier, messages, data["job_id"])
+            session.context["messages"] = messages + [{"role": "assistant", "content": str(out)}]
+            return out
 
     def _ask(self, agent_id: str, data: dict, content: str) -> str:
         with self._scheduler.agent(agent_id, data["job_id"]) as session:
