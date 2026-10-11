@@ -98,3 +98,18 @@ def test_gate_feedback_reaches_coder(tmp_path):
     s = Script({"f2.architect": [{}], "f2.coder": [{"files": [APP, TEST]}]})
     dev(tmp_path, s, Runner([OK])).build(SPEC, {"files": [], "entry": "app.py"}, ["add a delete button"])
     assert "add a delete button" in s.prompts["f2.coder"][0]
+
+
+def test_test_folders_become_packages_so_unittest_finds_them(tmp_path):
+    nested = {"path": "tests/test_app.py", "content": "import unittest\n"}
+    s = Script({"f2.architect": [{}], "f2.coder": [{"files": [APP, nested]}]})
+    dev(tmp_path, s, Runner([OK]), rounds=1).build(SPEC, {"files": [], "entry": "app.py"}, [])
+    assert (tmp_path / "tests" / "__init__.py").exists()
+    assert not (tmp_path / "__init__.py").exists()
+
+
+def test_zero_tests_feedback_explains_why(tmp_path):
+    s = Script({"f2.architect": [{}], "f2.coder": [{"files": [APP, TEST]}]})
+    none = SandboxResult(5, "", "Ran 0 tests in 0.000s\n\nNO TESTS RAN\n", False)
+    dev(tmp_path, s, Runner([none]), rounds=2).build(SPEC, {"files": [], "entry": "app.py"}, [])
+    assert "test_*.py" in s.prompts["f2.coder"][1] and "unittest.TestCase" in s.prompts["f2.coder"][1]

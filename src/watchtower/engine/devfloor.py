@@ -56,6 +56,7 @@ class DevFloor:
                 spec=_spec_text(spec), plan=json.dumps(plan, indent=1), files=self._ws.snapshot(),
                 feedback=("\n" + "\n".join(notes)) if notes else ""))
             notes = self._write(reply.get("files"))
+            self._ensure_packages()
             problems = import_problems(self._ws)
             has_tests = any(PurePosixPath(f).name.startswith("test") for f in self._ws.files() if f.endswith(".py"))
             result = self._run(TEST_COMMAND)
@@ -68,11 +69,21 @@ class DevFloor:
             notes += problems
             if not has_tests:
                 notes.append("There are no unittest files yet: add test_*.py with real tests.")
+            elif not ran_tests:
+                notes.append("unittest found 0 tests: name test files test_*.py, put test classes in "
+                             "unittest.TestCase subclasses, and name methods test_*.")
             notes.append("Test output:\n" + untrusted("sandbox", output or "(no output)"))
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"
                    f"Tests: {'PASS' if passed else 'FAIL'}\n{output[-800:]}")
         questions = [] if passed else [f"tests still failing after {len(checks)} round(s)"]
         return WorkPackage("f2", summary, self._ws.files(), [], checks, questions)
+
+    def _ensure_packages(self) -> None:
+        """unittest discovery only enters folders that are packages: add empty __init__.py where missing."""
+        folders = {PurePosixPath(f).parent for f in self._ws.files() if f.endswith(".py")}
+        for folder in sorted(folders):
+            if str(folder) != "." and f"{folder}/__init__.py" not in self._ws.files():
+                self._ws.write(f"{folder}/__init__.py", "")
 
     def _write(self, files) -> list[str]:
         notes = []
