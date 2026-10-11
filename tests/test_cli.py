@@ -359,3 +359,10 @@ def test_build_offline_flag_is_passed(monkeypatch):
     use_roles(monkeypatch)
     runner.invoke(cli.app, ["build", "compare lighthouse lenses", "--yes", "--offline"])
     assert seen.get("offline") is True
+
+
+def test_build_uses_tower_budget(monkeypatch):
+    use_roles(monkeypatch)
+    runner.invoke(cli.app, ["build", "compare lighthouse lenses", "--yes"])
+    assert "tokens: " in (out := runner.invoke(cli.app, ["budget", latest_job_id()]).output)
+    assert "/ 200000" in out

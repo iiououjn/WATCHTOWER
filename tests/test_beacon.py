@@ -77,3 +77,17 @@ def test_search_unavailable_propagates(conn):
                     AuditLog(conn))
     with pytest.raises(SearchUnavailable):
         beacon.research("fresnel", "j")
+
+
+def test_known_pages_are_reused_without_refetching(conn):
+    Knowledge(conn).add(TEXT, "https://a.example/x")
+
+    class Exploding:
+        def fetch(self, url):
+            raise AssertionError("should not refetch a page already in knowledge")
+
+    search = Search(provider=lambda q, n: [{"title": "t", "href": "https://a.example/x", "body": ""}])
+    audit = AuditLog(conn)
+    beacon = Beacon(search, Exploding(), Glass(GlassRules("f1", (), ())), Knowledge(conn), audit)
+    assert len(beacon.research("fresnel", "j")) == 1
+    assert actions(audit) == ["beacon_search", "beacon_cached"]

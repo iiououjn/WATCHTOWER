@@ -27,6 +27,11 @@ class Beacon:
         for result in self._search.query(task, self._max_pages * 2):
             if len(accepted) >= self._max_pages:
                 break
+            known = self._knowledge.has_source(result.url)
+            if known is not None:  # already passed the glass earlier: reuse, don't refetch or re-judge
+                self._audit.append("beacon", "beacon_cached", {"url": result.url, "doc_id": known}, job_id)
+                accepted.append(known)
+                continue
             try:
                 page = self._fetcher.fetch(result.url)
             except (BlockedURL, FetchError) as e:

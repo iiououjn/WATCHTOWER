@@ -98,3 +98,11 @@ def test_agents_can_get_several_chunks_from_one_document(conn):
     chunks = kb.search("glass layer rule", limit=3, distinct=False)
     assert len(chunks) == 3 and {h.doc_id for h in chunks} == {doc}
     assert len({h.text for h in chunks}) == 3
+
+
+def test_has_source(conn):
+    kb = Knowledge(conn)
+    doc = kb.add(LIGHTHOUSE, "https://a.example/x")
+    assert kb.has_source("https://a.example/x") == doc
+    assert kb.has_source("https://a.example/other") is None
+    assert Knowledge(conn, workspace_id="b").has_source("https://a.example/x") is None

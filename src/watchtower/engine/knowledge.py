@@ -103,6 +103,12 @@ class Knowledge:
                 break
         return hits
 
+    def has_source(self, source: str) -> int | None:
+        row = self._conn.execute(
+            "SELECT id FROM knowledge_docs WHERE workspace_id=? AND source=? ORDER BY id LIMIT 1", (self._ws, source)
+        ).fetchone()
+        return row["id"] if row else None
+
     def count(self) -> int:
         return self._conn.execute(
             "SELECT COUNT(*) FROM knowledge_docs WHERE workspace_id=?", (self._ws,)

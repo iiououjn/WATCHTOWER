@@ -265,7 +265,7 @@ def build(
         raise typer.Exit(2)
     settings, conn = _open()
     job = JobStore(conn).create(goal, pipeline="tower")
-    Budget(conn).open(job.id, settings.default_max_tokens if max_tokens is None else max_tokens,
+    Budget(conn).open(job.id, settings.tower_max_tokens if max_tokens is None else max_tokens,
                       settings.default_max_seconds, settings.default_max_usd)
     AuditLog(conn).append("owner", "job_created", {"prompt": job.prompt, "pipeline": "tower"}, job.id)
     runner = _runner(settings, conn)
