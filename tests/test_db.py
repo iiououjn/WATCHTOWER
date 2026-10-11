@@ -48,3 +48,9 @@ def test_migration_runs_once(settings):
     conn = connect(settings.db_path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
     conn.close()
+
+
+def test_min_free_ram_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
+    monkeypatch.setenv("WATCHTOWER_MIN_FREE_RAM_PCT", "99")
+    assert load_settings().min_free_ram_pct == 99

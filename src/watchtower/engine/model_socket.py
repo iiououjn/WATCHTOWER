@@ -7,6 +7,7 @@ from typing import Callable
 from watchtower.config import Settings
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.governor.budget import Budget
+from watchtower.engine.system import free_ram_pct
 
 LOCAL_PREFIX = "ollama/"
 
@@ -16,6 +17,10 @@ class ModelUnavailable(Exception):
 
 
 class CloudDisabled(Exception):
+    pass
+
+
+class LowMemory(Exception):
     pass
 
 
@@ -53,6 +58,7 @@ class ModelSocket:
         completion_fn: Callable | None = None,
         unload_fn: Callable[[str], None] | None = None,
         resident_fn: Callable[[], list[str]] | None = None,
+        free_ram_fn: Callable[[], int | None] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ):
         self._s = settings
@@ -61,6 +67,7 @@ class ModelSocket:
         self._complete = completion_fn or _litellm_completion
         self._unload = unload_fn or self._unload_ollama
         self._resident = resident_fn or self._resident_ollama
+        self._free_ram = free_ram_fn or free_ram_pct
         self._clock = clock
         self._loaded: str | None = None
 
@@ -117,22 +124,39 @@ class ModelSocket:
         return Reply(text, model, pt, ct, seconds, usd)
 
     def _swap_to(self, model: str, job_id: str) -> None:
-        """Unload every other resident local model, including ones left by other processes."""
-        try:
-            resident = self._resident()
-        except Exception as e:
-            resident = []
-            self._audit.append("model_socket", "resident_check_failed", {"error": str(e)[:200]}, job_id)
+        """Unload every other resident local model, then refuse to load a new one into low RAM."""
+        resident = self._resident_safe(job_id)
         for other in resident:
-            if other == model:
-                continue
-            try:
-                self._unload(other)
-            except Exception as e:
-                self._audit.append(
-                    "model_socket", "unload_failed", {"model": other, "error": str(e)[:200]}, job_id
+            if other != model:
+                self._unload_safe(other, job_id)
+        if model not in resident:
+            pct = self._free_ram()
+            if pct is not None and pct < self._s.min_free_ram_pct:
+                self._audit.append("model_socket", "low_memory", {"model": model, "free_pct": pct}, job_id)
+                raise LowMemory(
+                    f"only {pct}% RAM free (need {self._s.min_free_ram_pct}%) to load {model}; "
+                    "close some apps, then resume"
                 )
         self._loaded = model
+
+    def unload_all(self, job_id: str | None = None) -> None:
+        """Free RAM after a job: unload every resident local model."""
+        for model in self._resident_safe(job_id):
+            self._unload_safe(model, job_id)
+        self._loaded = None
+
+    def _resident_safe(self, job_id: str | None) -> list[str]:
+        try:
+            return self._resident()
+        except Exception as e:
+            self._audit.append("model_socket", "resident_check_failed", {"error": str(e)[:200]}, job_id)
+            return []
+
+    def _unload_safe(self, model: str, job_id: str | None) -> None:
+        try:
+            self._unload(model)
+        except Exception as e:
+            self._audit.append("model_socket", "unload_failed", {"model": model, "error": str(e)[:200]}, job_id)
 
     def _resident_ollama(self) -> list[str]:
         import httpx

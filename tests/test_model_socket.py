@@ -28,6 +28,7 @@ def make(parts, completion=None, unloaded=None):
         completion_fn=completion or fake_completion,
         unload_fn=(unloaded.append if unloaded is not None else lambda m: None),
         resident_fn=lambda: [sock.loaded] if sock.loaded else [],
+        free_ram_fn=lambda: 100,
         clock=iter([0.0, 2.0, 10.0, 12.0, 20.0, 22.0]).__next__,
     )
     return sock, calls
@@ -116,7 +117,8 @@ def test_passes_remaining_budget_as_hard_limits(conn, settings):
     calls = []
     sock = ModelSocket(settings, budget, AuditLog(conn),
                        completion_fn=lambda **kw: calls.append(kw) or fake_response("x", 1, 1),
-                       unload_fn=lambda m: None, resident_fn=lambda: [])
+                       unload_fn=lambda m: None, resident_fn=lambda: [],
+                       free_ram_fn=lambda: 100)
     sock.ask("small", [{"role": "user", "content": "x"}], "b")
     assert calls[0]["max_tokens"] == 70
     assert calls[0]["timeout"] == 50
@@ -127,7 +129,8 @@ def test_unloads_models_left_resident_by_other_processes(parts):
     unloaded = []
     sock = ModelSocket(settings, budget, audit, completion_fn=lambda **kw: fake_response(),
                        unload_fn=unloaded.append,
-                       resident_fn=lambda: ["ollama/qwen2.5-coder:3b", "ollama/llama3.2:3b"])
+                       resident_fn=lambda: ["ollama/qwen2.5-coder:3b", "ollama/llama3.2:3b"],
+                       free_ram_fn=lambda: 100)
     sock.ask("small", [{"role": "user", "content": "x"}], "j")
     assert unloaded == ["ollama/qwen2.5-coder:3b"]
 
@@ -141,3 +144,43 @@ def test_malformed_response_is_model_unavailable(parts, bad):
     sock, _ = make(parts, completion=lambda **kw: bad)
     with pytest.raises(ModelUnavailable, match="malformed"):
         sock.ask("small", [{"role": "user", "content": "x"}], "j")
+
+
+from watchtower.engine.model_socket import LowMemory
+
+
+def low_ram_socket(parts, resident, pct, unloaded=None, calls=None):
+    settings, budget, audit = parts
+    return ModelSocket(
+        settings, budget, audit,
+        completion_fn=lambda **kw: (calls.append(kw) if calls is not None else None) or fake_response(),
+        unload_fn=(unloaded.append if unloaded is not None else lambda m: None),
+        resident_fn=lambda: list(resident),
+        free_ram_fn=lambda: pct,
+    )
+
+
+def test_low_memory_blocks_loading_a_new_model(parts):
+    calls = []
+    sock = low_ram_socket(parts, resident=[], pct=10, calls=calls)
+    with pytest.raises(LowMemory, match="10%"):
+        sock.ask("small", [{"role": "user", "content": "x"}], "j")
+    assert calls == []
+
+
+def test_low_memory_ignored_when_model_already_resident(parts):
+    sock = low_ram_socket(parts, resident=["ollama/llama3.2:3b"], pct=10)
+    assert sock.ask("small", [{"role": "user", "content": "x"}], "j").text == "hi"
+
+
+def test_unknown_ram_does_not_block(parts):
+    sock = low_ram_socket(parts, resident=[], pct=None)
+    assert sock.ask("small", [{"role": "user", "content": "x"}], "j").text == "hi"
+
+
+def test_unload_all_frees_every_resident_model(parts):
+    unloaded = []
+    sock = low_ram_socket(parts, resident=["ollama/a", "ollama/b"], pct=100, unloaded=unloaded)
+    sock.unload_all("j")
+    assert unloaded == ["ollama/a", "ollama/b"]
+    assert sock.loaded is None

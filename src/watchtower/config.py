@@ -20,6 +20,8 @@ class Settings:
     default_max_tokens: int = 50_000
     default_max_seconds: int = 3600
     default_max_usd: float = 0.0
+    min_free_ram_pct: int = 20
+    agent_slots: int = 1
 
     @property
     def db_path(self) -> Path:
@@ -29,4 +31,8 @@ class Settings:
 def load_settings() -> Settings:
     home = Path(os.environ.get("WATCHTOWER_HOME", Path.home() / ".watchtower"))
     home.mkdir(parents=True, exist_ok=True)
-    return Settings(home=home, tiers=dict(DEFAULT_TIERS))
+    return Settings(
+        home=home,
+        tiers=dict(DEFAULT_TIERS),
+        min_free_ram_pct=int(os.environ.get("WATCHTOWER_MIN_FREE_RAM_PCT", 20)),
+    )

@@ -17,7 +17,8 @@ def home(tmp_path, monkeypatch):
 def use_completion(monkeypatch, fn):
     monkeypatch.setattr(
         cli, "build_socket",
-        lambda s, b, a: ModelSocket(s, b, a, completion_fn=fn, unload_fn=lambda m: None),
+        lambda s, b, a: ModelSocket(s, b, a, completion_fn=fn, unload_fn=lambda m: None,
+                                    resident_fn=lambda: [], free_ram_fn=lambda: 100),
     )
 
 
