@@ -52,6 +52,19 @@ CREATE TABLE IF NOT EXISTS budgets(
 MIGRATIONS = [
     SCHEMA_V1,
     "ALTER TABLE jobs ADD COLUMN pause_requested INTEGER NOT NULL DEFAULT 0;",
+    """
+    CREATE TABLE knowledge_docs(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        workspace_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        title TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        trusted INTEGER NOT NULL,
+        added_at TEXT NOT NULL,
+        UNIQUE(workspace_id, sha256)
+    );
+    CREATE VIRTUAL TABLE knowledge_fts USING fts5(title, body, doc_id UNINDEXED, workspace_id UNINDEXED);
+    """,
 ]
 
 
