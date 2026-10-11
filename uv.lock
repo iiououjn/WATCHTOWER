@@ -2747,6 +2747,7 @@ dependencies = [
     { name = "langgraph-checkpoint-sqlite" },
     { name = "litellm" },
     { name = "mcp" },
+    { name = "pyyaml" },
     { name = "typer" },
 ]
 
@@ -2763,6 +2764,7 @@ requires-dist = [
     { name = "langgraph-checkpoint-sqlite", specifier = ">=3.0" },
     { name = "litellm", specifier = ">=1.50" },
     { name = "mcp", specifier = ">=2.3,<3" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "typer", specifier = ">=0.12" },
 ]
 
