@@ -153,3 +153,13 @@ def test_citations_must_be_exact_context_sources_and_domains_are_registrable():
     pkg = Floor("f1", LEAD, WORKER, HR, ask=s, context=lambda t: ctx, min_domains=2).run("g")
     assert pkg.sources == ["https://en.wikipedia.org/wiki/F", "https://de.wikipedia.org/wiki/F"]
     assert pkg.open_questions == ["only 1 independent source(s) for 'A' (need 2)"]
+
+
+@pytest.mark.parametrize("floor_name", ["f2", "f3", "dev"])
+def test_reality_floors_fail_when_last_check_failed(floor_name):
+    pkg = WorkPackage(floor_name, "summary", [], [], [{"pass": True}, {"pass": False}], [])
+    assert pkg.validate() == ["reality check failed: tests or app did not pass"]
+
+
+def test_research_floor_has_no_reality_rule():
+    assert WorkPackage("f1", "## A\nx", [], [], [{"pass": False}], []).validate() == []

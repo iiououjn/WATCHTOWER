@@ -31,6 +31,7 @@ def untrusted(source: str, text: str) -> str:
 
 
 SOURCE_ATTR = re.compile(r'<untrusted source="([^"]*)">')
+REALITY_FLOORS = {"f2", "f3", "dev"}
 SECOND_LEVEL = {"co", "com", "org", "net", "gov", "ac", "edu"}
 
 
@@ -81,6 +82,8 @@ class WorkPackage:
         sections = [s for s in self.summary.split("## ") if s.strip()]
         if sections and all(s.rstrip().endswith("(no result)") for s in sections):
             problems.append("no task produced a result")
+        if self.floor in REALITY_FLOORS and self.checks_run and not self.checks_run[-1].get("pass"):
+            problems.append("reality check failed: tests or app did not pass")
         return problems
 
 
