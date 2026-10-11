@@ -36,4 +36,5 @@ def load_settings() -> Settings:
         home=home,
         tiers=dict(DEFAULT_TIERS),
         min_free_ram_pct=int(os.environ.get("WATCHTOWER_MIN_FREE_RAM_PCT", 20)),
+        sandbox_image=os.environ.get("WATCHTOWER_SANDBOX_IMAGE", "python:3.12-slim"),
     )

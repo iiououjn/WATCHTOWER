@@ -73,3 +73,9 @@ def test_failed_migration_rolls_back_atomically(tmp_path, monkeypatch):
 def test_knowledge_tables_exist(conn):
     names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master")}
     assert {"knowledge_docs", "knowledge_fts"} <= names
+
+
+def test_sandbox_image_env_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
+    monkeypatch.setenv("WATCHTOWER_SANDBOX_IMAGE", "python:latest")
+    assert load_settings().sandbox_image == "python:latest"
