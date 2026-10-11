@@ -78,7 +78,8 @@ class Knowledge:
             raise
         return doc_id
 
-    def search(self, query: str, limit: int = 5) -> list[Hit]:
+    def search(self, query: str, limit: int = 5, distinct: bool = True) -> list[Hit]:
+        """Best-ranked chunks; distinct=True keeps one hit per document (for display)."""
         terms = [t for t in re.findall(r"\w+", query.lower()) if t not in STOPWORDS][:MAX_TERMS]
         if not terms:
             return []
@@ -94,7 +95,7 @@ class Knowledge:
         ).fetchall()
         hits, seen = [], set()
         for r in rows:
-            if r["id"] in seen:
+            if distinct and r["id"] in seen:
                 continue
             seen.add(r["id"])
             hits.append(Hit(r["id"], r["title"], r["source"], r["snip"], -r["rank"], bool(r["trusted"]), r["body"]))

@@ -96,5 +96,5 @@ class TowerPipeline:
     def _context(self, task: str) -> str:
         return "\n".join(
             f'<untrusted source="{h.source}">\n{h.text[:CONTEXT_CHARS]}\n</untrusted>'
-            for h in self._knowledge.search(task, limit=3)
+            for h in self._knowledge.search(task, limit=3, distinct=False)
         )

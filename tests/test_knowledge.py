@@ -88,3 +88,13 @@ def test_only_stopwords_returns_nothing(conn):
     kb = Knowledge(conn)
     kb.add(LIGHTHOUSE, "a")
     assert kb.search("the of and in") == []
+
+
+def test_agents_can_get_several_chunks_from_one_document(conn):
+    kb = Knowledge(conn)
+    paras = [f"Section {i}: glass layer rule number {i}. " + "filler words here. " * 70 for i in range(4)]
+    doc = kb.add("\n\n".join(paras), "spec")
+    assert len(kb.search("glass layer rule")) == 1
+    chunks = kb.search("glass layer rule", limit=3, distinct=False)
+    assert len(chunks) == 3 and {h.doc_id for h in chunks} == {doc}
+    assert len({h.text for h in chunks}) == 3
