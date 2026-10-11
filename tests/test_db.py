@@ -54,3 +54,17 @@ def test_min_free_ram_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
     monkeypatch.setenv("WATCHTOWER_MIN_FREE_RAM_PCT", "99")
     assert load_settings().min_free_ram_pct == 99
+
+
+def test_failed_migration_rolls_back_atomically(tmp_path, monkeypatch):
+    from watchtower.engine import db
+    path = tmp_path / "m.db"
+    monkeypatch.setattr(db, "MIGRATIONS", [db.SCHEMA_V1, "ALTER TABLE jobs ADD COLUMN x INTEGER; SELECT * FROM nope;"])
+    try:
+        connect(path)
+    except sqlite3.OperationalError:
+        pass
+    raw = sqlite3.connect(path)
+    assert raw.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert "x" not in [r[1] for r in raw.execute("PRAGMA table_info(jobs)")]
+    raw.close()

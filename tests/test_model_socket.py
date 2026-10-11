@@ -178,9 +178,19 @@ def test_unknown_ram_does_not_block(parts):
     assert sock.ask("small", [{"role": "user", "content": "x"}], "j").text == "hi"
 
 
-def test_unload_all_frees_every_resident_model(parts):
+
+
+def test_unload_all_only_unloads_this_process_model(parts):
     unloaded = []
-    sock = low_ram_socket(parts, resident=["ollama/a", "ollama/b"], pct=100, unloaded=unloaded)
+    sock = low_ram_socket(parts, resident=["ollama/llama3.2:3b", "ollama/other-process"], pct=100,
+                          unloaded=unloaded)
+    sock.ask("small", [{"role": "user", "content": "x"}], "j")
+    unloaded.clear()
     sock.unload_all("j")
-    assert unloaded == ["ollama/a", "ollama/b"]
-    assert sock.loaded is None
+    assert unloaded == ["ollama/llama3.2:3b"]
+
+
+def test_unload_all_without_a_loaded_model_does_nothing(parts):
+    unloaded = []
+    low_ram_socket(parts, resident=["ollama/other-process"], pct=100, unloaded=unloaded).unload_all("j")
+    assert unloaded == []

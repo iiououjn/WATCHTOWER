@@ -94,3 +94,21 @@ def test_resume_unknown_job(db):
 def test_rejects_bad_step_lists(db, steps):
     with pytest.raises(ValueError):
         Workflow(steps, db)
+
+
+def test_checkpoints_are_written_synchronously(db):
+    wf = Workflow(counting_steps({"a": 0, "b": 0}), db)
+    seen = {}
+    real = wf._graph
+
+    class Spy:
+        def invoke(self, payload, config, **kw):
+            seen.update(kw)
+            return real.invoke(payload, config, **kw)
+
+        def get_state(self, config):
+            return real.get_state(config)
+
+    wf._graph = Spy()
+    wf.run("j", {"x": 0})
+    assert seen.get("durability") == "sync"

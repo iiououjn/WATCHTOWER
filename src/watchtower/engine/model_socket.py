@@ -140,9 +140,9 @@ class ModelSocket:
         self._loaded = model
 
     def unload_all(self, job_id: str | None = None) -> None:
-        """Free RAM after a job: unload every resident local model."""
-        for model in self._resident_safe(job_id):
-            self._unload_safe(model, job_id)
+        """Free RAM after a job: unload the model this process loaded, never another process's."""
+        if self._loaded:
+            self._unload_safe(self._loaded, job_id)
         self._loaded = None
 
     def _resident_safe(self, job_id: str | None) -> list[str]:

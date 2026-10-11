@@ -127,3 +127,35 @@ def test_agents_restore_context_per_step(env, conn):
     runner.start(job.id, "small")
     planner = ContextStore(conn).load("ground.planner", job.id)
     assert planner["messages"][-1] == {"role": "assistant", "content": "plan-text"}
+
+
+def test_second_ctrl_c_during_cleanup_still_records_status(conn, settings):
+    audit = AuditLog(conn)
+    bus, budget, jobs = Bus(audit), Budget(conn), JobStore(conn)
+
+    def unload(model):
+        raise KeyboardInterrupt
+
+    socket = ModelSocket(settings, budget, audit, completion_fn=Model(), unload_fn=unload,
+                         resident_fn=lambda: ["ollama/llama3.2:3b"], free_ram_fn=lambda: 100)
+    runner = JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus)
+    job = jobs.create("x")
+    budget.open(job.id, 1000, 600, 0.0)
+    assert runner.start(job.id, "small").status == "done"
+    assert jobs.get(job.id).status == "done"
+    runner.close()
+
+
+def test_refuses_job_running_in_another_process(env, settings):
+    import fcntl
+    runner, jobs, bus, model, unloaded, job = env
+    model.fail_on, model.fail_exc = "answer", ConnectionError
+    runner.start(job.id, "small")
+    lock_dir = settings.home / "jobs"
+    lock_dir.mkdir(exist_ok=True)
+    with open(lock_dir / f"{job.id}.lock", "w") as other:
+        fcntl.flock(other, fcntl.LOCK_EX)
+        with pytest.raises(ValueError, match="another process"):
+            runner.resume(job.id, force=True)
+    model.fail_on = None
+    assert runner.resume(job.id).status == "done"

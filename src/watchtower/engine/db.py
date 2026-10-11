@@ -71,8 +71,13 @@ def _migrate(conn: sqlite3.Connection, path: Path) -> None:
         try:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             for number, sql in enumerate(MIGRATIONS[version:], start=version + 1):
-                conn.executescript(sql)
-                conn.execute(f"PRAGMA user_version={number}")
+                # schema change and version bump commit together, or not at all
+                try:
+                    conn.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version={number};\nCOMMIT;")
+                except BaseException:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK")
+                    raise
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
 

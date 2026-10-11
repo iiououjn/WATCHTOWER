@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import fcntl
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Iterator
 
 from watchtower.config import Settings
 from watchtower.engine.bus import Bus
@@ -37,6 +40,8 @@ class JobRunner:
         self._socket = socket
         self._scheduler = scheduler
         self._bus = bus
+        self._lock_dir = settings.home / "jobs"
+        self._lock_dir.mkdir(parents=True, exist_ok=True)
         self._wf = Workflow(
             [Step("plan", self._plan), Step("answer", self._answer)],
             settings.home / "checkpoints.db",
@@ -47,10 +52,11 @@ class JobRunner:
         job = self._jobs.get(job_id)
         if job is None:
             raise KeyError(job_id)
-        self._jobs.set_status(job_id, "running")
-        self._bus.publish("job.started", {"tier": tier}, job_id)
         data = {"job_id": job_id, "prompt": job.prompt, "tier": tier}
-        return self._drive(job_id, lambda: self._wf.run(job_id, data))
+        with self._job_lock(job_id):
+            self._jobs.set_status(job_id, "running")
+            self._bus.publish("job.started", {"tier": tier}, job_id)
+            return self._drive(job_id, lambda: self._wf.run(job_id, data))
 
     def resume(self, job_id: str, force: bool = False) -> RunOutcome:
         """Resume from the last finished step. force=True also accepts a job stuck in
@@ -62,13 +68,30 @@ class JobRunner:
         if job.status not in allowed:
             hint = " (use --force if its process died)" if job.status == "running" else ""
             raise ValueError(f"job {job_id} is {job.status}; only paused jobs can be resumed{hint}")
-        self._jobs.clear_pause(job_id)
-        self._jobs.set_status(job_id, "running")
-        self._bus.publish("job.resumed", {}, job_id)
-        return self._drive(job_id, lambda: self._wf.resume(job_id))
+        with self._job_lock(job_id):
+            self._jobs.clear_pause(job_id)
+            self._jobs.set_status(job_id, "running")
+            self._bus.publish("job.resumed", {}, job_id)
+            return self._drive(job_id, lambda: self._wf.resume(job_id))
 
     def close(self) -> None:
         self._wf.close()
+
+    @contextmanager
+    def _job_lock(self, job_id: str) -> Iterator[None]:
+        """One process per job. The kernel drops the lock if the process dies, so a free
+        lock on a 'running' job means its process is gone."""
+        handle = open(self._lock_dir / f"{job_id}.lock", "w")
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.close()
+            raise ValueError(f"job {job_id} is running in another process") from None
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            handle.close()
 
     def _drive(self, job_id: str, go) -> RunOutcome:
         try:
@@ -86,9 +109,13 @@ class JobRunner:
         return self._end(job_id, "done", None, result.data.get("answer"))
 
     def _end(self, job_id: str, status: str, reason: str | None, answer: str | None = None) -> RunOutcome:
-        self._socket.unload_all(job_id)
+        # record the outcome first, so a second Ctrl-C during cleanup cannot leave the job 'running'
         self._jobs.set_status(job_id, status, reason)
         self._bus.publish(f"job.{status}", {"reason": reason} if reason else {}, job_id)
+        try:
+            self._socket.unload_all(job_id)
+        except KeyboardInterrupt:
+            pass
         return RunOutcome(job_id, status, answer, reason)
 
     def _ask(self, agent_id: str, data: dict, content: str) -> str:

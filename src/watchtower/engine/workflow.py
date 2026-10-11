@@ -77,7 +77,7 @@ class Workflow:
     def _invoke(self, payload: dict | None, job_id: str) -> WorkflowResult:
         config = self._config(job_id)
         try:
-            out = self._graph.invoke(payload, config)
+            out = self._graph.invoke(payload, config, durability="sync")
         except PauseRequested as e:
             return WorkflowResult("paused", self._graph.get_state(config).values.get("data", {}), str(e))
         return WorkflowResult("done", out["data"])
