@@ -43,7 +43,7 @@ def test_runs_command_with_hardening_flags(settings, audit):
                  "--memory", "512m", "--user", "1000:1000", "--pull", "never", "no-new-privileges"]:
         assert flag in argv
     assert f"{settings.home / 'workspaces' / 'job1'}:/work:rw" in argv
-    assert argv[-4:] == ["python:3.12-slim", "python", "-c", "print('hello')"]
+    assert argv[-8:] == ["python:3.12-slim", "timeout", "-s", "KILL", "60", "python", "-c", "print('hello')"]
 
 
 @pytest.mark.parametrize("bad", ["../../Users/rishi", "a/b", "", "job 1", ".."])
@@ -99,3 +99,54 @@ def test_empty_command_rejected(settings, audit):
 def test_runs_are_audited(settings, audit):
     Sandbox(settings, audit, run=FakeDocker()).run("j", ["true"])
     assert [e.action for e in audit.entries(job_id="j")] == ["sandbox_run", "sandbox_result"]
+
+
+def test_container_has_hard_in_container_time_limit(settings, audit):
+    docker = FakeDocker()
+    Sandbox(settings, audit, run=docker).run("j", ["sleep", "999"], timeout=5)
+    argv = docker.run_argv()
+    assert argv[argv.index("python:3.12-slim") + 1:][:4] == ["timeout", "-s", "KILL", "5"]
+
+
+def test_failed_kill_falls_back_to_force_remove(settings, audit):
+    docker = FakeDocker(hang=True)
+    real = docker.__call__
+
+    def run(argv, **kw):
+        if argv[:2] == ["docker", "kill"]:
+            docker.calls.append(argv)
+            return SimpleNamespace(returncode=1, stdout="", stderr="No such container")
+        return real(argv, **kw)
+
+    Sandbox(settings, audit, run=run).run("j", ["sleep", "999"], timeout=1)
+    name = docker.run_argv()[docker.run_argv().index("--name") + 1]
+    assert ["docker", "rm", "-f", name] in docker.calls
+
+
+def test_docker_daemon_error_during_run_is_unavailable(settings, audit):
+    err = SimpleNamespace(returncode=125, stdout="",
+                          stderr="docker: Error response from daemon: mounts denied.\nmore")
+    with pytest.raises(SandboxUnavailable, match="mounts denied"):
+        Sandbox(settings, audit, run=FakeDocker(run_result=err)).run("j", ["true"])
+
+
+def test_agent_exit_125_without_docker_prefix_is_a_normal_result(settings, audit):
+    own = SimpleNamespace(returncode=125, stdout="", stderr="my script failed")
+    assert Sandbox(settings, audit, run=FakeDocker(run_result=own)).run("j", ["x"]).exit_code == 125
+
+
+def test_hung_daemon_on_image_inspect_is_reported_not_raised(settings, audit):
+    docker = FakeDocker()
+
+    def run(argv, **kw):
+        if argv[:3] == ["docker", "image", "inspect"]:
+            raise subprocess.TimeoutExpired(argv, 15)
+        return docker(argv, **kw)
+
+    assert "not responding" in Sandbox(settings, audit, run=run).check()
+
+
+def test_command_arguments_are_not_audited(settings, audit, conn):
+    Sandbox(settings, audit, run=FakeDocker()).run("j", ["curl", "-H", "Authorization: sk-secret-9"])
+    raw = " ".join(r[0] for r in conn.execute("SELECT detail FROM audit_log"))
+    assert "sk-secret-9" not in raw and "curl" in raw

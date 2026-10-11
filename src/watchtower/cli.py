@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +19,14 @@ from watchtower.engine.runner import JobRunner, RunOutcome
 from watchtower.engine.sandbox import Sandbox
 from watchtower.engine.scheduler import Scheduler
 from watchtower.engine.system import free_ram_pct
+
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _clean(text: str) -> str:
+    """Strip terminal control characters from untrusted text (model output, web content)."""
+    return _CONTROL.sub("", text)
+
 
 app = typer.Typer(no_args_is_help=True, help="THE WATCHTOWER — local agentic ecosystem.")
 EXIT = {"done": 0, "failed": 1, "paused": 3}
@@ -42,7 +51,7 @@ def _runner(settings: Settings, conn) -> JobRunner:
 def _report(outcome: RunOutcome, conn) -> None:
     if outcome.status == "done":
         used = Budget(conn).usage(outcome.job_id)
-        typer.echo(outcome.answer or "")
+        typer.echo(_clean(outcome.answer or ""))
         typer.echo(f"\n[job {outcome.job_id} · {used['used_tokens']} tokens · ${used['used_usd']:.4f}]")
     elif outcome.status == "paused":
         typer.echo(f"Job {outcome.job_id} paused: {outcome.reason}", err=True)
@@ -227,5 +236,5 @@ def knowledge_search(query: str, limit: int = typer.Option(5, min=1, max=50)):
         typer.echo("No matches.")
         return
     for h in hits:
-        typer.echo(f"[{h.doc_id}] {h.title} — {h.source}{'' if h.trusted else ' (untrusted)'}")
-        typer.echo(f"    {h.snippet}")
+        typer.echo(_clean(f"[{h.doc_id}] {h.title} — {h.source}{'' if h.trusted else ' (untrusted)'}"))
+        typer.echo(f"    {_clean(h.snippet)}")

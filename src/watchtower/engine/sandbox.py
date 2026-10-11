@@ -52,7 +52,10 @@ class Sandbox:
             return "Docker is not installed or not responding; install/start Docker Desktop, then resume"
         if info.returncode != 0:
             return "Docker is not running; start Docker Desktop, then resume"
-        inspect = self._run(["docker", "image", "inspect", image], capture_output=True, text=True, timeout=15)
+        try:
+            inspect = self._run(["docker", "image", "inspect", image], capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            return "Docker is not responding; restart Docker Desktop, then resume"
         if inspect.returncode != 0:
             return f"sandbox image {image} is missing; run: docker pull {image}"
         return None
@@ -71,11 +74,17 @@ class Sandbox:
             "--memory", "512m", "--cpus", "1", "--pids-limit", "128",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "1000:1000",
             "-v", f"{workspace}:/work:rw", "-w", "/work",
-            self._s.sandbox_image, *command,
+            self._s.sandbox_image,
+            # hard limit inside the container, so it dies even if the host-side kill misses it
+            "timeout", "-s", "KILL", str(max(1, int(timeout))), *command,
         ]
-        self._audit.append("sandbox", "sandbox_run", {"command": command[:20]}, job_id)
+        self._audit.append("sandbox", "sandbox_run", {"program": command[0], "argc": len(command)}, job_id)
         try:
             proc = self._run(argv, capture_output=True, text=True, timeout=timeout)
+            if proc.returncode == 125 and (proc.stderr or "").lstrip().startswith("docker:"):
+                problem = proc.stderr.strip().splitlines()[0]
+                self._audit.append("sandbox", "sandbox_unavailable", {"error": problem[:200]}, job_id)
+                raise SandboxUnavailable(f"{problem}; fix Docker, then resume")
             result = SandboxResult(proc.returncode, (proc.stdout or "")[-MAX_OUTPUT:],
                                    (proc.stderr or "")[-MAX_OUTPUT:], False)
         except subprocess.TimeoutExpired:
@@ -86,7 +95,10 @@ class Sandbox:
         return result
 
     def _kill(self, name: str) -> None:
-        try:
-            self._run(["docker", "kill", name], capture_output=True, text=True, timeout=15)
-        except (OSError, subprocess.SubprocessError):
-            pass
+        """Stop a timed-out container; if kill misses it (not registered yet), force-remove it."""
+        for argv in (["docker", "kill", name], ["docker", "rm", "-f", name]):
+            try:
+                if self._run(argv, capture_output=True, text=True, timeout=15).returncode == 0:
+                    return
+            except (OSError, subprocess.SubprocessError):
+                pass

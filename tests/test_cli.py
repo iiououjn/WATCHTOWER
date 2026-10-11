@@ -224,3 +224,14 @@ def test_knowledge_add_rejects_missing_or_huge_files(tmp_path):
     big = tmp_path / "big.txt"
     big.write_bytes(b"x" * (5 * 1024 * 1024 + 1))
     assert runner.invoke(cli.app, ["knowledge", "add", str(big)]).exit_code == 2
+
+
+def test_terminal_escape_sequences_are_stripped(tmp_path, monkeypatch):
+    evil = tmp_path / "evil.md"
+    evil.write_text("lighthouse \x1b]52;c;cm0gLXJmIH4=\x07 beacon \x1b[31mred\x1b[0m")
+    runner.invoke(cli.app, ["knowledge", "add", str(evil), "--title", "t\x1b[2Jx"])
+    out = runner.invoke(cli.app, ["knowledge", "search", "lighthouse"]).output
+    assert "\x1b" not in out and "\x07" not in out and "lighthouse" in out
+    use_completion(monkeypatch, lambda **kw: fake_response("safe \x1b]0;pwned\x07 answer", 1, 1))
+    answer = runner.invoke(cli.app, ["run", "hello"]).output
+    assert "\x1b" not in answer and "safe" in answer and "answer" in answer
