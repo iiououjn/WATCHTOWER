@@ -78,7 +78,7 @@ def test_empty_result_never_passes_even_if_hr_says_so():
                 "f1.hr": [{"pass": True}]})
     pkg = floor(s).run("goal")
     assert pkg.open_questions and "(no result)" in pkg.summary
-    assert "a task produced no result" in pkg.validate()
+    assert "no task produced a result" in pkg.validate()
 
 
 @pytest.mark.parametrize("value,expected", [(True, True), ("true", True), ("yes", True), (False, False),
@@ -90,3 +90,21 @@ def test_truthy(value, expected):
 def test_package_round_trip():
     pkg = WorkPackage("f1", "s", [], ["u"], [{"pass": True}], [])
     assert WorkPackage.from_dict(pkg.to_dict()) == pkg
+
+
+def test_lead_sees_reference_data_for_the_goal():
+    s = Script({"f1.lead": [{"tasks": ["A"]}], "f1.worker": [{"result": "r", "sources": []}],
+                "f1.hr": [{"pass": True}]})
+    floor(s, context=lambda t: f"<untrusted>ctx for {t}</untrusted>").run("the goal")
+    assert "<untrusted>ctx for the goal</untrusted>" in s.prompts["f1.lead"][0]
+    assert "only tasks the reference data can answer" in s.prompts["f1.lead"][0]
+
+
+def test_one_unanswerable_task_is_an_open_question_not_a_failure():
+    pkg = WorkPackage("f1", "## A\nreal answer\n\n## B\n(no result)", [], [], [{"pass": True}], ["B unanswered"])
+    assert pkg.validate() == []
+
+
+def test_all_tasks_empty_is_still_a_failure():
+    pkg = WorkPackage("f1", "## A\n(no result)\n\n## B\n(no result)", [], [], [{"pass": False}], [])
+    assert pkg.validate() == ["no task produced a result"]

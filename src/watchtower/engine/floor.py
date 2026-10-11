@@ -7,8 +7,9 @@ from watchtower.engine.model_socket import BadModelOutput
 from watchtower.roles import Role
 
 LEAD_PROMPT = (
-    "Goal:\n{goal}\n{feedback}\n"
-    'Split the goal into at most {n} focused tasks. Reply as JSON: {{"tasks": [string]}}'
+    "Goal:\n{goal}\n\nReference data:\n{context}\n{feedback}\n"
+    "Split the goal into at most {n} focused tasks. Plan only tasks the reference data can answer; "
+    'do not invent background topics. Reply as JSON: {{"tasks": [string]}}'
 )
 WORKER_PROMPT = (
     "Task:\n{task}\n\nReference data:\n{context}\n{feedback}\n"
@@ -54,8 +55,9 @@ class WorkPackage:
             problems.append("summary is empty")
         if not self.checks_run:
             problems.append("no checks were run")
-        if "(no result)" in self.summary:
-            problems.append("a task produced no result")
+        sections = [s for s in self.summary.split("## ") if s.strip()]
+        if sections and all(s.rstrip().endswith("(no result)") for s in sections):
+            problems.append("no task produced a result")
         return problems
 
 
@@ -77,7 +79,8 @@ class Floor:
         gate_note = ""
         if feedback:
             gate_note = "\nThe gate rejected the previous attempt; fix these:\n- " + "\n- ".join(feedback)
-        plan = self._ask(self._lead, LEAD_PROMPT.format(goal=goal, feedback=gate_note, n=self._max_tasks))
+        plan = self._ask(self._lead, LEAD_PROMPT.format(goal=goal, context=self._context(goal) or "(none)",
+                                                         feedback=gate_note, n=self._max_tasks))
         tasks = strs(plan.get("tasks"))[: self._max_tasks]
         if not tasks:
             raise BadModelOutput(f"{self.name} lead returned no tasks")
