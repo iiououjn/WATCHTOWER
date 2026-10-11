@@ -350,3 +350,56 @@ def test_newly_denied_domains_never_reach_agents(online_tower, conn, monkeypatch
     runner.start(job.id, extra={"auto_approve": True})
     assert not any("spam.example" in p for p in model.prompts)
     runner.close()
+
+
+from conftest import APP_REPLIES, FakeSandbox
+
+
+@pytest.fixture
+def app_tower(conn, settings, tmp_path):
+    audit = AuditLog(conn)
+    bus, budget, jobs = Bus(audit), Budget(conn), JobStore(conn)
+
+    def make(replies=None, **sandbox_kw):
+        model = RoleModel({**TOWER_REPLIES, **APP_REPLIES, **(replies or {})})
+        socket = ModelSocket(settings, budget, audit, completion_fn=model, unload_fn=lambda m: None,
+                             resident_fn=lambda: [], free_ram_fn=lambda: 100)
+        sandbox = FakeSandbox(tmp_path / "ws", **sandbox_kw)
+        runner = JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus, sandbox=sandbox)
+        job = jobs.create("a todo web app", pipeline="app")
+        budget.open(job.id, 200_000, 3600, 0.0)
+        return runner, model, sandbox, job
+
+    return make
+
+
+def test_app_pipeline_builds_tests_and_smoke_checks(app_tower):
+    runner, model, sandbox, job = app_tower()
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "done" and "app.py" in out.answer and "python app.py" in out.answer
+    assert sandbox.calls[0][:3] == ["python", "-m", "unittest"] and sandbox.calls[-1][:2] == ["python", "-c"]
+    assert "f1.lead" not in model.calls  # research is opt-in for apps
+    runner.close()
+
+
+def test_gate_design_route_replans(app_tower):
+    runner, model, sandbox, job = app_tower({"f5.dev_gate": [
+        {"pass": False, "reasons": ["no delete"], "send_back_to": "design"}, {"pass": True, "reasons": []}]})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert model.calls.count("f2.architect") == 2
+    runner.close()
+
+
+def test_failing_smoke_test_routes_to_code_without_model_gate(app_tower):
+    runner, model, sandbox, job = app_tower(http="None")
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "paused" and "reality check failed" in out.reason
+    assert "f5.dev_gate" not in model.calls
+    runner.close()
+
+
+def test_docker_down_pauses_app_job(app_tower):
+    runner, model, sandbox, job = app_tower(unavailable=True)
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "paused" and "Docker" in out.reason
+    runner.close()

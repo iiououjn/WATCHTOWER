@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from watchtower.engine.db import now
 
-PIPELINES = {"demo", "tower"}
+PIPELINES = {"demo", "tower", "app"}
 STATUSES = {"queued", "running", "paused", "done", "failed"}
 
 

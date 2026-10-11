@@ -4,16 +4,20 @@ from typing import Callable
 
 from watchtower.engine.beacon import glass as glass_mod
 from watchtower.engine.beacon.beacon import Beacon
+from watchtower.engine.buildfloor import smoke_test
 from watchtower.engine.bus import Bus
-from watchtower.engine.floor import Floor, strs, untrusted
+from watchtower.engine.devfloor import DevFloor
+from watchtower.engine.floor import Floor, WorkPackage, strs, untrusted
 from watchtower.engine.gate import Gate
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput
 from watchtower.engine.workflow import Step
+from watchtower.engine.workspace import Workspace
 from watchtower.roles import Role
 
 MAX_SEND_BACKS = 3
+DEV_ROUTES = ("research", "design", "code")
 CONTEXT_CHARS = 1500
 QUESTIONS_PROMPT = (
     "Owner's goal:\n{goal}\n\nReference data:\n{context}\n\nAsk at most 3 short clarifying questions whose answers would most change "
@@ -47,16 +51,52 @@ class TowerPipeline:
 
     def __init__(self, ask: Callable[[Role, dict, str], dict], roles: dict[str, Role],
                  approvals: Approvals, bus: Bus, knowledge: Knowledge,
-                 beacon_factory: Callable[[Callable[[str], dict]], Beacon] | None = None):
+                 beacon_factory: Callable[[Callable[[str], dict]], Beacon] | None = None, sandbox=None):
         self._ask = ask
         self._roles = roles
         self._approvals = approvals
         self._bus = bus
         self._knowledge = knowledge
         self._beacon_factory = beacon_factory
+        self._sandbox = sandbox
 
     def steps(self) -> list[Step]:
         return [Step("spec", self._spec), Step("approval", self._approval), Step("f1", self._f1)]
+
+    def app_steps(self) -> list[Step]:
+        return [Step("spec", self._spec), Step("approval", self._approval),
+                Step("research", self._research), Step("dev", self._dev)]
+
+    def _research(self, data: dict) -> dict:
+        return self._f1(data) if data.get("research") else {"f1": None}
+
+    def _dev(self, data: dict) -> dict:
+        job_id, spec, r = data["job_id"], data["spec"], self._roles
+        ask = lambda role, prompt: self._ask(role, data, prompt)  # noqa: E731
+        ws = Workspace(self._sandbox.workspace(job_id))
+        run = lambda cmd: self._sandbox.run(job_id, cmd, timeout=90)  # noqa: E731
+        dev = DevFloor(r["f2.architect"], r["f2.coder"], ask=ask, workspace=ws, run=run)
+        gate = Gate(ask, r["f5.dev_gate"])
+        research = (data.get("f1") or {}).get("summary", "")
+        plan, feedback = dev.plan(spec, research, []), []
+        for attempt in range(MAX_SEND_BACKS + 1):
+            package = dev.build(spec, plan, feedback)
+            if package.checks_run and package.checks_run[-1].get("pass"):
+                f3 = smoke_test(run, plan["entry"])
+                package = WorkPackage("dev", f"{package.summary}\n\n{f3.summary}\n\nCode:\n{ws.snapshot(3000)}",
+                                      ws.files(), [], package.checks_run + f3.checks_run,
+                                      package.open_questions + f3.open_questions)
+            verdict = gate.check(spec, package, DEV_ROUTES)
+            self._bus.publish("gate.verdict", {"floor": "dev", "attempt": attempt, "passed": verdict.passed,
+                                               "reasons": verdict.reasons, "route": verdict.route}, job_id)
+            if verdict.passed:
+                return {"dev": package.to_dict(), "files": ws.files(), "workspace": str(ws.root),
+                        "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
+                                   f"Run it: cd \"{ws.root}\" && python {plan['entry']}  (then open http://127.0.0.1:8000)")}
+            feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]
+            if verdict.route in ("design", "research"):
+                plan = dev.plan(spec, research, feedback)
+        raise NeedsOwner(f"gate rejected the app {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")
 
     def questions(self, data: dict) -> list[str]:
         out = self._ask(self._roles["cpo"], data, QUESTIONS_PROMPT.format(goal=data["prompt"], context=self._context(data["prompt"]) or "(none)"))

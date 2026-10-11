@@ -52,3 +52,34 @@ class RoleModel:
         queue = self.replies[role]
         reply = queue.pop(0) if len(queue) > 1 else queue[0]
         return fake_response(reply if isinstance(reply, str) else json.dumps(reply), 2, 3)
+
+
+APP_REPLIES = {
+    "f2.architect": [{"files": [{"path": "app.py", "purpose": "server"},
+                                {"path": "test_app.py", "purpose": "tests"}], "entry": "app.py"}],
+    "f2.coder": [{"files": [{"path": "app.py", "content": "import json\n"},
+                            {"path": "test_app.py", "content": "import unittest\n"}]}],
+    "f5.dev_gate": [{"pass": True, "reasons": []}],
+}
+
+
+class FakeSandbox:
+    """Sandbox stand-in: unittest and smoke results are scripted."""
+
+    def __init__(self, root, test_ok=True, http="200", unavailable=False):
+        self.root, self.test_ok, self.http, self.unavailable, self.calls = root, test_ok, http, unavailable, []
+
+    def workspace(self, job_id):
+        path = self.root / job_id
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def run(self, job_id, command, timeout=60.0):
+        from watchtower.engine.sandbox import SandboxResult, SandboxUnavailable
+        if self.unavailable:
+            raise SandboxUnavailable("Docker is not running; start Docker Desktop, then resume")
+        self.calls.append(command)
+        if command[:3] == ["python", "-m", "unittest"]:
+            ok = self.test_ok if isinstance(self.test_ok, bool) else self.test_ok.pop(0)
+            return SandboxResult(0 if ok else 1, "", "Ran 2 tests\n\nOK\n" if ok else "FAILED (failures=1)\n", False)
+        return SandboxResult(0, f"SMOKE_STATUS {self.http}\n", "", False)
