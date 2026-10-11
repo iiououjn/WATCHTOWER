@@ -235,3 +235,52 @@ def test_terminal_escape_sequences_are_stripped(tmp_path, monkeypatch):
     use_completion(monkeypatch, lambda **kw: fake_response("safe \x1b]0;pwned\x07 answer", 1, 1))
     answer = runner.invoke(cli.app, ["run", "hello"]).output
     assert "\x1b" not in answer and "safe" in answer and "answer" in answer
+
+
+from conftest import TOWER_REPLIES, RoleModel
+
+
+def use_roles(monkeypatch, replies=None):
+    model = RoleModel({**TOWER_REPLIES, **(replies or {})})
+    use_completion(monkeypatch, model)
+    return model
+
+
+def test_build_with_yes_runs_to_done(monkeypatch):
+    use_roles(monkeypatch)
+    result = runner.invoke(cli.app, ["build", "compare lighthouse lenses", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "Fresnel" in result.output
+
+
+def test_build_asks_questions_then_waits_for_approval(monkeypatch):
+    model = use_roles(monkeypatch, {"cpo": [{"questions": ["Who is it for?"]}, TOWER_REPLIES["cpo"][0]]})
+    result = runner.invoke(cli.app, ["build", "compare lighthouse lenses"], input="students\n")
+    assert result.exit_code == 3, result.output
+    assert "Who is it for?" in result.output
+    assert "names two lens types" in result.output
+    assert "watchtower approve" in result.output
+    assert "students" in model.prompts[1]
+    approved = runner.invoke(cli.app, ["approve", latest_job_id()])
+    assert approved.exit_code == 0, approved.output
+    assert "Fresnel" in approved.output
+
+
+def test_reject_fails_job(monkeypatch):
+    use_roles(monkeypatch, {"cpo": [{"questions": []}, TOWER_REPLIES["cpo"][0]]})
+    runner.invoke(cli.app, ["build", "compare lighthouse lenses"])
+    result = runner.invoke(cli.app, ["approve", latest_job_id(), "--reject"])
+    assert result.exit_code == 1
+    assert runner.invoke(cli.app, ["status"]).output.split()[1] == "failed"
+
+
+def test_approve_without_pending_approval(monkeypatch):
+    use_roles(monkeypatch)
+    assert runner.invoke(cli.app, ["approve", "nope"]).exit_code == 2
+
+
+def test_build_continues_when_cpo_questions_fail(monkeypatch):
+    use_roles(monkeypatch, {"cpo": ["not json", "still not json", TOWER_REPLIES["cpo"][0]]})
+    result = runner.invoke(cli.app, ["build", "compare lighthouse lenses"])
+    assert "continuing without questions" in result.output
+    assert result.exit_code == 3

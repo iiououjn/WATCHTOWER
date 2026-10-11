@@ -9,13 +9,14 @@ import typer
 from watchtower.config import Settings, load_settings
 from watchtower.engine.bus import Bus
 from watchtower.engine.db import connect
+from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.governor.audit import AuditLog
-from watchtower.engine.governor.budget import Budget
+from watchtower.engine.governor.budget import Budget, BudgetExceeded
 from watchtower.engine.jobs import JobStore
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.memory import ContextStore
 from watchtower.engine.model_socket import ModelSocket
-from watchtower.engine.runner import JobRunner, RunOutcome
+from watchtower.engine.runner import PAUSE_ERRORS, JobRunner, RunOutcome
 from watchtower.engine.sandbox import Sandbox
 from watchtower.engine.scheduler import Scheduler
 from watchtower.engine.system import free_ram_pct
@@ -54,8 +55,14 @@ def _report(outcome: RunOutcome, conn) -> None:
         typer.echo(_clean(outcome.answer or ""))
         typer.echo(f"\n[job {outcome.job_id} · {used['used_tokens']} tokens · ${used['used_usd']:.4f}]")
     elif outcome.status == "paused":
-        typer.echo(f"Job {outcome.job_id} paused: {outcome.reason}", err=True)
-        typer.echo(f"Resume with: watchtower resume {outcome.job_id}", err=True)
+        pending = Approvals(conn).pending_for(outcome.job_id)
+        if pending:
+            typer.echo(f"\nSpec for job {outcome.job_id} — awaiting your approval:\n")
+            typer.echo(_clean(pending.summary))
+            typer.echo(f"\nApprove with: watchtower approve {outcome.job_id}   (or add --reject)", err=True)
+        else:
+            typer.echo(f"Job {outcome.job_id} paused: {outcome.reason}", err=True)
+            typer.echo(f"Resume with: watchtower resume {outcome.job_id}", err=True)
     else:
         typer.echo(f"Job {outcome.job_id} failed: {outcome.reason}", err=True)
     raise typer.Exit(EXIT[outcome.status])
@@ -238,3 +245,61 @@ def knowledge_search(query: str, limit: int = typer.Option(5, min=1, max=50)):
     for h in hits:
         typer.echo(_clean(f"[{h.doc_id}] {h.title} — {h.source}{'' if h.trusted else ' (untrusted)'}"))
         typer.echo(f"    {_clean(h.snippet)}")
+
+
+@app.command()
+def build(
+    goal: str,
+    yes: bool = typer.Option(False, "--yes", help="Skip CPO questions and auto-approve the spec"),
+    max_tokens: Optional[int] = typer.Option(None, min=1, help="Token budget for this job"),
+):
+    """Run a goal through the tower: CPO spec → your approval → Floor 1 → gate."""
+    if not goal.strip():
+        typer.echo("Error: goal must not be empty", err=True)
+        raise typer.Exit(2)
+    settings, conn = _open()
+    job = JobStore(conn).create(goal, pipeline="tower")
+    Budget(conn).open(job.id, settings.default_max_tokens if max_tokens is None else max_tokens,
+                      settings.default_max_seconds, settings.default_max_usd)
+    AuditLog(conn).append("owner", "job_created", {"prompt": job.prompt, "pipeline": "tower"}, job.id)
+    runner = _runner(settings, conn)
+    try:
+        answers = []
+        if not yes:
+            try:
+                questions = runner.cpo_questions(job.id)
+            except (*PAUSE_ERRORS, BudgetExceeded) as e:
+                typer.echo(f"CPO could not ask questions ({e}); continuing without questions.", err=True)
+                questions = []
+            for q in questions:
+                answers.append({"q": q, "a": typer.prompt(f"CPO asks: {_clean(q)}", default="", show_default=False)})
+        outcome = runner.start(job.id, extra={"answers": answers, "auto_approve": yes})
+    finally:
+        runner.close()
+    _report(outcome, conn)
+
+
+@app.command()
+def approve(job_id: str, reject: bool = typer.Option(False, "--reject", help="Reject the spec instead")):
+    """Approve (or reject) the spec a job is waiting on, then resume it."""
+    settings, conn = _open()
+    approvals = Approvals(conn)
+    pending = approvals.pending_for(job_id)
+    if pending is None:
+        typer.echo(f"Error: job {job_id} has no pending approval", err=True)
+        raise typer.Exit(2)
+    approvals.decide(pending.id, not reject)
+    AuditLog(conn).append("owner", "approval_decided", {"approval_id": pending.id, "approved": not reject}, job_id)
+    if reject:
+        JobStore(conn).set_status(job_id, "failed", "spec rejected by owner")
+        typer.echo(f"Job {job_id} failed: spec rejected by owner", err=True)
+        raise typer.Exit(1)
+    runner = _runner(settings, conn)
+    try:
+        outcome = runner.resume(job_id)
+    except (KeyError, ValueError) as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
+    finally:
+        runner.close()
+    _report(outcome, conn)
