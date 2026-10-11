@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable
 
 from watchtower.engine.bus import Bus
-from watchtower.engine.floor import Floor, strs
+from watchtower.engine.floor import Floor, strs, untrusted
 from watchtower.engine.gate import Gate
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.knowledge import Knowledge
@@ -26,6 +26,10 @@ SPEC_PROMPT = (
 
 
 class NeedsOwner(Exception):
+    pass
+
+
+class SpecRejected(Exception):
     pass
 
 
@@ -73,8 +77,11 @@ class TowerPipeline:
         return {"spec": spec, "approval_id": approval_id}
 
     def _approval(self, data: dict) -> dict:
-        if data.get("auto_approve") or self._approvals.get(data["approval_id"]).status == "approved":
+        status = "approved" if data.get("auto_approve") else self._approvals.get(data["approval_id"]).status
+        if status == "approved":
             return {"approved": True}
+        if status == "rejected":
+            raise SpecRejected("spec rejected by owner")
         raise NeedsOwner(f"spec awaiting your approval; review it, then: watchtower approve {data['job_id']}")
 
     def _f1(self, data: dict) -> dict:
@@ -95,6 +102,6 @@ class TowerPipeline:
 
     def _context(self, task: str) -> str:
         return "\n".join(
-            f'<untrusted source="{h.source}">\n{h.text[:CONTEXT_CHARS]}\n</untrusted>'
+            untrusted(h.source, h.text[:CONTEXT_CHARS])
             for h in self._knowledge.search(task, limit=3, distinct=False)
         )

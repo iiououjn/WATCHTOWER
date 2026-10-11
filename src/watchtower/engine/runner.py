@@ -13,7 +13,7 @@ from watchtower.engine.governor.budget import BudgetExceeded
 from watchtower.engine.jobs import JobStore
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput, CloudDisabled, LowMemory, ModelSocket, ModelUnavailable
-from watchtower.engine.pipeline import NeedsOwner, TowerPipeline
+from watchtower.engine.pipeline import NeedsOwner, SpecRejected, TowerPipeline
 from watchtower.engine.sandbox import SandboxUnavailable
 from watchtower.engine.scheduler import Scheduler, SchedulerBusy
 from watchtower.engine.workflow import Step, Workflow, WorkflowResult
@@ -25,7 +25,7 @@ PLAN_PROMPT = (
 )
 ANSWER_PROMPT = "Request: {prompt}\n\nPlan:\n{plan}\n\nFollow the plan and answer the request concisely."
 PAUSE_ERRORS = (ModelUnavailable, LowMemory, SchedulerBusy, SandboxUnavailable, BadModelOutput, NeedsOwner)
-FAIL_ERRORS = (BudgetExceeded, CloudDisabled)
+FAIL_ERRORS = (BudgetExceeded, CloudDisabled, SpecRejected)
 
 
 @dataclass(frozen=True)
@@ -127,6 +127,10 @@ class JobRunner:
         except KeyboardInterrupt:
             pass
         return RunOutcome(job_id, status, answer, reason)
+
+    def release(self, job_id: str) -> None:
+        """Free the model this process loaded (for paths that end outside a workflow run)."""
+        self._socket.unload_all(job_id)
 
     def cpo_questions(self, job_id: str) -> list[str]:
         job = self._jobs.get(job_id)

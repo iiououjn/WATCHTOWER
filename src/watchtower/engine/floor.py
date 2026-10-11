@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass
 from typing import Callable, Sequence
 
@@ -16,9 +17,16 @@ WORKER_PROMPT = (
     'Reply as JSON: {{"result": string, "sources": [string]}}'
 )
 HR_PROMPT = (
-    "Task:\n{task}\n\nResult:\n{result}\n\n"
+    "Task:\n{task}\n\nResult (from the worker):\n{result}\n\n"
     'Does the result complete the task? Reply as JSON: {{"pass": boolean, "reason": string}}'
 )
+
+
+def untrusted(source: str, text: str) -> str:
+    """Wrap outside or derived text as data. '<' is escaped so the text cannot close the tag,
+    and the source is reduced to URL-safe characters so it cannot break the attribute."""
+    safe_source = re.sub(r"[^A-Za-z0-9:/._%#?=&@+~-]", "", source)[:200]
+    return f'<untrusted source="{safe_source}">\n{text.replace("<", "&lt;")}\n</untrusted>'
 
 
 def strs(value, cap: int = 10) -> list[str]:
@@ -92,7 +100,7 @@ class Floor:
             for attempt in range(self._max_redo + 1):
                 out = self._ask(self._worker, WORKER_PROMPT.format(task=task, context=context, feedback=note))
                 result = str(out.get("result") or "").strip()
-                verdict = self._ask(self._hr, HR_PROMPT.format(task=task, result=result or "(empty)"))
+                verdict = self._ask(self._hr, HR_PROMPT.format(task=task, result=untrusted("f1.worker", result or "(empty)")))
                 reason = str(verdict.get("reason") or "").strip()
                 passed = truthy(verdict.get("pass")) and bool(result)
                 checks.append({"check": "hr", "task": task, "attempt": attempt, "pass": passed,

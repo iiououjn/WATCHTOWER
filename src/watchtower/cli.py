@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+import click
 import typer
 
 from watchtower.config import Settings, load_settings
@@ -11,12 +12,12 @@ from watchtower.engine.bus import Bus
 from watchtower.engine.db import connect
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.governor.audit import AuditLog
-from watchtower.engine.governor.budget import Budget, BudgetExceeded
+from watchtower.engine.governor.budget import Budget
 from watchtower.engine.jobs import JobStore
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.memory import ContextStore
 from watchtower.engine.model_socket import ModelSocket
-from watchtower.engine.runner import PAUSE_ERRORS, JobRunner, RunOutcome
+from watchtower.engine.runner import JobRunner, RunOutcome
 from watchtower.engine.sandbox import Sandbox
 from watchtower.engine.scheduler import Scheduler
 from watchtower.engine.system import free_ram_pct
@@ -268,11 +269,19 @@ def build(
         if not yes:
             try:
                 questions = runner.cpo_questions(job.id)
-            except (*PAUSE_ERRORS, BudgetExceeded) as e:
-                typer.echo(f"CPO could not ask questions ({e}); continuing without questions.", err=True)
+            except Exception as e:  # questions are optional; the spec step still runs
+                typer.echo(f"CPO could not ask questions ({type(e).__name__}: {e}); "
+                           "continuing without questions.", err=True)
                 questions = []
-            for q in questions:
-                answers.append({"q": q, "a": typer.prompt(f"CPO asks: {_clean(q)}", default="", show_default=False)})
+            try:
+                for q in questions:
+                    answers.append({"q": q, "a": typer.prompt(f"CPO asks: {_clean(q)}", default="",
+                                                              show_default=False)})
+            except (KeyboardInterrupt, click.exceptions.Abort):
+                runner.release(job.id)
+                JobStore(conn).set_status(job.id, "failed", "cancelled by owner during CPO questions")
+                typer.echo(f"\nJob {job.id} cancelled.", err=True)
+                raise typer.Exit(130)
         outcome = runner.start(job.id, extra={"answers": answers, "auto_approve": yes})
     finally:
         runner.close()
@@ -288,6 +297,11 @@ def approve(job_id: str, reject: bool = typer.Option(False, "--reject", help="Re
     if pending is None:
         typer.echo(f"Error: job {job_id} has no pending approval", err=True)
         raise typer.Exit(2)
+    job = JobStore(conn).get(job_id)
+    if job is None or job.status != "paused":
+        state = "unknown" if job is None else job.status
+        typer.echo(f"Error: job {job_id} is {state}; approve it once it has paused for approval", err=True)
+        raise typer.Exit(2)
     approvals.decide(pending.id, not reject)
     AuditLog(conn).append("owner", "approval_decided", {"approval_id": pending.id, "approved": not reject}, job_id)
     if reject:
@@ -299,6 +313,7 @@ def approve(job_id: str, reject: bool = typer.Option(False, "--reject", help="Re
         outcome = runner.resume(job_id)
     except (KeyError, ValueError) as e:
         typer.echo(f"Error: {e}", err=True)
+        typer.echo(f"Approval recorded. Resume with: watchtower resume {job_id}", err=True)
         raise typer.Exit(2)
     finally:
         runner.close()

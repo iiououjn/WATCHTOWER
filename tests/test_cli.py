@@ -284,3 +284,38 @@ def test_build_continues_when_cpo_questions_fail(monkeypatch):
     result = runner.invoke(cli.app, ["build", "compare lighthouse lenses"])
     assert "continuing without questions" in result.output
     assert result.exit_code == 3
+
+
+def test_approve_requires_paused_job_and_keeps_approval_pending(monkeypatch):
+    use_roles(monkeypatch, {"cpo": [{"questions": []}, TOWER_REPLIES["cpo"][0]]})
+    runner.invoke(cli.app, ["build", "compare lighthouse lenses"])
+    job_id = latest_job_id()
+    from watchtower.config import load_settings
+    from watchtower.engine.db import connect
+    from watchtower.engine.governor.approvals import Approvals
+    from watchtower.engine.jobs import JobStore
+    conn = connect(load_settings().db_path)
+    JobStore(conn).set_status(job_id, "running")
+    result = runner.invoke(cli.app, ["approve", job_id])
+    assert result.exit_code == 2 and "running" in result.output
+    assert Approvals(conn).pending_for(job_id) is not None
+
+
+def test_ctrl_c_during_cpo_questions_does_not_strand_the_job(monkeypatch):
+    import click
+    use_roles(monkeypatch, {"cpo": [{"questions": ["Who?"]}, TOWER_REPLIES["cpo"][0]]})
+
+    def abort(*a, **k):
+        raise click.exceptions.Abort()
+
+    monkeypatch.setattr(cli.typer, "prompt", abort)
+    result = runner.invoke(cli.app, ["build", "compare lighthouse lenses"])
+    assert result.exit_code == 130
+    assert runner.invoke(cli.app, ["status"]).output.split()[1] == "failed"
+
+
+def test_unexpected_error_asking_questions_continues(monkeypatch):
+    use_roles(monkeypatch)
+    monkeypatch.setattr(cli.JobRunner, "cpo_questions", lambda self, job_id: (_ for _ in ()).throw(RuntimeError("x")))
+    result = runner.invoke(cli.app, ["build", "compare lighthouse lenses"])
+    assert "continuing without questions" in result.output

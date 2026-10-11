@@ -23,6 +23,8 @@ class Settings:
     min_free_ram_pct: int = 20
     agent_slots: int = 1
     sandbox_image: str = "python:3.12-slim"
+    num_ctx: int = 4096  # set explicitly so Ollama never silently truncates the system prompt
+    max_output_tokens: int = 1024
 
     @property
     def db_path(self) -> Path:

@@ -118,11 +118,12 @@ class ModelSocket:
         kwargs = {
             "model": model,
             "messages": messages,
-            "max_tokens": max(1, usage["max_tokens"] - usage["used_tokens"]),
+            "max_tokens": max(1, min(self._s.max_output_tokens, usage["max_tokens"] - usage["used_tokens"])),
             "timeout": max(1.0, usage["max_seconds"] - usage["used_seconds"]),
         }
         if local:
             kwargs["api_base"] = self._s.ollama_url
+            kwargs["num_ctx"] = self._s.num_ctx
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         start = self._clock()

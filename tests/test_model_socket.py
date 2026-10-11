@@ -281,3 +281,12 @@ def test_no_wait_when_nothing_was_unloaded(parts):
     with pytest.raises(LowMemory):
         sock.ask("small", [{"role": "user", "content": "x"}], "j")
     assert slept == []
+
+
+def test_local_calls_set_context_window_and_cap_output(parts):
+    calls = []
+    parts[1].open("big", max_tokens=100_000, max_seconds=600, max_usd=0.0)
+    sock = scripted_socket(parts, ['{"a": 1}'], calls)
+    sock.ask("small", [{"role": "user", "content": "x"}], "big")
+    assert calls[0]["num_ctx"] == 4096
+    assert calls[0]["max_tokens"] == 1024

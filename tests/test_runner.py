@@ -267,3 +267,14 @@ def test_cpo_and_workers_see_full_untrusted_knowledge(tower, conn):
         assert '<untrusted source="file:///spec.md">' in prompt
         assert "Rules differ per floor. Rules differ per floor." in prompt
     runner.close()
+
+
+def test_rejected_spec_fails_the_job_even_if_resumed(tower, conn):
+    make, jobs, bus = tower
+    runner, model, job = make()
+    runner.start(job.id, extra={})
+    approvals = Approvals(conn)
+    approvals.decide(approvals.pending_for(job.id).id, False)
+    out = runner.resume(job.id)
+    assert out.status == "failed" and "rejected" in out.reason
+    runner.close()

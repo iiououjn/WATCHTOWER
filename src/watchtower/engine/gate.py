@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from watchtower.engine.floor import WorkPackage, strs, truthy
+from watchtower.engine.floor import WorkPackage, strs, truthy, untrusted
 from watchtower.roles import Role
 
 GATE_PROMPT = (
@@ -37,7 +37,7 @@ class Gate:
         out = self._ask(self._reviewer, GATE_PROMPT.format(
             acceptance=_bullets(spec.get("acceptance", [])),
             out_of_scope=_bullets(spec.get("out_of_scope", [])),
-            floor=package.floor, summary=package.summary,
+            floor=package.floor, summary=untrusted(package.floor, package.summary),
             sources=", ".join(package.sources) or "(none)",
             questions="; ".join(package.open_questions) or "(none)",
         ))
