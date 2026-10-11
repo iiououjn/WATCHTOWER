@@ -32,6 +32,7 @@ class Reply:
 def _litellm_completion(**kw):
     import litellm
 
+    litellm.suppress_debug_info = True  # errors are reported by the CLI, not LiteLLM's banner
     return litellm.completion(**kw)
 
 
