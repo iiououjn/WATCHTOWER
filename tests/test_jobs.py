@@ -75,3 +75,11 @@ def test_pause_flag_unknown_job(conn):
         store.request_pause("nope")
     with pytest.raises(KeyError):
         store.pause_requested("nope")
+
+
+def test_pipeline_defaults_to_demo_and_accepts_tower(conn):
+    store = JobStore(conn)
+    assert store.create("a").pipeline == "demo"
+    assert store.create("b", pipeline="tower").pipeline == "tower"
+    with pytest.raises(ValueError):
+        store.create("c", pipeline="rocket")

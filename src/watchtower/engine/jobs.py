@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from watchtower.engine.db import now
 
+PIPELINES = {"demo", "tower"}
 STATUSES = {"queued", "running", "paused", "done", "failed"}
 
 
@@ -20,6 +21,7 @@ class Job:
     created_at: str
     updated_at: str
     pause_requested: int
+    pipeline: str
 
 
 class JobStore:
@@ -28,16 +30,18 @@ class JobStore:
         self._user = user_id
         self._ws = workspace_id
 
-    def create(self, prompt: str) -> Job:
+    def create(self, prompt: str, pipeline: str = "demo") -> Job:
         prompt = prompt.strip()
         if not prompt:
             raise ValueError("prompt must not be empty")
+        if pipeline not in PIPELINES:
+            raise ValueError(f"unknown pipeline {pipeline!r}")
         ts = now()
         job_id = uuid.uuid4().hex[:12]
         self._conn.execute(
-            "INSERT INTO jobs(id, user_id, workspace_id, prompt, status, error, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (job_id, self._user, self._ws, prompt, "queued", None, ts, ts),
+            "INSERT INTO jobs(id, user_id, workspace_id, prompt, status, error, created_at, updated_at, pipeline)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (job_id, self._user, self._ws, prompt, "queued", None, ts, ts, pipeline),
         )
         return self.get(job_id)
 

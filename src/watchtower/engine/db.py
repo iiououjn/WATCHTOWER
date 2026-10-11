@@ -65,6 +65,18 @@ MIGRATIONS = [
     );
     CREATE VIRTUAL TABLE knowledge_fts USING fts5(title, body, doc_id UNINDEXED, workspace_id UNINDEXED);
     """,
+    """
+    CREATE TABLE approvals(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        decided_at TEXT
+    );
+    ALTER TABLE jobs ADD COLUMN pipeline TEXT NOT NULL DEFAULT 'demo';
+    """,
 ]
 
 

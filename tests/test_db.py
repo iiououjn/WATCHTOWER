@@ -37,7 +37,7 @@ def test_migrates_phase_1a_database(tmp_path):
     )
     old.close()
     conn = connect(path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
     row = conn.execute("SELECT prompt, pause_requested FROM jobs WHERE id='j1'").fetchone()
     assert tuple(row) == ("keep me", 0)
     conn.close()
@@ -46,7 +46,7 @@ def test_migrates_phase_1a_database(tmp_path):
 def test_migration_runs_once(settings):
     connect(settings.db_path).close()
     conn = connect(settings.db_path)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
     conn.close()
 
 
@@ -79,3 +79,8 @@ def test_sandbox_image_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
     monkeypatch.setenv("WATCHTOWER_SANDBOX_IMAGE", "python:latest")
     assert load_settings().sandbox_image == "python:latest"
+
+
+def test_approvals_table_exists(conn):
+    names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master")}
+    assert "approvals" in names
