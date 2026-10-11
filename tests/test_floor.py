@@ -140,3 +140,16 @@ def test_min_domains_flags_single_source_tasks():
                 "f1.hr": [{"pass": True}]})
     pkg = Floor("f1", LEAD, WORKER, HR, ask=s, context=lambda t: ctx, min_domains=2).run("g")
     assert pkg.open_questions == ["only 1 independent source(s) for 'A' (need 2)"]
+
+
+def test_citations_must_be_exact_context_sources_and_domains_are_registrable():
+    ctx = ('<untrusted source="https://en.wikipedia.org/wiki/F">California nps.gov https://a</untrusted>'
+           '<untrusted source="https://de.wikipedia.org/wiki/F">x</untrusted>')
+    s = Script({"f1.lead": [{"tasks": ["A"]}],
+                "f1.worker": [{"result": "r", "sources": ["California", "nps.gov", "https://a",
+                                                          "https://en.wikipedia.org/wiki/F",
+                                                          "https://de.wikipedia.org/wiki/F"]}],
+                "f1.hr": [{"pass": True}]})
+    pkg = Floor("f1", LEAD, WORKER, HR, ask=s, context=lambda t: ctx, min_domains=2).run("g")
+    assert pkg.sources == ["https://en.wikipedia.org/wiki/F", "https://de.wikipedia.org/wiki/F"]
+    assert pkg.open_questions == ["only 1 independent source(s) for 'A' (need 2)"]

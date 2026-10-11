@@ -30,6 +30,20 @@ def untrusted(source: str, text: str) -> str:
     return f'<untrusted source="{safe_source}">\n{text.replace("<", "&lt;")}\n</untrusted>'
 
 
+SOURCE_ATTR = re.compile(r'<untrusted source="([^"]*)">')
+SECOND_LEVEL = {"co", "com", "org", "net", "gov", "ac", "edu"}
+
+
+def registrable_domain(url: str) -> str | None:
+    """Approximate registrable domain of an http(s) URL (en.wikipedia.org → wikipedia.org)."""
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return None
+    labels = parts.hostname.lower().split(".")
+    keep = 3 if len(labels) > 2 and labels[-2] in SECOND_LEVEL and len(labels[-1]) == 2 else 2
+    return ".".join(labels[-keep:])
+
+
 def strs(value, cap: int = 10) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -110,9 +124,10 @@ class Floor:
                 if passed:
                     break
                 note = f"\nHR rejected your last answer: {reason or 'empty or off-task result'}. Fix it."
-            cited = [s for s in strs(out.get("sources")) if s in context]  # never trust invented sources
+            allowed = set(SOURCE_ATTR.findall(context))  # page text cannot forge these: '<' is escaped
+            cited = [s for s in strs(out.get("sources")) if s in allowed]  # never trust invented sources
             sources += cited
-            hosts = {urlsplit(s).hostname or s for s in cited}
+            hosts = {registrable_domain(s) for s in cited} - {None}
             if passed and self._min_domains and len(hosts) < self._min_domains:
                 questions.append(f"only {len(hosts)} independent source(s) for '{task}' (need {self._min_domains})")
             sections.append(f"## {task}\n{result or '(no result)'}")

@@ -27,6 +27,12 @@ def check_url(url: str, resolve: Resolver = system_resolver) -> str:
     host = parts.hostname
     if not host:
         raise BlockedURL("URL has no host")
+    public_ip(host, resolve)
+    return host
+
+
+def public_ip(host: str, resolve: Resolver = system_resolver) -> str:
+    """Resolve host and return an address to connect to, only if every address is public."""
     try:
         addresses = resolve(host)
     except OSError as e:
@@ -39,4 +45,4 @@ def check_url(url: str, resolve: Resolver = system_resolver) -> str:
             ip = ip.ipv4_mapped
         if not ip.is_global:
             raise BlockedURL(f"{host} resolves to non-public address {ip}")
-    return host
+    return addresses[0].split("%")[0]

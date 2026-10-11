@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -12,11 +13,20 @@ from watchtower.engine.floor import truthy, untrusted
 
 GLASS_DIR = Path(__file__).resolve().parents[2] / "glass"
 INJECTION = re.compile(
-    r"(ignore|disregard|forget)\s+(all\s+|any\s+|the\s+)?(previous|prior|above|earlier)\s+"
-    r"(instructions|prompts|messages|rules)|you are now|new instructions\s*:|system prompt|\[role:"
-    r"|</?untrusted|<\|im_start\|>|<\|system\|>",
+    r"\b(ignore|disregard|forget|override)\b.{0,40}\b(instructions|prompts|messages|rules|above|guidelines)\b"
+    r"|\byour (previous |prior |original )?(instructions|rules|prompt)\b|you are now|new instructions\s*:"
+    r"|system prompt|\[role:|</?untrusted|<\|im_start\|>|<\|system\|>|from now on|\bact as\b"
+    r"|\bpretend (to be|you are)\b",
     re.IGNORECASE,
 )
+CONFUSABLES = str.maketrans("аеорсухіјѕԁɡАЕОРСХІЈЅ", "aeopcyxijsdgAEOPCXIJS")
+
+
+def normalize(text: str) -> str:
+    """Defeat cheap evasions: NFKC, drop invisible format characters, fold Cyrillic look-alikes."""
+    text = unicodedata.normalize("NFKC", text)
+    text = "".join(ch for ch in text if unicodedata.category(ch) != "Cf")
+    return text.translate(CONFUSABLES)
 SECRET = re.compile(
     r"sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|ghp_[A-Za-z0-9]{36}"
     r"|xox[baprs]-[A-Za-z0-9-]{10,}"
@@ -74,11 +84,17 @@ class Glass:
             return self._reject(f"domain {host} is not on glass {self._rules.name}'s allow list")
         if SECRET.search(text):
             return self._reject("page contains secret-like strings")
-        paragraphs = [p.strip() for p in text.splitlines() if p.strip()]
-        flagged = [p for p in paragraphs if INJECTION.search(p)]
+        paragraphs = [normalize(p).strip() for p in text.splitlines() if p.strip()]
+        flagged = set()
+        for i, p in enumerate(paragraphs):
+            if INJECTION.search(p):
+                flagged.add(i)
+            elif (i + 1 < len(paragraphs) and not INJECTION.search(paragraphs[i + 1])
+                  and INJECTION.search(p + " " + paragraphs[i + 1])):
+                flagged.update({i, i + 1})  # instruction split across two lines
         if paragraphs and len(flagged) / len(paragraphs) > self._rules.max_injection_ratio:
             return self._reject("page is mostly instruction-like text (likely prompt injection)")
-        clean = "\n".join(p for p in paragraphs if not INJECTION.search(p))
+        clean = "\n".join(p for i, p in enumerate(paragraphs) if i not in flagged)
         if len(clean) < self._rules.min_chars:
             return self._reject("too little readable text")
         notes = [f"removed {len(flagged)} instruction-like paragraph(s)"] if flagged else []

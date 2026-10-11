@@ -102,3 +102,64 @@ def test_page_without_readable_text():
     f, _ = fetcher({"https://a.example/x": html(body="<html><body></body></html>")})
     with pytest.raises(FetchError, match="readable"):
         f.fetch("https://a.example/x")
+
+
+@pytest.mark.parametrize("exc", [httpx.ConnectTimeout("t"), httpx.ConnectError("reset"), httpx.ReadTimeout("r")])
+def test_network_errors_become_fetch_errors(exc):
+    def boom():
+        raise exc
+
+    f, _ = fetcher({"https://a.example/x": boom})
+    with pytest.raises(FetchError):
+        f.fetch("https://a.example/x")
+
+
+def test_malformed_redirect_location_is_fetch_error():
+    f, _ = fetcher({"https://a.example/x": lambda: httpx.Response(302, headers={"location": "http://[::1"})})
+    with pytest.raises((FetchError, BlockedURL)):
+        f.fetch("https://a.example/x")
+
+
+def test_overall_deadline():
+    times = [0.0]  # the deadline is set at 0s; every later reading is 30s
+    f = Fetcher(resolve=resolve, transport=httpx.MockTransport(
+        lambda r: httpx.Response(404) if r.url.path == "/robots.txt" else httpx.Response(
+            200, headers={"content-type": "text/html"}, text=ARTICLE)), clock=lambda: times.pop(0) if times else 30.0)
+    with pytest.raises(FetchError, match="longer than"):
+        f.fetch("https://a.example/x")
+
+
+def test_huge_robots_txt_is_not_read_whole():
+    f, _ = fetcher({"https://a.example/x": html()}, robots={"a.example": "# pad\n" * 200_000 + "Disallow: /x\n"})
+    with pytest.raises(FetchError, match="robots"):
+        f.fetch("https://a.example/x")
+
+
+def test_robots_redirect_is_followed_through_the_guard():
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        if str(request.url) == "https://a.example/robots.txt":
+            return httpx.Response(301, headers={"location": "https://b.example/robots.txt"})
+        if str(request.url) == "https://b.example/robots.txt":
+            return httpx.Response(200, text="User-agent: *\nDisallow: /\n")
+        return httpx.Response(200, headers={"content-type": "text/html"}, text=ARTICLE)
+
+    f = Fetcher(resolve=resolve, transport=httpx.MockTransport(handler))
+    with pytest.raises(FetchError, match="robots"):
+        f.fetch("https://a.example/x")
+
+
+def test_default_client_ignores_proxy_env_and_guards_connections(monkeypatch):
+    from watchtower.engine.beacon.fetcher import GuardedBackend
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    f = Fetcher(resolve=resolve)
+    assert f._client._trust_env is False
+    assert isinstance(f._client._transport._pool._network_backend, GuardedBackend)
+
+
+def test_guarded_backend_refuses_rebound_private_ip():
+    from watchtower.engine.beacon.fetcher import GuardedBackend
+    with pytest.raises(BlockedURL):
+        GuardedBackend(lambda host: ["127.0.0.1"]).connect_tcp("rebind.example", 443)
