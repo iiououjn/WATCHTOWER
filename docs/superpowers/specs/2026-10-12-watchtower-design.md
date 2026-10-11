@@ -24,7 +24,7 @@
 - Must cost $0 to run. Paid models are optional, never required.
 
 ### Success criteria
-1. The owner runs `watchtower run "<idea>"` on their Mac and the tower carries it through spec → research → dev → build → deploy/QA → oversight, with $0 spend by default.
+1. The owner runs `watchtower run "<idea>"` on their Mac and the tower carries a **simple web app** (e.g. todo/notes app) through spec → research → dev → build → deploy/QA → oversight, with $0 spend, on local models only. Complex apps require larger hardware or optional cloud models.
 2. Every floor handoff is gated by F5 Oversight; failed work is sent back, not restarted.
 3. No web content can act as an instruction to any agent.
 4. A crash or model-limit pause never loses work; jobs resume from the last checkpoint.
@@ -45,6 +45,18 @@
 | Available paid options | Anthropic API credits (~$100–200), Claude Pro plan | Optional plug-ins only; never required |
 | Installed tools | Ollama, Docker, Claude Code, Node 25, Python 3.10 | Used directly; Python ≥3.11 recommended for the Engine (to install) |
 | Runtime | Local Mac first → hybrid cloud → SaaS | All infra behind swappable adapters |
+
+### RAM budget (8 GB)
+
+| Component | Budget | Rule |
+|---|---|---|
+| macOS + apps | ~3–4 GB | Reserved |
+| Ollama model | ~2.5 GB | One model loaded at a time; unload when idle |
+| Docker (Sandbox, SearXNG) | ~1.5–2 GB | Started on demand, stopped when idle; Colima as lighter alternative to Docker Desktop |
+| Engine (Python, SQLite, Chroma) | ~0.5 GB | Always on |
+| Dashboard | ~0.2 GB | Production build only (`next start`), never dev mode while jobs run |
+
+The Governor monitors free memory and defers starting a component that would exceed the budget. Search falls back to DuckDuckGo (no Docker) when SearXNG cannot start.
 
 **Honest expectation:** on 8 GB with local models only, the tower works but produces simpler apps slowly. Quality scales with better hardware (swap in larger local models) or optional cloud models, with zero code changes.
 
@@ -72,7 +84,7 @@ Job lifecycle: `draft → spec_approved → F1 → F2 → F3 → F4 → final_au
 
 ## 4. Ground Engine
 
-A single Python service on the Mac. Eight modules, each with one job and a narrow interface.
+A single Python service on the Mac. Nine modules, each with one job and a narrow interface.
 
 | Module | Responsibility | v1 implementation | Swap path |
 |---|---|---|---|
@@ -80,7 +92,8 @@ A single Python service on the Mac. Eight modules, each with one job and a narro
 | **Memory** | Agent context save/restore on idle; long-term memory; post-job lessons | SQLite | Postgres |
 | **Knowledge (RAG)** | Searchable store of Beacon findings and project files | Chroma (local, persistent) | pgvector / managed vector DB |
 | **Bus** | Messages and events between floors/agents/UI | In-process async queue | Redis |
-| **Scheduler** | Wakes/idles agents; concurrency limit; pause/resume on model limits | LangGraph with checkpointer | Distributed workers |
+| **Scheduler** | Wakes/idles agents; concurrency limit; RAM-aware start; pause/resume on model limits | Custom module (Python asyncio) | Distributed workers |
+| **Workflow** | Floor-to-floor job graph, gates, send-backs, checkpoints | LangGraph + SQLite checkpointer | Postgres checkpointer |
 | **Tool Hub** | MCP servers and tools (fs, git, browser, shell) with per-floor permissions | MCP client | Same |
 | **Sandbox** | All agent-executed code runs isolated, never on owner's real files | Docker | Cloud runners |
 | **Governor** | Budgets (tokens/time/$), approval queue, secrets, append-only audit log | SQLite + macOS Keychain | Postgres + cloud secret manager |
@@ -114,10 +127,12 @@ Every step writes a checkpoint. On crash or restart, the Scheduler resumes each 
 | Floor | Input → Output | Objective checks (reality first) |
 |---|---|---|
 | **F1 Research** | Spec → research brief | Every claim has a source link; sources passed Glass 1 |
-| **F2 Dev** | Brief → architecture + code | Lint, type check, unit tests pass in Sandbox |
-| **F3 Build** | Code → MVP → full app | App builds and runs in Sandbox; smoke test |
+| **F2 Dev** | Brief → architecture + code (workers drive **Aider** inside the Sandbox) | Lint, type check, unit tests pass in Sandbox |
+| **F3 Build** | Code → MVP → full app (Aider inside the Sandbox) | App builds and runs in Sandbox; smoke test |
 | **F4 Deploy/QA** | App → deployed + QA report | Playwright E2E pass; health check; rollback ready. Default deploy target: local Docker. Vercel (free plan) optional, owner-approved, token from Keychain |
 | **F5 Oversight** | Every package → verdict | Guardrails, Semgrep + gitleaks + `npm audit`/`pip-audit`, spec match, cross-family model review |
+
+**Coding engine:** F2/F3 workers do not implement their own file-editing loop. They orchestrate **Aider** (open source, Ollama-compatible) running inside the Sandbox, giving it scoped tasks and collecting diffs + test results into the work package.
 
 **Toolkits:** output-type specific tool bundles plugged into F2–F4. v1 ships the **web toolkit**. Later: mobile (simulators; store publishing needs paid accounts and owner approval), CLI, API, ML, docs.
 
@@ -140,8 +155,8 @@ Pipeline, cheapest checks first:
 1. **Deterministic:** domain allow/deny lists, schema/format checks, regex injection patterns, secret detection.
 2. **Relevance filter** against the floor's current task (tier-small).
 3. **Source credibility** scoring.
-4. **Cross-source agreement** for factual claims.
-5. **Fact check** against Knowledge.
+4. **Independent corroboration:** a factual claim passes only with **2+ independent sources on different domains**.
+5. **Consistency check** against Knowledge (flags contradictions; Knowledge is never treated as proof, since the Beacon filled it).
 
 Each glass has floor-specific rules (e.g. Glass 2 only passes technical docs and API references). Rejected content is logged with a reason, never silently dropped.
 
@@ -187,7 +202,10 @@ Each glass has floor-specific rules (e.g. Glass 2 only passes technical docs and
 
 Each phase gets its own spec → plan → implementation cycle.
 
-1. **Ground Engine** + CLI skeleton (Model Socket, Memory, Bus, Scheduler, Governor, Sandbox, Tool Hub, Knowledge).
+1. **Ground Engine**, split into three sub-phases:
+   - **1a:** Model Socket + Memory + Governor (budgets, audit log, Keychain) + CLI skeleton
+   - **1b:** Scheduler + Bus + Workflow checkpoints (pause/resume)
+   - **1c:** Sandbox + Tool Hub (MCP) + Knowledge (RAG)
 2. **Floor framework** + Gate + C-suite (CPO spec step).
 3. **Beacon + Glass + F1 Research** → first real output (research brief).
 4. **F2 → F3 → F4** with the web toolkit.
