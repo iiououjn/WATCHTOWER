@@ -11,6 +11,8 @@ from watchtower.engine.governor.budget import Budget
 from watchtower.engine.system import free_ram_pct
 
 LOCAL_PREFIX = "ollama/"
+RAM_SETTLE_POLLS = 10  # Ollama frees an unloaded model's RAM asynchronously
+RAM_SETTLE_SECONDS = 0.5
 
 
 class ModelUnavailable(Exception):
@@ -83,6 +85,7 @@ class ModelSocket:
         resident_fn: Callable[[], list[str]] | None = None,
         free_ram_fn: Callable[[], int | None] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ):
         self._s = settings
         self._budget = budget
@@ -92,6 +95,7 @@ class ModelSocket:
         self._resident = resident_fn or self._resident_ollama
         self._free_ram = free_ram_fn or free_ram_pct
         self._clock = clock
+        self._sleep = sleep
         self._loaded: str | None = None
 
     @property
@@ -166,11 +170,18 @@ class ModelSocket:
     def _swap_to(self, model: str, job_id: str) -> None:
         """Unload every other resident local model, then refuse to load a new one into low RAM."""
         resident = self._resident_safe(job_id)
+        unloaded = False
         for other in resident:
             if other != model:
                 self._unload_safe(other, job_id)
+                unloaded = True
         if model not in resident:
             pct = self._free_ram()
+            for _ in range(RAM_SETTLE_POLLS if unloaded else 0):
+                if pct is None or pct >= self._s.min_free_ram_pct:
+                    break
+                self._sleep(RAM_SETTLE_SECONDS)
+                pct = self._free_ram()
             if pct is not None and pct < self._s.min_free_ram_pct:
                 self._audit.append("model_socket", "low_memory", {"model": model, "free_pct": pct}, job_id)
                 raise LowMemory(

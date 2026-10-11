@@ -250,3 +250,34 @@ def test_plain_ask_has_no_json_mode(parts):
     calls = []
     scripted_socket(parts, ["hi"], calls).ask("small", [{"role": "user", "content": "x"}], "j")
     assert "response_format" not in calls[0]
+
+
+def test_waits_for_ram_to_settle_after_unloading(parts):
+    settings, budget, audit = parts
+    readings = iter([12, 15, 35])
+    slept = []
+    sock = ModelSocket(settings, budget, audit, completion_fn=lambda **kw: fake_response(),
+                       unload_fn=lambda m: None, resident_fn=lambda: ["ollama/qwen2.5-coder:3b"],
+                       free_ram_fn=lambda: next(readings), sleep=slept.append)
+    assert sock.ask("small", [{"role": "user", "content": "x"}], "j").text == "hi"
+    assert slept == [0.5, 0.5]
+
+
+def test_gives_up_when_ram_never_settles(parts):
+    settings, budget, audit = parts
+    sock = ModelSocket(settings, budget, audit, completion_fn=lambda **kw: fake_response(),
+                       unload_fn=lambda m: None, resident_fn=lambda: ["ollama/qwen2.5-coder:3b"],
+                       free_ram_fn=lambda: 10, sleep=lambda s: None)
+    with pytest.raises(LowMemory):
+        sock.ask("small", [{"role": "user", "content": "x"}], "j")
+
+
+def test_no_wait_when_nothing_was_unloaded(parts):
+    settings, budget, audit = parts
+    slept = []
+    sock = ModelSocket(settings, budget, audit, completion_fn=lambda **kw: fake_response(),
+                       unload_fn=lambda m: None, resident_fn=lambda: [],
+                       free_ram_fn=lambda: 10, sleep=slept.append)
+    with pytest.raises(LowMemory):
+        sock.ask("small", [{"role": "user", "content": "x"}], "j")
+    assert slept == []
