@@ -22,6 +22,7 @@ class Settings:
     default_max_usd: float = 0.0
     min_free_ram_pct: int = 20
     agent_slots: int = 1
+    sandbox_image: str = "python:3.12-slim"
 
     @property
     def db_path(self) -> Path:
