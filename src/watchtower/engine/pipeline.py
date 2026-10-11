@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from watchtower.engine.beacon.beacon import Beacon
 from watchtower.engine.bus import Bus
 from watchtower.engine.floor import Floor, strs, untrusted
 from watchtower.engine.gate import Gate
@@ -44,12 +45,14 @@ class TowerPipeline:
     """CPO spec → owner approval → Floor 1 with gate. Later phases add floors 2–5 here."""
 
     def __init__(self, ask: Callable[[Role, dict, str], dict], roles: dict[str, Role],
-                 approvals: Approvals, bus: Bus, knowledge: Knowledge):
+                 approvals: Approvals, bus: Bus, knowledge: Knowledge,
+                 beacon_factory: Callable[[Callable[[str], dict]], Beacon] | None = None):
         self._ask = ask
         self._roles = roles
         self._approvals = approvals
         self._bus = bus
         self._knowledge = knowledge
+        self._beacon_factory = beacon_factory
 
     def steps(self) -> list[Step]:
         return [Step("spec", self._spec), Step("approval", self._approval), Step("f1", self._f1)]
@@ -87,7 +90,17 @@ class TowerPipeline:
     def _f1(self, data: dict) -> dict:
         ask = lambda role, prompt: self._ask(role, data, prompt)  # noqa: E731
         r = self._roles
-        floor = Floor("f1", r["f1.lead"], r["f1.worker"], r["f1.hr"], ask=ask, context=self._context)
+        beacon = None
+        if self._beacon_factory is not None and not data.get("offline"):
+            beacon = self._beacon_factory(lambda prompt: self._ask(r["glass.f1"], data, prompt))
+
+        def context(task: str) -> str:
+            if beacon is not None:
+                beacon.research(task, data["job_id"])
+            return self._context(task)
+
+        floor = Floor("f1", r["f1.lead"], r["f1.worker"], r["f1.hr"], ask=ask, context=context,
+                      min_domains=2 if beacon is not None else 0)
         gate = Gate(ask, r["f5.gate"])
         feedback: list[str] = []
         for attempt in range(MAX_SEND_BACKS + 1):

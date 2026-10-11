@@ -7,7 +7,12 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from watchtower.config import Settings
+from watchtower.engine.beacon.beacon import Beacon
+from watchtower.engine.beacon.fetcher import Fetcher
+from watchtower.engine.beacon.glass import Glass, load_glass_rules
+from watchtower.engine.beacon.search import Search, SearchUnavailable
 from watchtower.engine.bus import Bus
+from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.governor.budget import BudgetExceeded
 from watchtower.engine.jobs import JobStore
@@ -24,7 +29,8 @@ PLAN_PROMPT = (
     "Do not answer it yet.\n\nRequest: {prompt}"
 )
 ANSWER_PROMPT = "Request: {prompt}\n\nPlan:\n{plan}\n\nFollow the plan and answer the request concisely."
-PAUSE_ERRORS = (ModelUnavailable, LowMemory, SchedulerBusy, SandboxUnavailable, BadModelOutput, NeedsOwner)
+PAUSE_ERRORS = (ModelUnavailable, LowMemory, SchedulerBusy, SandboxUnavailable, BadModelOutput, NeedsOwner,
+                SearchUnavailable)
 FAIL_ERRORS = (BudgetExceeded, CloudDisabled, SpecRejected)
 
 
@@ -40,15 +46,19 @@ class JobRunner:
     """Runs a job as a checkpointed plan → answer workflow and decides paused vs failed."""
 
     def __init__(self, settings: Settings, conn: sqlite3.Connection, socket: ModelSocket,
-                 scheduler: Scheduler, bus: Bus):
+                 scheduler: Scheduler, bus: Bus, beacon_factory=None):
         self._jobs = JobStore(conn)
         self._socket = socket
         self._scheduler = scheduler
         self._bus = bus
         self._lock_dir = settings.home / "jobs"
         self._lock_dir.mkdir(parents=True, exist_ok=True)
+        if beacon_factory is None and settings.online:
+            def beacon_factory(ask):
+                return Beacon(Search(), Fetcher(), Glass(load_glass_rules("f1"), ask), Knowledge(conn),
+                              AuditLog(conn))
         self._tower = TowerPipeline(self._ask_role, load_roles(tiers=settings.tiers), Approvals(conn), bus,
-                                    Knowledge(conn))
+                                    Knowledge(conn), beacon_factory=beacon_factory)
         checkpoints = settings.home / "checkpoints.db"
         self._wfs = {
             "demo": Workflow([Step("plan", self._plan), Step("answer", self._answer)], checkpoints,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass
 from typing import Callable, Sequence
+from urllib.parse import urlsplit
 
 from watchtower.engine.model_socket import BadModelOutput
 from watchtower.roles import Role
@@ -75,13 +76,14 @@ class Floor:
 
     def __init__(self, name: str, lead: Role, worker: Role, hr: Role,
                  ask: Callable[[Role, str], dict], context: Callable[[str], str],
-                 max_tasks: int = 3, max_redo: int = 2):
+                 max_tasks: int = 3, max_redo: int = 2, min_domains: int = 0):
         self.name = name
         self._lead, self._worker, self._hr = lead, worker, hr
         self._ask = ask
         self._context = context
         self._max_tasks = max_tasks
         self._max_redo = max_redo
+        self._min_domains = min_domains
 
     def run(self, goal: str, feedback: Sequence[str] = ()) -> WorkPackage:
         gate_note = ""
@@ -108,7 +110,11 @@ class Floor:
                 if passed:
                     break
                 note = f"\nHR rejected your last answer: {reason or 'empty or off-task result'}. Fix it."
-            sources += strs(out.get("sources"))
+            cited = [s for s in strs(out.get("sources")) if s in context]  # never trust invented sources
+            sources += cited
+            hosts = {urlsplit(s).hostname or s for s in cited}
+            if passed and self._min_domains and len(hosts) < self._min_domains:
+                questions.append(f"only {len(hosts)} independent source(s) for '{task}' (need {self._min_domains})")
             sections.append(f"## {task}\n{result or '(no result)'}")
             if not passed:
                 questions.append(f"HR not satisfied with '{task}': {reason or 'empty result'}")

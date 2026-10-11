@@ -84,3 +84,11 @@ def test_sandbox_image_env_override(tmp_path, monkeypatch):
 def test_approvals_table_exists(conn):
     names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master")}
     assert "approvals" in names
+
+
+def test_online_by_default_and_offline_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
+    monkeypatch.delenv("WATCHTOWER_OFFLINE", raising=False)
+    assert load_settings().online is True
+    monkeypatch.setenv("WATCHTOWER_OFFLINE", "1")
+    assert load_settings().online is False

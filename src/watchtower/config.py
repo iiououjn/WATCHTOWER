@@ -25,6 +25,7 @@ class Settings:
     sandbox_image: str = "python:3.12-slim"
     num_ctx: int = 4096  # set explicitly so Ollama never silently truncates the system prompt
     max_output_tokens: int = 1024
+    online: bool = False  # the Beacon may search the web
 
     @property
     def db_path(self) -> Path:
@@ -39,4 +40,5 @@ def load_settings() -> Settings:
         tiers=dict(DEFAULT_TIERS),
         min_free_ram_pct=int(os.environ.get("WATCHTOWER_MIN_FREE_RAM_PCT", 20)),
         sandbox_image=os.environ.get("WATCHTOWER_SANDBOX_IMAGE", "python:3.12-slim"),
+        online=os.environ.get("WATCHTOWER_OFFLINE") != "1",
     )

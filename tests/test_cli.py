@@ -11,6 +11,7 @@ runner = CliRunner()
 @pytest.fixture(autouse=True)
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
+    monkeypatch.setenv("WATCHTOWER_OFFLINE", "1")  # tests never touch the network
     return tmp_path
 
 

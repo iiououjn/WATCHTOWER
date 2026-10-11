@@ -278,3 +278,64 @@ def test_rejected_spec_fails_the_job_even_if_resumed(tower, conn):
     out = runner.resume(job.id)
     assert out.status == "failed" and "rejected" in out.reason
     runner.close()
+
+
+from watchtower.engine.beacon.search import SearchUnavailable
+
+
+class FakeBeacon:
+    def __init__(self, conn, fail=False):
+        self.conn, self.fail, self.tasks = conn, fail, []
+
+    def research(self, task, job_id):
+        if self.fail:
+            raise SearchUnavailable("web search failed; check your internet connection, then resume")
+        self.tasks.append(task)
+        kb = Knowledge(self.conn)
+        return [kb.add(f"{task}: Fresnel lenses web fact one.", "https://a.example/1"),
+                kb.add(f"{task}: Fresnel lenses web fact two.", "https://b.example/2")]
+
+
+@pytest.fixture
+def online_tower(conn, settings):
+    audit = AuditLog(conn)
+    bus, budget, jobs = Bus(audit), Budget(conn), JobStore(conn)
+
+    def make(beacon, replies=None):
+        model = RoleModel({**TOWER_REPLIES, **(replies or {})})
+        socket = ModelSocket(settings, budget, audit, completion_fn=model, unload_fn=lambda m: None,
+                             resident_fn=lambda: [], free_ram_fn=lambda: 100)
+        runner = JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus,
+                           beacon_factory=lambda ask: beacon)
+        job = jobs.create("compare lighthouse lenses", pipeline="tower")
+        budget.open(job.id, 100_000, 3600, 0.0)
+        return runner, model, job
+
+    return make
+
+
+def test_beacon_researches_each_task_before_workers(online_tower, conn):
+    beacon = FakeBeacon(conn)
+    runner, model, job = online_tower(beacon, {
+        "f1.lead": [{"tasks": ["lens types"]}],
+        "f1.worker": [{"result": "Fresnel", "sources": ["https://a.example/1", "https://b.example/2"]}]})
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "done" and beacon.tasks == ["Compare lighthouse lenses", "lens types"]  # lead, then task
+    worker_prompt = model.prompts[model.calls.index("f1.worker")]
+    assert "https://a.example/1" in worker_prompt and "https://b.example/2" in worker_prompt
+    runner.close()
+
+
+def test_offline_job_skips_beacon(online_tower, conn):
+    beacon = FakeBeacon(conn)
+    runner, model, job = online_tower(beacon)
+    runner.start(job.id, extra={"auto_approve": True, "offline": True})
+    assert beacon.tasks == []
+    runner.close()
+
+
+def test_search_unavailable_pauses_job(online_tower, conn):
+    runner, model, job = online_tower(FakeBeacon(conn, fail=True))
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "paused" and "internet" in out.reason
+    runner.close()

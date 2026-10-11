@@ -28,7 +28,7 @@ def test_happy_path_builds_package():
     s = Script({"f1.lead": [{"tasks": ["A", "B"]}],
                 "f1.worker": [{"result": "answer", "sources": ["file:///n.md", "file:///n.md"]}],
                 "f1.hr": [{"pass": True, "reason": "good"}]})
-    pkg = floor(s).run("goal")
+    pkg = floor(s, context=lambda t: '<untrusted source="file:///n.md">notes</untrusted>').run("goal")
     assert "## A\nanswer" in pkg.summary and "## B\nanswer" in pkg.summary
     assert pkg.sources == ["file:///n.md"]
     assert [c["pass"] for c in pkg.checks_run] == [True, True]
@@ -123,3 +123,20 @@ def test_hr_sees_worker_output_as_untrusted():
     floor(s).run("goal")
     assert '<untrusted source="f1.worker">' in s.prompts["f1.hr"][0]
     assert s.prompts["f1.hr"][0].count("</untrusted>") == 1
+
+
+def test_sources_not_in_context_are_dropped():
+    s = Script({"f1.lead": [{"tasks": ["A"]}],
+                "f1.worker": [{"result": "r", "sources": ["https://seen.example/a", "https://invented.example/z"]}],
+                "f1.hr": [{"pass": True}]})
+    pkg = floor(s, context=lambda t: '<untrusted source="https://seen.example/a">x</untrusted>').run("g")
+    assert pkg.sources == ["https://seen.example/a"]
+
+
+def test_min_domains_flags_single_source_tasks():
+    ctx = '<untrusted source="https://a.example/1">x</untrusted><untrusted source="https://a.example/2">y</untrusted>'
+    s = Script({"f1.lead": [{"tasks": ["A"]}],
+                "f1.worker": [{"result": "r", "sources": ["https://a.example/1", "https://a.example/2"]}],
+                "f1.hr": [{"pass": True}]})
+    pkg = Floor("f1", LEAD, WORKER, HR, ask=s, context=lambda t: ctx, min_domains=2).run("g")
+    assert pkg.open_questions == ["only 1 independent source(s) for 'A' (need 2)"]
