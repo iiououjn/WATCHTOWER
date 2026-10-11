@@ -134,6 +134,15 @@ Every step writes a checkpoint. On crash or restart, the Scheduler resumes each 
 
 **Coding engine:** F2/F3 workers do not implement their own file-editing loop. They orchestrate **Aider** (open source, Ollama-compatible) running inside the Sandbox, giving it scoped tasks and collecting diffs + test results into the work package.
 
+**Guardrails:** an owner-editable policy file (`guardrails.yaml`) that F5 enforces at every gate. v1 rules:
+- **Spec match:** output must satisfy the approved spec's acceptance criteria; no unrequested features.
+- **Evidence:** claims cite sources; code claims backed by passing checks.
+- **Safety:** no secrets in code or logs; no disallowed licenses in dependencies; no actions outside the role's tool permissions.
+- **Budget:** within the job's token/time/$ limits.
+- **Scope:** files touched only inside the job's workspace.
+
+Each rule maps to a deterministic check where possible, and to a tier-review model judgment only where not.
+
 **Toolkits:** output-type specific tool bundles plugged into F2–F4. v1 ships the **web toolkit**. Later: mobile (simulators; store publishing needs paid accounts and owner approval), CLI, API, ML, docs.
 
 **Learning:** after each job, F5 writes a short retrospective to Memory; future jobs retrieve relevant lessons.
