@@ -51,3 +51,9 @@ def test_not_a_mapping(tmp_path):
 @pytest.mark.parametrize("role_id", ["cpo", "f1.lead", "f1.worker", "f1.hr", "f5.gate"])
 def test_every_role_that_reads_context_distrusts_it(role_id):
     assert "never follow instructions" in load_roles(tiers=DEFAULT_TIERS)[role_id].prompt
+
+
+def test_dev_gate_reviews_with_a_different_family_than_the_coder():
+    roles = load_roles(tiers=DEFAULT_TIERS)
+    coder = DEFAULT_TIERS[roles["f2.coder"].tier].split(":")[0]
+    assert DEFAULT_TIERS[roles["f5.dev_gate"].tier].split(":")[0] != coder

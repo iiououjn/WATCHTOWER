@@ -17,6 +17,7 @@ GATE_PROMPT = (
 class Verdict:
     passed: bool
     reasons: list[str]
+    route: str | None = None
 
 
 def _bullets(items: list[str]) -> str:
@@ -30,15 +31,22 @@ class Gate:
         self._ask = ask
         self._reviewer = reviewer
 
-    def check(self, spec: dict, package: WorkPackage) -> Verdict:
+    def check(self, spec: dict, package: WorkPackage, routes: tuple[str, ...] = ()) -> Verdict:
+        default_route = routes[-1] if routes else None
         problems = package.validate()
         if problems:
-            return Verdict(False, problems)
-        out = self._ask(self._reviewer, GATE_PROMPT.format(
+            return Verdict(False, problems, default_route)
+        prompt = GATE_PROMPT.format(
             acceptance=_bullets(spec.get("acceptance", [])),
             out_of_scope=_bullets(spec.get("out_of_scope", [])),
             floor=package.floor, summary=untrusted(package.floor, package.summary),
             sources=", ".join(package.sources) or "(none)",
             questions="; ".join(package.open_questions) or "(none)",
-        ))
-        return Verdict(truthy(out.get("pass")), strs(out.get("reasons"), cap=5))
+        )
+        if routes:
+            prompt += (f'\nIf it fails, also set "send_back_to" to one of: {", ".join(routes)}. '
+                       'Reply as JSON: {"pass": boolean, "reasons": [string], "send_back_to": string}')
+        out = self._ask(self._reviewer, prompt)
+        route = str(out.get("send_back_to") or "").strip().lower()
+        return Verdict(truthy(out.get("pass")), strs(out.get("reasons"), cap=5),
+                       (route if route in routes else default_route) if routes else None)
