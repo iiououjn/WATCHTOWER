@@ -50,3 +50,28 @@ def test_unicode_prompt_roundtrip(conn):
     store = JobStore(conn)
     job = store.create("बनाओ 🗼 app")
     assert store.get(job.id).prompt == "बनाओ 🗼 app"
+
+
+def test_paused_status_allowed(conn):
+    store = JobStore(conn)
+    job = store.create("x")
+    store.set_status(job.id, "paused", "low memory")
+    assert store.get(job.id).status == "paused"
+
+
+def test_pause_flag_roundtrip(conn):
+    store = JobStore(conn)
+    job = store.create("x")
+    assert store.pause_requested(job.id) is False
+    store.request_pause(job.id)
+    assert store.pause_requested(job.id) is True
+    store.clear_pause(job.id)
+    assert store.pause_requested(job.id) is False
+
+
+def test_pause_flag_unknown_job(conn):
+    store = JobStore(conn)
+    with pytest.raises(KeyError):
+        store.request_pause("nope")
+    with pytest.raises(KeyError):
+        store.pause_requested("nope")

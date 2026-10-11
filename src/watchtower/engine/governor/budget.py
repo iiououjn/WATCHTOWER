@@ -33,12 +33,16 @@ class Budget:
         )
         if cur.rowcount == 0:
             raise KeyError(job_id)
-        self.check(job_id)
+        self._enforce(job_id, before_call=False)
 
     def check(self, job_id: str) -> None:
+        """Before a call: no room left (tokens/seconds at cap) means stop. USD cap 0 still allows free calls."""
+        self._enforce(job_id, before_call=True)
+
+    def _enforce(self, job_id: str, before_call: bool) -> None:
         u = self.usage(job_id)
         for name in ("tokens", "seconds", "usd"):
-            if u[f"used_{name}"] > u[f"max_{name}"]:
-                raise BudgetExceeded(
-                    f"budget exceeded: {name} used {u[f'used_{name}']} > max {u[f'max_{name}']}"
-                )
+            used, cap = u[f"used_{name}"], u[f"max_{name}"]
+            at_cap = before_call and name != "usd" and used >= cap
+            if used > cap or at_cap:
+                raise BudgetExceeded(f"budget exceeded: {name} used {used} of max {cap}")

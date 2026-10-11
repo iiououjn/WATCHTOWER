@@ -39,3 +39,17 @@ def test_seconds_limit(conn):
 def test_unknown_job(conn):
     with pytest.raises(KeyError):
         Budget(conn).usage("missing")
+
+
+def test_check_blocks_when_exactly_at_token_cap(conn):
+    b = Budget(conn)
+    b.open("j", max_tokens=10, max_seconds=60, max_usd=0.0)
+    b.charge("j", tokens=10)
+    with pytest.raises(BudgetExceeded, match="tokens"):
+        b.check("j")
+
+
+def test_zero_usd_cap_still_allows_free_calls(conn):
+    b = Budget(conn)
+    b.open("j", max_tokens=10, max_seconds=60, max_usd=0.0)
+    b.check("j")

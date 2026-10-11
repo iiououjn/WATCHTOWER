@@ -23,3 +23,28 @@ def test_load_settings_respects_env(tmp_path, monkeypatch):
     assert s.home.is_dir()
     assert s.cloud_enabled is False
     assert s.default_max_usd == 0.0
+import sqlite3
+
+
+def test_migrates_phase_1a_database(tmp_path):
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(
+        "CREATE TABLE jobs(id TEXT PRIMARY KEY, user_id TEXT NOT NULL, workspace_id TEXT NOT NULL,"
+        " prompt TEXT NOT NULL, status TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL,"
+        " updated_at TEXT NOT NULL);"
+        "INSERT INTO jobs VALUES ('j1','owner','default','keep me','done',NULL,'t','t');"
+    )
+    old.close()
+    conn = connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    row = conn.execute("SELECT prompt, pause_requested FROM jobs WHERE id='j1'").fetchone()
+    assert tuple(row) == ("keep me", 0)
+    conn.close()
+
+
+def test_migration_runs_once(settings):
+    connect(settings.db_path).close()
+    conn = connect(settings.db_path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    conn.close()

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from watchtower.engine.db import now
 
-STATUSES = {"queued", "running", "done", "failed"}
+STATUSES = {"queued", "running", "paused", "done", "failed"}
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,7 @@ class Job:
     error: str | None
     created_at: str
     updated_at: str
+    pause_requested: int
 
 
 class JobStore:
@@ -34,7 +35,8 @@ class JobStore:
         ts = now()
         job_id = uuid.uuid4().hex[:12]
         self._conn.execute(
-            "INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO jobs(id, user_id, workspace_id, prompt, status, error, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?)",
             (job_id, self._user, self._ws, prompt, "queued", None, ts, ts),
         )
         return self.get(job_id)
@@ -52,6 +54,26 @@ class JobStore:
         cur = self._conn.execute(
             "UPDATE jobs SET status=?, error=?, updated_at=? WHERE id=? AND user_id=? AND workspace_id=?",
             (status, error, now(), job_id, self._user, self._ws),
+        )
+        if cur.rowcount == 0:
+            raise KeyError(job_id)
+
+    def request_pause(self, job_id: str) -> None:
+        self._set_pause(job_id, 1)
+
+    def clear_pause(self, job_id: str) -> None:
+        self._set_pause(job_id, 0)
+
+    def pause_requested(self, job_id: str) -> bool:
+        job = self.get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return bool(job.pause_requested)
+
+    def _set_pause(self, job_id: str, value: int) -> None:
+        cur = self._conn.execute(
+            "UPDATE jobs SET pause_requested=?, updated_at=? WHERE id=? AND user_id=? AND workspace_id=?",
+            (value, now(), job_id, self._user, self._ws),
         )
         if cur.rowcount == 0:
             raise KeyError(job_id)

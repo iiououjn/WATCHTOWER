@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import fcntl
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA = """
-PRAGMA journal_mode=WAL;
+SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS jobs(
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -49,12 +49,32 @@ CREATE TABLE IF NOT EXISTS budgets(
 """
 
 
+MIGRATIONS = [
+    SCHEMA_V1,
+    "ALTER TABLE jobs ADD COLUMN pause_requested INTEGER NOT NULL DEFAULT 0;",
+]
+
+
 def connect(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, timeout=10, isolation_level=None)
+    conn = sqlite3.connect(path, timeout=10, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=10000")
-    conn.executescript(SCHEMA)
+    conn.execute("PRAGMA journal_mode=WAL")
+    _migrate(conn, path)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection, path: Path) -> None:
+    """Apply pending migrations; a file lock stops two processes migrating at once."""
+    with open(path.with_name(path.name + ".migrate.lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            for number, sql in enumerate(MIGRATIONS[version:], start=version + 1):
+                conn.executescript(sql)
+                conn.execute(f"PRAGMA user_version={number}")
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def now() -> str:
