@@ -366,3 +366,12 @@ def test_build_uses_tower_budget(monkeypatch):
     runner.invoke(cli.app, ["build", "compare lighthouse lenses", "--yes"])
     assert "tokens: " in (out := runner.invoke(cli.app, ["budget", latest_job_id()]).output)
     assert "/ 200000" in out
+
+
+def test_build_app_end_to_end_with_fakes(monkeypatch, tmp_path):
+    from conftest import APP_REPLIES, FakeSandbox
+    use_roles(monkeypatch, APP_REPLIES)
+    monkeypatch.setattr(cli, "make_sandbox", lambda settings, conn: FakeSandbox(tmp_path / "apps"))
+    result = runner.invoke(cli.app, ["build", "a todo web app", "--app", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "App ready" in result.output and "python app.py" in result.output
