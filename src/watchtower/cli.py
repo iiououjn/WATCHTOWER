@@ -8,6 +8,10 @@ import click
 import typer
 
 from watchtower.config import Settings, load_settings
+from watchtower.engine.beacon.beacon import Beacon
+from watchtower.engine.beacon.fetcher import Fetcher
+from watchtower.engine.beacon.glass import Glass, load_glass_rules
+from watchtower.engine.beacon.search import Search, SearchUnavailable
 from watchtower.engine.bus import Bus
 from watchtower.engine.db import connect
 from watchtower.engine.governor.approvals import Approvals
@@ -252,6 +256,7 @@ def knowledge_search(query: str, limit: int = typer.Option(5, min=1, max=50)):
 def build(
     goal: str,
     yes: bool = typer.Option(False, "--yes", help="Skip CPO questions and auto-approve the spec"),
+    offline: bool = typer.Option(False, "--offline", help="Do not search the web"),
     max_tokens: Optional[int] = typer.Option(None, min=1, help="Token budget for this job"),
 ):
     """Run a goal through the tower: CPO spec → your approval → Floor 1 → gate."""
@@ -282,7 +287,7 @@ def build(
                 JobStore(conn).set_status(job.id, "failed", "cancelled by owner during CPO questions")
                 typer.echo(f"\nJob {job.id} cancelled.", err=True)
                 raise typer.Exit(130)
-        outcome = runner.start(job.id, extra={"answers": answers, "auto_approve": yes})
+        outcome = runner.start(job.id, extra={"answers": answers, "auto_approve": yes, "offline": offline})
     finally:
         runner.close()
     _report(outcome, conn)
@@ -318,3 +323,30 @@ def approve(job_id: str, reject: bool = typer.Option(False, "--reject", help="Re
     finally:
         runner.close()
     _report(outcome, conn)
+
+
+def make_beacon(settings: Settings, conn) -> Beacon:
+    return Beacon(Search(), Fetcher(), Glass(load_glass_rules("f1")), Knowledge(conn), AuditLog(conn))
+
+
+@app.command()
+def beacon(query: str, pages: int = typer.Option(3, min=1, max=10)):
+    """Search the web and add pages that pass Glass 1 to the knowledge store."""
+    if not query.strip():
+        typer.echo("Error: query must not be empty", err=True)
+        raise typer.Exit(2)
+    settings, conn = _open()
+    audit = AuditLog(conn)
+    before = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM audit_log").fetchone()[0]
+    try:
+        docs = make_beacon(settings, conn).research(query, None)
+    except SearchUnavailable as e:
+        typer.echo(f"Beacon paused: {e}", err=True)
+        raise typer.Exit(3)
+    for e in audit.since(before, actor="beacon"):
+        if e.action in ("beacon_skip", "glass_reject"):
+            why = e.detail.get("reason") or "; ".join(e.detail.get("reasons", []))
+            typer.echo(_clean(f"✗ {e.detail.get('url')} — {why}"))
+        elif e.action == "glass_pass":
+            typer.echo(_clean(f"✓ {e.detail.get('url')}"))
+    typer.echo(f"{len(docs)} page(s) added to knowledge (untrusted).")

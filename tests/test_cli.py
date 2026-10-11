@@ -320,3 +320,42 @@ def test_unexpected_error_asking_questions_continues(monkeypatch):
     monkeypatch.setattr(cli.JobRunner, "cpo_questions", lambda self, job_id: (_ for _ in ()).throw(RuntimeError("x")))
     result = runner.invoke(cli.app, ["build", "compare lighthouse lenses"])
     assert "continuing without questions" in result.output
+
+
+def test_beacon_command_reports_accepted_and_rejected(monkeypatch):
+    from watchtower.engine.governor.audit import AuditLog
+
+    class Fake:
+        def research(self, task, job_id):
+            return [7]
+
+    monkeypatch.setattr(cli, "make_beacon", lambda settings, conn: Fake())
+    result = runner.invoke(cli.app, ["beacon", "fresnel lens"])
+    assert result.exit_code == 0, result.output
+    assert "1 page(s) added" in result.output
+
+
+def test_beacon_command_search_down(monkeypatch):
+    from watchtower.engine.beacon.search import SearchUnavailable
+
+    class Down:
+        def research(self, task, job_id):
+            raise SearchUnavailable("web search failed; check your internet connection, then resume")
+
+    monkeypatch.setattr(cli, "make_beacon", lambda settings, conn: Down())
+    result = runner.invoke(cli.app, ["beacon", "x"])
+    assert result.exit_code == 3 and "internet" in result.output
+
+
+def test_build_offline_flag_is_passed(monkeypatch):
+    seen = {}
+    real = cli.JobRunner.start
+
+    def spy(self, job_id, tier="small", extra=None):
+        seen.update(extra or {})
+        return real(self, job_id, tier, extra)
+
+    monkeypatch.setattr(cli.JobRunner, "start", spy)
+    use_roles(monkeypatch)
+    runner.invoke(cli.app, ["build", "compare lighthouse lenses", "--yes", "--offline"])
+    assert seen.get("offline") is True
