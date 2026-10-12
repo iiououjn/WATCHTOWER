@@ -775,3 +775,21 @@ def test_f3_probes_the_full_app_after_the_mvp(app_tower):
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
     assert any("GET /items" in p for p in coder)
     runner.close()
+
+
+def test_units_are_not_rerun_on_a_code_send_back(app_tower):
+    arch = {**APP_REPLIES["f2.architect"][0], "files": APP_REPLIES["f2.architect"][0]["files"]
+            + [{"path": "static/style.css", "purpose": "css (the coder inlines it)"}]}
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f5.dev_gate": [
+        {"pass": False, "reasons": ["no delete"], "send_back_to": "code"}, {"pass": True, "reasons": []}]})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    units = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder" and "You are coder" in p]
+    assert len(units) == 2  # attempt 0 only: both units once, none on the send-back
+    runner.close()
+
+
+def test_evidence_shows_the_full_app_probe():
+    from watchtower.tower import _evidence
+    text = _evidence([{"check": "http", "pass": True, "status": "200"},
+                      {"check": "routes", "pass": True, "results": [{"path": "/a", "status": 200}] * 3}])
+    assert "full app: 3/3 contract routes answered" in text

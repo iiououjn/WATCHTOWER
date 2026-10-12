@@ -11,7 +11,7 @@ from watchtower.engine.model_socket import BadModelOutput
 from watchtower.floors.f4_qa_deploy.qafloor import parse_routes
 from watchtower.engine.sandbox import SandboxResult
 from watchtower.floors.f2_dev.stdlib_check import import_problems
-from watchtower.engine.workspace import Workspace, WorkspaceError
+from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
 from watchtower.roles import Role
 
 TEST_RUNNER = """\
@@ -74,6 +74,17 @@ def _compact_checks(checks: Sequence[dict]) -> str:
     return text if len(text) <= QA_CHARS else text[:QA_CHARS] + " ...(more checks)"
 
 
+def _plan_path(raw) -> str | None:
+    """A planned path as the workspace will name it ('./a.py' → 'a.py'), or None if it could never be written."""
+    text = str(raw or "").strip()
+    if not 0 < len(text) <= 100 or "\\" in text or any(ord(c) < 32 or c == "\x7f" for c in text):
+        return None
+    rel = PurePosixPath(text)
+    if rel.is_absolute() or ".." in rel.parts or any(p.startswith(".") for p in rel.parts):
+        return None
+    return rel.as_posix() if rel.suffix in ALLOWED_SUFFIXES else None
+
+
 def units(plan: dict) -> list[list[dict]]:
     """F2 Lead's split, by code: unit 1 is the MVP (entry + test files), then the other planned files in
     groups of up to 3, in plan order; at most 4 units (the fix loop writes anything left over)."""
@@ -110,12 +121,16 @@ class DevFloor:
         out = self._ask(self._architect, PLAN_PROMPT.format(
             spec=_spec_text(spec), research=untrusted("f1", research) if research else "(none)", feedback=note,
             lessons=("\nLessons from past jobs:\n" + untrusted("retro", lessons[:800]) + "\n") if lessons else ""))
-        files = [{"path": str(f.get("path", "")).strip()[:100], "purpose": _UNSAFE.sub("", str(f.get("purpose", ""))).strip()[:80]}
-                 for f in out.get("files") or [] if isinstance(f, dict)
-                 and 0 < len(str(f.get("path", "")).strip()) <= 100]
+        files, seen = [], set()
+        for f in out.get("files") or []:
+            path = _plan_path(f.get("path")) if isinstance(f, dict) else None
+            if path is not None and path.lower() not in seen:  # one name per file, even on case-blind disks
+                seen.add(path.lower())
+                files.append({"path": path, "purpose": _UNSAFE.sub("", str(f.get("purpose", ""))).strip()[:80]})
         entry = str(out.get("entry") or "app.py").strip()
         safe = _SAFE_ENTRY.fullmatch(entry) and ".." not in entry.split("/")
         entry, files = (entry if safe else "app.py"), files[:15]
+        files = [f for f in files if f["path"] == entry or f["path"].lower() != entry.lower()]
         if entry not in {f["path"] for f in files}:  # a 3B architect often names an entry it never plans
             files = files[:14] + [{"path": entry, "purpose": "the app's entry point: starts the HTTP server"}]
         return {"files": files, "entry": entry, "routes": parse_routes(out.get("routes"))}
@@ -124,7 +139,9 @@ class DevFloor:
                     on_unit: Callable[[int, int, list[str]], None] | None = None) -> list[str]:
         """F2 workers: one coder call per unit that still has missing files, back to back on the coder model.
         A worker writes only its own unit's files; a garbled reply costs that unit (the fix loop catches up)."""
-        todo = [u for u in units(plan) if any(f["path"] not in self._ws.files() for f in u)]
+        present = set(self._ws.files())
+        todo = [[f for f in u if f["path"] not in present] for u in units(plan)]
+        todo = [u for u in todo if u]  # a worker writes only files that do not exist yet: never a fixed one
         qa = ("Floor 4 QA will run these HTTP checks against the app:\n"
               + untrusted("f4", _compact_checks(qa_checks)) + "\n") if qa_checks else ""
         notes: list[str] = []
@@ -137,15 +154,16 @@ class DevFloor:
             try:
                 reply = self._ask(self._coder, UNIT_PROMPT.format(
                     files=untrusted_code("workspace", self._ws.snapshot(room) or "(none yet)"), **parts))
-            except ADVISORY_ERRORS:
+            except BadModelOutput:  # low memory or a dead model pauses the job, as for any coder call
                 notes.append(f"coder {i} gave no usable reply for {', '.join(paths)}; write those files")
                 continue
             files = reply.get("files") if isinstance(reply.get("files"), list) else []
             mine = [f for f in files if isinstance(f, dict) and f.get("path") in paths and f.get("delete") is not True]
             notes += [f"File rejected: {str(f.get('path'))[:100]!r} is not in coder {i}'s unit"
                       for f in files if isinstance(f, dict) and f not in mine]
+            before = set(self._ws.files())
             notes += self._write(mine)
-            if on_unit is not None:
+            if on_unit is not None and set(self._ws.files()) - before:
                 on_unit(i, len(todo), paths)
         return notes
 
@@ -246,6 +264,8 @@ class DevFloor:
             try:
                 if f.get("delete") is True:
                     self._ws.delete(str(f.get("path", "")))
+                elif not isinstance(f.get("content"), str):
+                    notes.append(f"File rejected: {str(f.get('path'))[:100]!r} has no content")
                 else:
                     self._ws.write(str(f.get("path", "")), str(f.get("content", "")))
             except WorkspaceError as e:

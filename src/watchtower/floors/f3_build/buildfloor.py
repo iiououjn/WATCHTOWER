@@ -137,10 +137,13 @@ def route_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: l
         log = json.loads(logs[-1]) if logs else ""
     except ValueError:
         log = ""
+    if result.timed_out:
+        bad_note = "probe timed out: the app answered too slowly"
+    error = [ln.strip() for ln in str(log).splitlines() if ln.strip()][-2:] if failed else []
     lines = [f"- GET {r['path']} → {r['status'] if r['status'] is not None else 'no answer'}" for r in results]
     summary = (f"Full app: {len(results) - len(failed)}/{len(results)} routes answered"
-               + (f" ({bad_note})" if bad_note else "") + "\n" + "\n".join(lines)
-               + (f"\nApp output:\n{str(log)[-800:]}" if failed and log else ""))
+               + (f" ({bad_note})" if bad_note else "")  # the cause first: feedback items are cut at 600 chars
+               + (f"\nApp error: {' | '.join(error)[-300:]}" if error else "") + "\n" + "\n".join(lines))
     questions = [f"GET {r['path']} did not answer properly" for r in failed[:3]]
     return WorkPackage("f3", summary, [entry], [], [{"check": "routes", "pass": not failed, "results": results}],
                        questions)
@@ -153,5 +156,5 @@ def build_check(run: Callable[[list[str]], SandboxResult], entry: str, expect: s
     if not mvp.checks_run[-1]["pass"]:
         return mvp
     full = route_probe(run, entry, routes)
-    return WorkPackage("f3", mvp.summary.splitlines()[0] + "\n" + full.summary, [entry], [],
+    return WorkPackage("f3", full.summary + "\nMVP: " + mvp.summary.splitlines()[0], [entry], [],
                        mvp.checks_run + full.checks_run, mvp.open_questions + full.open_questions)

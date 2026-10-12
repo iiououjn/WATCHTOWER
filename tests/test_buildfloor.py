@@ -114,3 +114,23 @@ def test_probe_script_against_a_real_tiny_app(tmp_path):
                       [{"method": "GET", "path": p, "fields": [], "shows": ""} for p in ("/items", "/boom", "/nope")])
     statuses = {r["path"]: r["status"] for r in pkg.checks_run[-1]["results"]}
     assert statuses == {"/items": 200, "/boom": 500, "/nope": 404} and not pkg.checks_run[-1]["pass"]
+
+
+def test_probe_failure_puts_the_exception_first_for_the_coder():
+    log = "Serving on 8000\n" + "noise line\n" * 60 + "Traceback (most recent call last):\nKeyError: 'items'\n"
+    run, _ = runner(probe_out([{"path": f"/r{i}", "status": 500} for i in range(8)], log=log))
+    routes = [{"method": "GET", "path": f"/r{i}", "fields": [], "shows": ""} for i in range(8)]
+    pkg = route_probe(run, "app.py", routes)
+    assert "KeyError: 'items'" in pkg.summary[:600] and len(pkg.summary) < 900
+
+
+def test_full_app_line_leads_the_f3_summary():
+    outputs = iter([SandboxResult(0, "SMOKE_STATUS 200\n", "", False),
+                    probe_out([{"path": "/items", "status": 500}, {"path": "/about", "status": 200}])])
+    pkg = build_check(lambda cmd: next(outputs), "app.py", "", ROUTES)
+    assert pkg.summary.splitlines()[0].startswith("Full app: 1/2")
+
+
+def test_timed_out_probe_says_so():
+    run, _ = runner(SandboxResult(124, "", "", True))
+    assert "timed out" in route_probe(run, "app.py", ROUTES).summary

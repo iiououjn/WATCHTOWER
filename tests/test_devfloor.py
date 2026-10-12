@@ -392,3 +392,47 @@ def test_build_tests_first_when_units_just_wrote_the_files(tmp_path):
     script = Script({"f2.coder": [{"files": [APP]}]})
     package = dev(tmp_path, script, Runner([OK])).build(SPEC, PLAN3, [], test_first=True)
     assert package.checks_run[-1]["pass"] and script.prompts["f2.coder"] == []
+
+
+def test_units_never_overwrite_existing_files(tmp_path):
+    Workspace(tmp_path).write("store.py", "FIXED = 1\n")
+    Workspace(tmp_path).write("app.py", "x = 1\n")
+    plan = {"entry": "app.py", "routes": [], "files": [{"path": "app.py", "purpose": "s"},
+                                                        {"path": "store.py", "purpose": "d"},
+                                                        {"path": "util.py", "purpose": "u"}]}
+    script = Script({"f2.coder": [{"files": [{"path": "util.py", "content": "U = 1\n"},
+                                             {"path": "store.py", "content": "REWRITE\n"}]}]})
+    notes = dev(tmp_path, script, Runner([OK])).write_units(SPEC, plan)
+    assert Workspace(tmp_path).read("store.py") == "FIXED = 1\n" and any("store.py" in n for n in notes)
+
+
+def test_plan_paths_are_normalised_and_unwritable_ones_dropped(tmp_path):
+    script = Script({"f2.architect": [{"entry": "app.py", "routes": [], "files": [
+        {"path": "./store.py", "purpose": "d"}, {"path": "todos.db", "purpose": "db"},
+        {"path": "App.py", "purpose": "dup"}, {"path": "app.py", "purpose": "s"}, {"path": ".env", "purpose": "x"},
+        {"path": "../x.py", "purpose": "x"}]}]})
+    plan = DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=Runner([OK])).plan(SPEC, "", [])
+    assert sorted(f["path"] for f in plan["files"]) == ["App.py", "store.py"] or \
+        sorted(f["path"] for f in plan["files"]) == ["app.py", "store.py"]
+    assert plan["entry"] in {f["path"] for f in plan["files"]}
+
+
+def test_empty_or_contentless_unit_reply_counts_as_not_written(tmp_path):
+    script = Script({"f2.coder": [{"files": [{"path": "app.py"}]}]})
+    seen = []
+    plan = {"entry": "app.py", "routes": [], "files": [{"path": "app.py", "purpose": "s"}]}
+    notes = dev(tmp_path, script, Runner([OK])).write_units(SPEC, plan, on_unit=lambda *a: seen.append(a))
+    assert seen == [] and Workspace(tmp_path).files() == [] and any("content" in n for n in notes)
+
+
+def test_low_memory_in_a_unit_pauses_instead_of_retrying(tmp_path):
+    from watchtower.engine.model_socket import LowMemory
+    calls = []
+
+    def ask(role, prompt):
+        calls.append(prompt)
+        raise LowMemory("free RAM 9%")
+    d = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([OK]))
+    with pytest.raises(LowMemory):
+        d.write_units(SPEC, PLAN3)
+    assert len(calls) == 1
