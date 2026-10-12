@@ -974,3 +974,28 @@ def test_tower_default_criteria_do_not_force_a_form():
     from watchtower.csuite.cpo import enough_criteria
     out = enough_criteria(lambda prompt: {}, {"title": "Clock", "goal": "shows the time", "acceptance": ["x"]})
     assert any("if the app has a form" in c.lower() for c in out)
+
+
+def test_fallback_qa_checks_are_reviewed_once_and_reused(app_tower):
+    arch = {**APP_REPLIES["f2.architect"][0], "routes": []}  # no contract: QA writes checks after the code
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f4.qa": [
+        {"checks": [{"name": "home", "path": "/", "expect_text": "Todo"},
+                    {"name": "bogus", "path": "/", "expect_text": "Todo"}]}],
+        "f4.hr": [{"pass": False, "drop": ["bogus"], "reason": "not in spec"}]}, qa_ok=[False, True])
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert model.calls.count("f4.qa") == 1 and "f4.hr" in model.calls
+    import json
+    qa_runs = [json.loads(c[4]) for c in sandbox.calls if "WATCHTOWER_QA" in c[2]]
+    assert all([c["name"] for c in run] == ["home"] for run in qa_runs)
+    runner.close()
+
+
+def test_a_check_failing_twice_is_rechecked_and_dropped_when_wrong(app_tower):
+    runner, model, sandbox, job = app_tower({"f4.hr": [{"pass": True, "drop": []},
+                                                       {"check_wrong": True, "reason": "describes the page"}]},
+                                            qa_ok=[False, False, True])
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "done", out.reason
+    rechecks = [p for c, p in zip(model.calls, model.prompts) if c == "f4.hr" and "failed twice" in p]
+    assert len(rechecks) == 1
+    runner.close()

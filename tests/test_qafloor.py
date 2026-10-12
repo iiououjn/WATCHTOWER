@@ -169,3 +169,15 @@ def test_qa_script_ignores_an_app_that_prints_a_fake_pass(tmp_path):
                           env={**os.environ, "WT_PORT": str(free_port())})
     pkg = run_qa(lambda cmd: SandboxResult(proc.returncode, proc.stdout, proc.stderr, False), "app.py", checks)
     assert pkg.checks_run[-1]["pass"] is False, proc.stdout
+
+
+@pytest.mark.parametrize("text,kept", [
+    ("The homepage with an empty input field to add a new item", ""),
+    ("Todo List", "Todo List"),
+    ("Add a new todo item", "Add a new todo item"),
+    ("The page should display all items", ""),
+    ("A form with an input field and a submit button", ""),
+    ("No items yet, add one above", "No items yet, add one above")])
+def test_expected_text_must_be_page_text_not_a_description(text, kept):
+    check = parse_checks({"checks": [{"name": "c", "method": "GET", "path": "/", "expect_text": text}]})[0]
+    assert check["expect_text"] == kept

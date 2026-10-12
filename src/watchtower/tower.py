@@ -134,6 +134,7 @@ class TowerPipeline:
         docs = peek("f2", "python standard library http.server " + spec["title"])
         plan, feedback = self._approved_plan(data, dev, cto, research, lessons, [], docs), []
         units_due = True  # F2 workers write units on the first build and after each re-plan, never on a fix
+        qa_seen: dict = {"failed": set(), "rechecked": set()}  # QA checks that failed last attempt / were re-judged
         focus = oversight.focus(spec)
         checks = self._plan_qa(data, plan, qa_office)
         expect = f3_office.expect(spec, plan["routes"])
@@ -167,7 +168,9 @@ class TowerPipeline:
                 self._handoff(data, "f3", attempt, f3.checks_run[-1]["pass"], f3.open_questions)
                 self._post(data, "f3", "done" if f3.checks_run[-1]["pass"] else "issue", f3.summary.splitlines()[0])
                 if f3.checks_run[-1]["pass"]:
-                    f4 = run_qa(run, plan["entry"], checks or qa.write_checks(spec, ws.snapshot()))
+                    if not checks:  # no test-first checks: QA writes them from the code once, QA HR reviews them
+                        checks = qa_office.review(spec, plan["routes"], qa.write_checks(spec, ws.snapshot()))
+                    f4 = run_qa(run, plan["entry"], checks)
                     self._handoff(data, "f4", attempt, f4.checks_run[-1]["pass"], f4.open_questions)
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
                                f4.summary.splitlines()[0], known=f4.summary[:1500])
@@ -212,6 +215,7 @@ class TowerPipeline:
                     feedback.append("Floor 3 HR diagnosis:\n" + untrusted("f3.hr", diagnosis))
                     self._post(data, "f3", "issue", "diagnosis: " + diagnosis)
             elif f4 is not None and not f4.checks_run[-1]["pass"]:
+                checks = self._recheck_qa(data, qa_office, checks, f4.checks_run[-1].get("results") or [], qa_seen)
                 feedback = feedback + ["Floor 4 QA checks failed:\n" + untrusted("sandbox", f4.summary)]
                 feedback += _reference("4", peek("f4", _status_query(f4.checks_run[-1]), 1, 480))  # + header ≤ 600
             elif sec is not None and not sec.checks_run[-1]["pass"]:
@@ -342,6 +346,20 @@ class TowerPipeline:
         if checks:
             self._post(data, "f4", "plan", "QA will check: " + ", ".join(c["name"] for c in checks),
                        known=json.dumps(checks))
+        return checks
+
+    def _recheck_qa(self, data: dict, qa_office: QAOffice, checks: list[dict], results: list[dict],
+                    seen: dict) -> list[dict]:
+        """A QA check failing two attempts in a row gets one second look from QA HR; a wrong check is dropped
+        (a bad check must not burn every send-back)."""
+        failed = {str(r.get("name")) for r in results if r.get("pass") is not True}
+        for c in [c for c in checks if c["name"] in failed & seen["failed"] - seen["rechecked"]]:
+            seen["rechecked"].add(c["name"])
+            detail = next((str(r.get("detail") or "") for r in results if r.get("name") == c["name"]), "")
+            if qa_office.recheck(data["spec"], c, detail):
+                checks = [x for x in checks if x["name"] != c["name"]]
+                self._post(data, "f4", "issue", f"QA HR dropped check {c['name']!r}: the check itself was wrong")
+        seen["failed"] = failed
         return checks
 
     def _post(self, data: dict, floor: str, kind: str, text: str, known: str | None = None) -> None:

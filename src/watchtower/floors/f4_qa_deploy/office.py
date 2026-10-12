@@ -30,6 +30,13 @@ def _bullets(items) -> str:
     return "\n".join(f"- {a}" for a in items) or "- (none)"
 
 
+RECHECK_PROMPT = (
+    "Spec acceptance criteria:\n{acceptance}\n\nThis QA check failed twice in a row against the running app:\n"
+    "{check}\n\nWhat it got:\n{detail}\n\nIs the check itself wrong (it expects something the criteria do not "
+    'require, or text that is not real page text)? Reply as JSON: {{"check_wrong": boolean, "reason": string}}'
+)
+
+
 class QAOffice:
     """Floor 4 office, test-first: the QA Lead splits the acceptance criteria into areas, QA workers write
     checks per area from the architect's routes contract (before any code exists), QA HR drops bad ones."""
@@ -57,12 +64,28 @@ class QAOffice:
         paths = {r["path"] for r in routes}
         checks = [c for c in checks if c["path"].split("?")[0] in paths
                   and (c["method"] == "POST" or c["expect_text"])][:MAX_CHECKS]
+        return self.review(spec, routes, checks)
+
+    def review(self, spec: dict, routes: list[dict], checks: list[dict]) -> list[dict]:
+        """QA HR drops checks that are wrong, trivial or not about the criteria (advisory: garbage keeps all)."""
         if not checks:
             return []
         try:
             verdict = self._ask(self._hr, REVIEW_PROMPT.format(
-                acceptance=acceptance, routes=contract, checks=untrusted("f4.qa", json.dumps(checks, indent=1))))
+                acceptance=_bullets(spec["acceptance"]), routes=untrusted("f2.architect", json.dumps(routes)),
+                checks=untrusted("f4.qa", json.dumps(checks, indent=1))))
             drop = set(strs(verdict.get("drop")))
         except ADVISORY_ERRORS:
             drop = set()
         return [c for c in checks if c["name"] not in drop]
+
+    def recheck(self, spec: dict, check: dict, detail: str) -> bool:
+        """A check that failed twice in a row: QA HR says whether the CHECK is wrong (then it is dropped).
+        Advisory: garbage or no clear verdict keeps the check."""
+        try:
+            out = self._ask(self._hr, RECHECK_PROMPT.format(
+                acceptance=_bullets(spec["acceptance"]), check=untrusted("f4.qa", json.dumps(check)),
+                detail=untrusted("sandbox", detail[:600])))
+        except ADVISORY_ERRORS:
+            return False
+        return out.get("check_wrong") is True

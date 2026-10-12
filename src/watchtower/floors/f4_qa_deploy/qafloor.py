@@ -71,6 +71,16 @@ def _str(value, cap: int) -> str | None:
     return value if isinstance(value, str) and len(value) <= cap else None
 
 
+_DESCRIBES = re.compile(r"\b(home ?page|input field|text box|form with|button to|should|displays?|shows?|"
+                       r"contains?|page with|a list of)\b", re.IGNORECASE)
+
+
+def _page_text(text: str) -> str:
+    """Text a check may expect on the page: short and literal. A description of the page ('The homepage with
+    an input field…') can never match real HTML, so it is dropped and the check tests the status only."""
+    return "" if len(text.split()) > 8 or _DESCRIBES.search(text) else text
+
+
 def _check(raw) -> dict | None:
     if not isinstance(raw, dict):
         return None
@@ -87,7 +97,7 @@ def _check(raw) -> dict | None:
     status = status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else 200
     status = 200 if 300 <= status < 400 else status  # the runner follows redirects, so 3xx means the page after
     return {"name": _str(raw.get("name"), 80) or path, "method": method, "path": path, "form": dict(form),
-            "expect_status": status, "expect_text": _str(raw.get("expect_text"), 200) or ""}
+            "expect_status": status, "expect_text": _page_text(_str(raw.get("expect_text"), 200) or "")}
 
 
 _FIELD = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,30}")
