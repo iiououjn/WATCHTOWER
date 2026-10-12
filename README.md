@@ -5,6 +5,7 @@
 
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
+  <a href="#tech-stack">Tech Stack</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#cli-reference">CLI</a> ·
   <a href="#architecture">Architecture</a> ·
@@ -16,6 +17,72 @@
 Watchtower is an **offline-capable, multi-agent pipeline** that turns a one-sentence idea into a running Python web app — researched, designed, coded, tested, security-scanned, and deployed — entirely on your local machine.
 
 Every agent runs through local [Ollama](https://ollama.com) models by default (no API keys, no cloud, no data leaves your Mac), inside a sandboxed Docker container with no internet access. You stay in the loop at every critical decision point: approving the spec, signing off the final app, and deploying it.
+
+## Tech stack
+
+### Core runtime
+
+| Technology | What it does in Watchtower |
+|---|---|
+| **Python 3.12+** | Runtime — the entire system is Python, type-hinted throughout |
+| **[Ollama](https://ollama.com)** | Local LLM inference server — runs all models on-device, no API keys |
+| **[Docker](https://www.docker.com)** | Sandboxed code execution (no network, read-only mounts, tmpfs scratch) and isolated app deployment |
+| **SQLite** | Job persistence, audit log, budget tracking, knowledge store — zero-config, single-file DB |
+
+### LLM & agent layer
+
+| Package | Role |
+|---|---|
+| **[LiteLLM](https://github.com/BerriAI/litellm)** | Unified LLM interface — wraps Ollama (and optionally cloud providers) with retries, JSON extraction, and token counting |
+| **[LangGraph](https://github.com/langchain-ai/langgraph)** | Stateful agent graphs with checkpointed execution — used for the workflow engine |
+| **[langgraph-checkpoint-sqlite](https://pypi.org/project/langgraph-checkpoint-sqlite/)** | SQLite-backed checkpointing so jobs can pause/resume across restarts |
+| **[MCP](https://pypi.org/project/mcp/)** (Model Context Protocol) | Tool-use protocol — agents call tools through a standardized stdio interface |
+
+### CLI & interface
+
+| Package | Role |
+|---|---|
+| **[Typer](https://typer.tiangolo.com)** | CLI framework — all `watchtower` commands with auto-generated help |
+| **[Click](https://click.palletsprojects.com)** | Typer's backend — used directly for prompt handling during CPO questions |
+
+### Web research (Beacon subsystem)
+
+| Package | Role |
+|---|---|
+| **[ddgs](https://pypi.org/project/ddgs/)** | DuckDuckGo search — privacy-respecting, no API key needed |
+| **[httpx](https://www.python-httpx.org)** | Async-capable HTTP client — fetches web pages, talks to Ollama API |
+| **[trafilatura](https://trafilatura.readthedocs.io)** | Web content extraction — strips boilerplate, returns clean text from HTML |
+
+### Security & safety
+
+| Package | Role |
+|---|---|
+| **[Bandit](https://bandit.readthedocs.io)** | Offline static security analysis — scans agent-generated Python code for vulnerabilities |
+| **[Keyring](https://pypi.org/project/keyring/)** | OS keychain integration for any secret storage (no plaintext `.env` files) |
+| **[PyYAML](https://pyyaml.org)** | Parses `guardrails.yaml`, role definitions, and Glass domain rules |
+
+### Testing
+
+| Package | Role |
+|---|---|
+| **[pytest](https://docs.pytest.org)** | Test runner — 40+ test files, all mocked to run without Ollama/Docker |
+
+### Build system
+
+| Tool | Role |
+|---|---|
+| **[Hatchling](https://hatch.pypa.io)** | PEP 517 build backend — builds the `watchtower` wheel |
+| **[uv](https://docs.astral.sh/uv/)** | Fast Python package manager — resolves and installs deps in seconds |
+
+### Default models
+
+| Tier | Model | Used for |
+|---|---|---|
+| `small` | `llama3.2:3b` | Quick tasks — CPO questions, Glass relevance checks, gate reviews |
+| `work` | `qwen2.5-coder:3b` | Heavy lifting — architecture, coding, QA check generation |
+| `review` | `llama3.2:3b` | Audit, security review, CEO/CTO recommendations |
+
+> All models run locally via Ollama. Override the work model with `WATCHTOWER_WORK_MODEL=<model>`. No data ever leaves your machine unless you explicitly enable cloud providers through LiteLLM.
 
 ## Quickstart
 
