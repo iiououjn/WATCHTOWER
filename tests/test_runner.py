@@ -990,12 +990,19 @@ def test_fallback_qa_checks_are_reviewed_once_and_reused(app_tower):
     runner.close()
 
 
-def test_a_check_failing_twice_is_rechecked_and_dropped_when_wrong(app_tower):
-    runner, model, sandbox, job = app_tower({"f4.hr": [{"pass": True, "drop": []},
-                                                       {"check_wrong": True, "reason": "describes the page"}]},
-                                            qa_ok=[False, False, True])
-    out = runner.start(job.id, extra={"auto_approve": True})
-    assert out.status == "done", out.reason
-    rechecks = [p for c, p in zip(model.calls, model.prompts) if c == "f4.hr" and "failed twice" in p]
-    assert len(rechecks) == 1
+def test_the_only_text_check_is_never_relaxed_so_a_failing_app_cannot_pass(app_tower):
+    runner, model, sandbox, job = app_tower({"f4.hr": [{"pass": True, "drop": []}, {"check_wrong": True}]},
+                                            qa_ok=False)
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "paused"
+    assert not any("failed twice" in p for c, p in zip(model.calls, model.prompts) if c == "f4.hr")
+    runner.close()
+
+
+def test_qa_hr_dropping_every_fallback_check_cannot_pass_f4_vacuously(app_tower):
+    arch = {**APP_REPLIES["f2.architect"][0], "routes": []}
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch],
+                                             "f4.hr": [{"pass": False, "drop": ["home"], "reason": "x"}]})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    import json
+    assert all(json.loads(c[4]) for c in sandbox.calls if "WATCHTOWER_QA" in c[2])  # never an empty QA run
     runner.close()

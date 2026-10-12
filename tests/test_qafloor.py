@@ -173,11 +173,37 @@ def test_qa_script_ignores_an_app_that_prints_a_fake_pass(tmp_path):
 
 @pytest.mark.parametrize("text,kept", [
     ("The homepage with an empty input field to add a new item", ""),
-    ("Todo List", "Todo List"),
-    ("Add a new todo item", "Add a new todo item"),
     ("The page should display all items", ""),
     ("A form with an input field and a submit button", ""),
-    ("No items yet, add one above", "No items yet, add one above")])
+    ("Todo List", "Todo List"), ("Add a new todo item", "Add a new todo item"),
+    ("No items yet, add one above", "No items yet, add one above"), ("TV Shows", "TV Shows"),
+    ("Show all", "Show all"), ("Display name", "Display name"), ("No items to display", "No items to display"),
+    ("A list of items", "A list of items"), ("The list", "The list")])
 def test_expected_text_must_be_page_text_not_a_description(text, kept):
     check = parse_checks({"checks": [{"name": "c", "method": "GET", "path": "/", "expect_text": text}]})[0]
     assert check["expect_text"] == kept
+
+
+def test_descriptive_looking_text_is_kept_when_the_app_really_shows_it():
+    text = "The homepage with an empty input field to add a new item"
+    check = parse_checks({"checks": [{"name": "c", "path": "/", "expect_text": text}]}, known="<h1>" + text)[0]
+    assert check["expect_text"] == text
+
+
+def test_duplicate_check_names_are_made_unique():
+    checks = parse_checks({"checks": [{"path": "/", "expect_text": "a"}, {"path": "/", "expect_text": "b"}]})
+    assert [c["name"] for c in checks] == ["/", "/ #2"]
+
+
+def test_zero_checks_never_pass():
+    pkg = run_qa(lambda cmd: (_ for _ in ()).throw(AssertionError("must not run")), "app.py", [])
+    assert pkg.checks_run[-1]["pass"] is False and "no QA checks" in pkg.summary
+
+
+def test_qa_writer_is_asked_again_when_no_check_tests_page_text():
+    replies = [{"checks": [{"path": "/", "expect_text": "The page should list items"}]},
+               {"checks": [{"path": "/", "expect_text": "Todo"}]}]
+    prompts = []
+    qa = QAFloor(Role("f4.qa", "QA", "f4", "work", (), "q"), lambda role, p: prompts.append(p) or replies.pop(0))
+    checks = qa.write_checks({"title": "T", "goal": "g", "acceptance": ["a"]}, "code")
+    assert [c["expect_text"] for c in checks] == ["Todo"] and len(prompts) == 2 and "exact" in prompts[1]

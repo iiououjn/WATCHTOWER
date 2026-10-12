@@ -19,6 +19,9 @@ QA_PROMPT = (
     '"form": {{field: value}}, "expect_status": number, "expect_text": string}}]}}'
 )
 
+TEXT_NOTE = ("\nYour last checks had no usable expect_text. expect_text must be exact short text the page really "
+             "shows (a heading, a button label, an item the test added) — never a description of the page.")
+
 # Runs INSIDE the sandbox. argv: entry, checks-JSON. Starts the app, runs each check in order against it,
 # prints one WATCHTOWER_QA line with the results, then the app's log tail.
 QA_SCRIPT = """\
@@ -71,13 +74,16 @@ def _str(value, cap: int) -> str | None:
     return value if isinstance(value, str) and len(value) <= cap else None
 
 
-_DESCRIBES = re.compile(r"\b(home ?page|input field|text box|form with|button to|should|displays?|shows?|"
-                       r"contains?|page with|a list of)\b", re.IGNORECASE)
+_DESCRIBES = re.compile(r"^(the|a|an)\s+\w+(\s+\w+){3,}|\b(should|input field|text field|text box|submit button|"
+                       r"form with|page with)\b", re.IGNORECASE)
 
 
-def _page_text(text: str) -> str:
-    """Text a check may expect on the page: short and literal. A description of the page ('The homepage with
-    an input field…') can never match real HTML, so it is dropped and the check tests the status only."""
+def _page_text(text: str, known: str = "") -> str:
+    """Text a check may expect on the page: literal page text. A description of the page ('The homepage with
+    an input field…') can never match real HTML, so it is dropped (status-only check) — unless the app's code,
+    title or routes really contain it."""
+    if text and text.lower() in known.lower():
+        return text
     return "" if len(text.split()) > 8 or _DESCRIBES.search(text) else text
 
 
@@ -97,7 +103,7 @@ def _check(raw) -> dict | None:
     status = status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else 200
     status = 200 if 300 <= status < 400 else status  # the runner follows redirects, so 3xx means the page after
     return {"name": _str(raw.get("name"), 80) or path, "method": method, "path": path, "form": dict(form),
-            "expect_status": status, "expect_text": _page_text(_str(raw.get("expect_text"), 200) or "")}
+            "expect_status": status, "expect_text": _str(raw.get("expect_text"), 200) or ""}
 
 
 _FIELD = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,30}")
@@ -127,15 +133,24 @@ def parse_routes(raw) -> list[dict]:
     return [r for r in map(_route, raw if isinstance(raw, list) else []) if r][:MAX_ROUTES]
 
 
-def parse_checks(reply) -> list[dict]:
-    """Keep only checks that are safe to run: local relative paths, small forms, sane values."""
+def parse_checks(reply, known: str = "") -> list[dict]:
+    """Keep only checks that are safe to run: local relative paths, small forms, sane values; expected text
+    must be page text (see _page_text); names made unique (checks are dropped and relaxed by name)."""
     raw = reply.get("checks") if isinstance(reply, dict) else None
-    checks = [c for c in map(_check, raw if isinstance(raw, list) else []) if c]
-    return checks[:MAX_CHECKS]
+    checks, seen = [c for c in map(_check, raw if isinstance(raw, list) else []) if c][:MAX_CHECKS], {}
+    for c in checks:
+        c["expect_text"] = _page_text(c["expect_text"], known)
+        seen[c["name"]] = seen.get(c["name"], 0) + 1
+        if seen[c["name"]] > 1:
+            c["name"] = f"{c['name']} #{seen[c['name']]}"
+    return checks
 
 
 def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[dict]) -> WorkPackage:
-    """Floor 4: run the QA checks against the app inside the sandbox. No model involved."""
+    """Floor 4: run the QA checks against the app inside the sandbox. No model involved. Zero checks never pass."""
+    if not checks:
+        return WorkPackage("f4", "QA checks FAILED:\n- no QA checks to run", [entry], [],
+                           [{"check": "qa", "pass": False, "results": []}], ["no QA checks"])
     result = run(["python", "-I", "-c", QA_SCRIPT, entry, json.dumps(checks)])
     output = (result.stdout or "") + (result.stderr or "")
     found = _RESULT.findall(output)
@@ -170,10 +185,13 @@ class QAFloor:
         self._ask = ask
 
     def write_checks(self, spec: dict, code: str) -> list[dict]:
-        out = self._ask(self._role, QA_PROMPT.format(
+        prompt = QA_PROMPT.format(
             title=spec["title"], goal=spec["goal"], acceptance="\n".join(f"- {a}" for a in spec["acceptance"]),
-            code=untrusted_code("workspace", code)))
-        checks = parse_checks(out)
-        if not checks:
-            raise BadModelOutput("QA wrote no usable checks; resume to retry")
+            code=untrusted_code("workspace", code))
+        known = f"{spec['title']}\n{code}"
+        checks = parse_checks(self._ask(self._role, prompt), known)
+        if not any(c["expect_text"] for c in checks):  # status-only checks pass almost any app: ask once more
+            checks = parse_checks(self._ask(self._role, prompt + TEXT_NOTE), known)
+        if not any(c["expect_text"] for c in checks):
+            raise BadModelOutput("QA wrote no check of real page text; resume to retry")
         return checks

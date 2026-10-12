@@ -60,7 +60,7 @@ class QAOffice:
                                                                    area=untrusted("f4.lead", area)))
             except ADVISORY_ERRORS:
                 continue
-            checks += parse_checks(out)[:3]
+            checks += parse_checks(out, known=spec["title"] + "\n" + "\n".join(r["shows"] for r in routes))[:3]
         paths = {r["path"] for r in routes}
         checks = [c for c in checks if c["path"].split("?")[0] in paths
                   and (c["method"] == "POST" or c["expect_text"])][:MAX_CHECKS]
@@ -77,7 +77,8 @@ class QAOffice:
             drop = set(strs(verdict.get("drop")))
         except ADVISORY_ERRORS:
             drop = set()
-        return [c for c in checks if c["name"] not in drop]
+        kept = [c for c in checks if c["name"] not in drop]
+        return kept or checks  # HR may prune, never empty the suite: zero checks would test nothing
 
     def recheck(self, spec: dict, check: dict, detail: str) -> bool:
         """A check that failed twice in a row: QA HR says whether the CHECK is wrong (then it is dropped).
@@ -89,3 +90,48 @@ class QAOffice:
         except ADVISORY_ERRORS:
             return False
         return out.get("check_wrong") is True
+
+
+class QARound:
+    """Floor 4's checks for one plan, and what happened to them. Checks come from the test-first office or,
+    failing that, are written once from the code and reviewed. A check whose expected text fails two F4 runs
+    in a row (status right) gets one QA HR second look; a wrong one is relaxed to status-only — never a check
+    that a POST must persist, and never the last text check, so a broken app cannot slip through."""
+
+    def __init__(self, office: QAOffice, writer, spec: dict):
+        self._office, self._writer, self._spec = office, writer, spec
+        self.checks: list[dict] = []
+        self._failed: set[str] = set()
+        self._looked: set[str] = set()
+
+    def reset(self, checks: list[dict]) -> None:
+        self.checks, self._failed, self._looked = [dict(c) for c in checks], set(), set()
+
+    def ensure(self, routes: list[dict], code: str) -> list[dict]:
+        if not self.checks:
+            self.reset(self._office.review(self._spec, routes, self._writer.write_checks(self._spec, code)))
+        return self.checks
+
+    def no_f4(self) -> None:
+        self._failed = set()  # F4 did not run: the next F4 failure is not "consecutive"
+
+    def after_fail(self, results: list[dict], replanning: bool) -> list[str]:
+        failed = {str(r.get("name")) for r in results if r.get("pass") is not True}
+        twice, self._failed = failed & self._failed, failed
+        if replanning:  # the checks are about to be replaced: no second look worth paying for
+            return []
+        posted = {str(v) for c in self.checks if c["method"] == "POST" for v in c["form"].values()}
+        notes = []
+        for c in self.checks:
+            result = next((r for r in results if r.get("name") == c["name"]), {})
+            texts = [x for x in self.checks if x["expect_text"]]
+            if (c["name"] not in twice or c["name"] in self._looked or not c["expect_text"]
+                    or c["expect_text"] in posted or len(texts) <= 1
+                    or result.get("status") != c["expect_status"]):  # wrong status is a real failure
+                continue
+            self._looked.add(c["name"])
+            if self._office.recheck(self._spec, c, str(result.get("detail") or "")):
+                c["expect_text"] = ""
+                notes.append(f"QA HR found check {c['name']!r} was wrong; it now only checks the status — ignore "
+                             "its expected text")
+        return notes
