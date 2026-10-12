@@ -63,3 +63,8 @@ def test_qa_writes_checks_with_a_different_family_than_the_coder():
     roles = load_roles(tiers=DEFAULT_TIERS)
     coder = DEFAULT_TIERS[roles["f2.coder"].tier].split(":")[0]
     assert DEFAULT_TIERS[roles["f4.qa"].tier].split(":")[0] != coder
+
+
+@pytest.mark.parametrize("role_id", ["f1.lead", "f2.architect", "f2.coder"])
+def test_memo_senders_know_how_to_send_memos(role_id):
+    assert '"memo"' in load_roles(tiers=DEFAULT_TIERS)[role_id].prompt
