@@ -63,6 +63,7 @@ HR_PROMPT = (
     '{{"pass": boolean, "reason": string}}'
 )
 MAX_HR_ASKS = 2
+MAX_DIAGNOSES = 2
 FEEDBACK_ITEM, FEEDBACK_TOTAL, QA_CHARS = 600, 2000, 1500  # keep the coder prompt inside num_ctx
 PROMPT_CHARS = 9_000  # + system (~1.2k) + tower brief (~0.8k) ≈ 3.4k tokens; + 2048 output < num_ctx 6144
 _UNSAFE = re.compile(r"[<>{}\x00-\x1f\x7f]")
@@ -76,51 +77,66 @@ def _compact_checks(checks: Sequence[dict]) -> str:
     return text if len(text) <= QA_CHARS else text[:QA_CHARS] + " ...(more checks)"
 
 
-_BLOCK = re.compile(r"^(FAIL|ERROR): (\w+) \(([^)\n]*)\)(?: \([^\n]*\))?\n-{20,}\n(.*?)(?=^={20,}$|^-{20,}$|\Z)",
-                    re.M | re.S)
+_BLOCK = re.compile(r"^(FAIL|ERROR): (\w+) \(([^)\n]*)\)(?: \([^\n]*\))?\n(?:(?!-{20,}\n)[^\n]*\n)?-{20,}\n"
+                    r"(.*?)(?=^={20,}$|^-{20,}$|\Z)", re.M | re.S)  # optional docstring line before the dashes
 _EXC = re.compile(r"^[A-Za-z_][\w.]*(: |$)")  # an unindented 'Name: message' line ends a traceback
-MAX_FAILURES, NOTE_CHARS = 5, 1800
+_FRAME = re.compile(r'^\s+File "([^"]+)", line (\d+), in (\S+)')
+MAX_FAILURES, MAX_PARSED, NOTE_CHARS = 5, 20, 1800
 
 
 def failures(output: str) -> list[dict]:
-    """unittest's own FAIL/ERROR report as a compact list, assertion failures first: test name, full id, the
-    final exception line (the real cause, not a loader frame or a chained inner error), for assertions a few
-    diff lines, and whether the two sides differ only in whitespace. Unparseable output → []."""
+    """unittest's own FAIL/ERROR report as a compact list. Only the FINAL traceback of a block counts (chained
+    inner errors and loader frames are noise): its first exception line is the cause; assertion failures keep a
+    few diff lines, errors keep where they were raised. Import errors first, then FAIL, then ERROR."""
     out = []
     for kind, test, where, body in _BLOCK.findall(output or ""):
-        lines = [ln for ln in body.rstrip().splitlines()]
-        exc = [i for i, ln in enumerate(lines) if _EXC.match(ln) and not ln.startswith("Traceback")]
-        last = exc[-1] if exc else max((i for i, ln in enumerate(lines) if ln.strip()), default=None)
-        if last is None:
+        lines = body.rstrip().splitlines()
+        start = max((i for i, ln in enumerate(lines) if ln.startswith("Traceback (most recent call last)")),
+                    default=-1)
+        tail = lines[start + 1:]
+        at = next((i for i, ln in enumerate(tail) if _EXC.match(ln)), None)
+        if at is None:
+            at = max((i for i, ln in enumerate(tail) if ln.strip()), default=None)
+        if at is None:
             continue
-        first_assert = next((i for i in exc if lines[i].startswith("AssertionError")), None)
-        rest = lines[first_assert + 1:] if first_assert is not None else []
+        frames = [i for i, ln in enumerate(tail[:at]) if _FRAME.match(ln)]
+        where_raised = ""
+        if frames:
+            path, line_no, fn = _FRAME.match(tail[frames[-1]]).groups()
+            source = tail[frames[-1] + 1].strip() if frames[-1] + 1 < at else ""
+            where_raised = f"at {PurePosixPath(path).name} line {line_no} in {fn}: {source}"[:200]
+        rest = tail[at + 1:]
+        assertion = tail[at].startswith("AssertionError")
         minus = "".join(ln[2:] for ln in rest if ln.startswith("- "))
         plus = "".join(ln[2:] for ln in rest if ln.startswith("+ "))
         space_only = bool(minus or plus) and minus != plus and re.sub(r"\s", "", minus) == re.sub(r"\s", "", plus)
-        line = lines[first_assert] if first_assert is not None else lines[last]
-        out.append({"test": test, "id": where[:150], "kind": kind, "line": line.strip()[:200],
-                    "diff": "\n".join(rest[:6])[:400], "whitespace": space_only})
-    out.sort(key=lambda f: f["kind"] != "FAIL")  # assertion failures first: errors must not crowd them out
-    return out[:MAX_FAILURES]
+        out.append({"test": test, "id": where[:150], "kind": kind, "line": tail[at].strip()[:200],
+                    "diff": ("\n".join(rest[:6])[:400] if assertion else where_raised), "whitespace": space_only})
+    out.sort(key=lambda f: (0 if "_FailedTest" in f["id"] else 1 if f["kind"] == "FAIL" else 2))
+    return out[:MAX_PARSED]
 
 
 def _failure_rows(found: list[dict]) -> str:
-    """The failures as text, bounded: rows shrink (diffs first) instead of disappearing."""
+    """The failures as text, bounded: at most 5 rows, which shrink (diffs first) instead of disappearing."""
+    shown, more = found[:MAX_FAILURES], len(found) - MAX_FAILURES
     for diff_cap in (400, 150, 0):
         rows = "\n".join(f"- {f['test']} ({f['kind']}): {f['line']}"
-                         + (f"\n{f['diff'][:diff_cap]}" if f["diff"] and diff_cap else "") for f in found)
+                         + (f"\n{f['diff'][:diff_cap]}" if f["diff"] and diff_cap else "") for f in shown)
+        rows += f"\n(+{more} more failing)" if more > 0 else ""
         if len(rows) <= NOTE_CHARS:
             return rows
     return rows[:NOTE_CHARS]
 
 
-def _failure_note(found: list[dict]) -> str:
+def _failure_note(found: list[dict], stuck: str = "", diagnosis: str = "") -> str:
+    """One note (so prompt trimming keeps or drops it whole): the failures, whitespace hints, and — when the
+    coder is stuck — the stuck note and Floor 2 HR's diagnosis."""
     hints = [f"{f['test']}: the two sides differ only in spaces or indentation — make them identical, or compare "
-             "without exact whitespace" for f in found if f["whitespace"]]
+             "without exact whitespace" for f in found[:MAX_FAILURES] if f["whitespace"]]
     # untrusted_code: the coder's own test output, HTML kept readable (only <untrusted tags are escaped)
     return ("Failing tests (unittest's own report):\n" + untrusted_code("sandbox", _failure_rows(found))
-            + ("\n" + "\n".join(hints) if hints else ""))
+            + ("\n" + "\n".join(hints) if hints else "") + (f"\n{stuck}" if stuck else "")
+            + ("\nFloor 2 HR diagnosis:\n" + untrusted("f2.hr", diagnosis) if diagnosis else ""))
 
 
 STUCK_NOTE = ("The same tests failed again after your last change: {names}. Before changing the app again, check "
@@ -279,7 +295,7 @@ class DevFloor:
         qa = ("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n"
               + untrusted("f4", _compact_checks(qa_checks)) + "\n") if qa_checks else ""
         checks, output, passed, hr_asks, hr_question = [], "", False, 0, None
-        last_failing, diagnosed, diagnosis, carry = None, False, "", []  # stuck = same tests fail twice in a row
+        last_failing, diagnoses, diagnosis, diagnosed_for, carry = None, 0, "", None, []  # stuck = same set twice
         for round_no in range(self._max_rounds):
             parts = dict(spec=_spec_text(spec), plan=untrusted("f2.architect", json.dumps(plan)), qa=qa,
                          feedback=("\n" + "\n".join(notes)) if notes else "")
@@ -314,7 +330,7 @@ class DevFloor:
                       and not summary.get("errors"))
             checks.append({"check": "tests", "round": round_no, "pass": passed, "output": output[-300:]})
             if passed:
-                last_failing, carry = None, []  # tests passed in between: a later failure is not "stuck"
+                last_failing, carry, diagnosis, diagnosed_for = None, [], "", None  # a pass ends any stuck set
                 verdict = self._hr_review(spec, plan) if self._hr is not None and hr_asks < MAX_HR_ASKS else None
                 if verdict is None or verdict[0]:
                     break
@@ -322,7 +338,8 @@ class DevFloor:
                 if hr_asks >= MAX_HR_ASKS or round_no == self._max_rounds - 1:
                     hr_question = f"F2 HR not satisfied: {verdict[1][:200]}"
                     break
-                notes.append("Floor 2 HR reviewed your code and asked for changes:\n" + untrusted("f2.hr", verdict[1]))
+                carry = ["Floor 2 HR reviewed your code and asked for changes:\n" + untrusted("f2.hr", verdict[1])]
+                notes += carry  # kept through a garbled reply
                 continue
             notes += problems
             if not has_tests:
@@ -337,16 +354,14 @@ class DevFloor:
                              "(e.g. from app import ...) and test what they do.")
             found = failures(result.stderr or "")
             failing = sorted({f"{f['id']}:{f['test']}" for f in found})
-            carry = []
-            if failing and failing == last_failing:
-                carry.append(STUCK_NOTE.format(names=", ".join(sorted({f["test"] for f in found}))))
-                if self._hr is not None and not diagnosed:
-                    diagnosed = True
-                    diagnosis = self._diagnose_tests(_failure_rows(found))
-                if diagnosis:  # paid for once, shown every round while the same tests stay stuck
-                    carry.append("Floor 2 HR diagnosis:\n" + untrusted("f2.hr", diagnosis))
-            carry.append(_failure_note(found) if found  # last: prompt trimming drops the oldest notes first
-                         else "Test output:\n" + untrusted("sandbox", (output or "(no output)")[-1200:]))
+            stuck = bool(failing) and failing == last_failing
+            if stuck and failing != diagnosed_for and self._hr is not None and diagnoses < MAX_DIAGNOSES:
+                diagnoses += 1  # one F2 HR diagnosis per stuck set, at most 2 per build
+                diagnosis, diagnosed_for = self._diagnose_tests(_failure_rows(found)), failing
+            shown = diagnosis if stuck and failing == diagnosed_for else ""  # never another set's diagnosis
+            carry = [_failure_note(found, STUCK_NOTE.format(names=", ".join(sorted({f["test"] for f in found})))
+                                   if stuck else "", shown) if found  # last: trimming drops the oldest first
+                     else "Test output:\n" + untrusted("sandbox", (output or "(no output)")[-1200:])]
             notes += carry
             last_failing = failing
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"

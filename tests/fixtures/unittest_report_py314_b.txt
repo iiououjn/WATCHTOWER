@@ -1,0 +1,80 @@
+EFFEFF
+======================================================================
+ERROR: test_chain (test_x.T.test_chain)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/w/test_x.py", line 16, in test_chain
+    assert False, "inner"
+           ^^^^^
+AssertionError: inner
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/w/test_x.py", line 18, in test_chain
+    raise ValueError("outer")
+ValueError: outer
+
+======================================================================
+ERROR: test_err_doc (test_x.T.test_err_doc)
+Errors out.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/w/test_x.py", line 11, in test_err_doc
+    raise KeyError("k")
+KeyError: 'k'
+
+======================================================================
+FAIL: test_dash (test_x.T.test_dash)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/w/test_x.py", line 13, in test_dash
+    self.assertEqual("a\n" + "-"*30 + "\nb", "a\n" + "-"*30 + "\nc")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'a\n------------------------------\nb' != 'a\n------------------------------\nc'
+  a
+  ------------------------------
+- b
++ c
+
+
+======================================================================
+FAIL: test_doc (test_x.T.test_doc)
+Adds two numbers.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/w/test_x.py", line 6, in test_doc
+    self.assertEqual(1, 2)
+    ~~~~~~~~~~~~~~~~^^^^^^
+AssertionError: 1 != 2
+
+======================================================================
+FAIL: test_msg (test_x.T.test_msg)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/w/test_x.py", line 20, in test_msg
+    self.assertEqual(1, 2, "custom\nMultiLine: note")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 2 : custom
+MultiLine: note
+
+======================================================================
+FAIL: test_none (test_x.T.test_none)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/w/test_x.py", line 8, in test_none
+    self.assertEqual([1, None], [1, True])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [1, None] != [1, True]
+
+First differing element 1:
+None
+True
+
+- [1, None]
++ [1, True]
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.001s
+
+FAILED (failures=4, errors=2)

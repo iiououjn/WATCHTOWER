@@ -604,7 +604,7 @@ def test_real_314_report_variants_all_surface_with_their_real_cause():
     assert found["test_custom"]["line"] == "test_a.Boom: x"
     assert found["test_b"]["line"].startswith("ImportError: cannot import name 'nope' from 'app'")
     assert found["test_sub"]["line"] == "AssertionError: 0 != 5"
-    assert list(found) [0] == "test_sub"  # assertion failures first: errors must not crowd them out
+    assert list(found)[:2] == ["test_b", "test_sub"]  # import errors first (they hide a whole file), then FAILs
 
 
 def test_failure_note_is_bounded_and_keeps_html_readable(tmp_path):
@@ -642,3 +642,80 @@ def test_failing_set_resets_after_a_passing_round(tmp_path):
     d = DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=Runner(seq), max_rounds=4, hr=HR)
     d.build(SPEC, PLAN3, [])
     assert not any("same tests failed again" in p for p in script.prompts["f2.coder"])
+
+
+PY314B = (_Path(__file__).parent / "fixtures" / "unittest_report_py314_b.txt").read_text()
+APP_ERROR = """E
+======================================================================
+ERROR: test_add (test_app.T.test_add)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/test_app.py", line 5, in test_add
+    add_todo("x")
+    ~~~~~~~~^^^^^
+  File "/work/app.py", line 42, in add_todo
+    return TODOS[kind]
+           ~~~~~^^^^^^
+KeyError: 'default'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (errors=1)
+"""
+
+
+def test_docstring_tests_chained_and_multiline_causes():
+    found = {f["test"]: f for f in failures(PY314B)}
+    assert set(found) == {"test_chain", "test_err_doc", "test_dash", "test_doc", "test_msg", "test_none"}
+    assert found["test_chain"]["line"] == "ValueError: outer"
+    assert found["test_msg"]["line"] == "AssertionError: 1 != 2 : custom"
+    assert found["test_err_doc"]["line"] == "KeyError: 'k'"
+
+
+def test_error_rows_say_where_the_app_raised():
+    from watchtower.floors.f2_dev.devfloor import _failure_rows
+    rows = _failure_rows(failures(APP_ERROR))
+    assert "KeyError: 'default'" in rows and "app.py" in rows and "line 42" in rows and "TODOS[kind]" in rows
+
+
+def test_more_than_five_failures_says_so_and_import_errors_come_first():
+    from watchtower.floors.f2_dev.devfloor import _failure_rows
+    found = failures(PY314B + PY314)
+    rows = _failure_rows(found)
+    assert rows.startswith("- test_b (ERROR): ImportError") and "more failing" in rows
+
+
+def test_a_diagnosis_is_only_shown_for_the_failures_it_was_made_for(tmp_path):
+    other = SandboxResult(1, 'WATCHTOWER_TESTS {"run": 1, "skipped": 0, "failures": 0, "errors": 1}\n', APP_ERROR, False)
+    calls = []
+
+    def ask(role, prompt):
+        calls.append((role.id, prompt))
+        if role.id == "f2.hr":
+            return {"diagnosis": f"diagnosis number {sum(r == 'f2.hr' for r, _ in calls)}"}
+        return {"files": [APP, TEST]}
+    d = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path),
+                 run=Runner([FAILED, FAILED, other, other, other]), max_rounds=5, hr=HR)
+    d.build(SPEC, PLAN3, [])
+    coder = [p for r, p in calls if r == "f2.coder"]
+    assert "diagnosis number 1" in coder[2] and "diagnosis number 1" not in coder[3]
+    assert "diagnosis number 1" not in coder[4] and "diagnosis number 2" in coder[4]
+
+
+def test_hr_change_request_survives_a_garbled_reply(tmp_path):
+    replies = [{"files": [APP, TEST]}, "garbled", {"files": [APP, TEST]}]
+    calls = []
+
+    def ask(role, prompt):
+        calls.append((role.id, prompt))
+        if role.id == "f2.hr":
+            return {"pass": False, "reason": "add a delete route"}
+        r = replies.pop(0) if len(replies) > 1 else replies[0]
+        if r == "garbled":
+            raise BadModelOutput("x")
+        return r
+    DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([OK]), max_rounds=3, hr=HR).build(
+        SPEC, PLAN3, [])
+    coder = [p for r, p in calls if r == "f2.coder"]
+    assert "add a delete route" in coder[2]
