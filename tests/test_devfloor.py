@@ -293,3 +293,30 @@ def test_advisory_hr_on_low_memory_is_skipped_not_paused(tmp_path):
     pkg = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([OK]), hr=HR).build(
         SPEC, {"files": [], "entry": "app.py"}, [])
     assert pkg.checks_run[-1]["pass"]
+
+
+def test_a_broken_coder_reply_costs_a_round_not_the_job(tmp_path):
+    from watchtower.engine.model_socket import BadModelOutput
+    replies = [BadModelOutput("invalid JSON: Expecting ',' delimiter"), {"files": [APP, TEST]}]
+    prompts = []
+
+    def ask(role, prompt):
+        prompts.append(prompt)
+        r = replies.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+    pkg = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([OK])).build(
+        SPEC, {"files": [], "entry": "app.py"}, [])
+    assert pkg.checks_run[-1]["pass"] and "not valid JSON" in prompts[1] and "escape" in prompts[1]
+    assert pkg.checks_run[0] == {"check": "tests", "round": 0, "pass": False, "output": "coder reply was not valid JSON"}
+
+
+def test_coder_that_never_returns_json_fails_the_build_after_its_rounds(tmp_path):
+    from watchtower.engine.model_socket import BadModelOutput
+
+    def ask(role, prompt):
+        raise BadModelOutput("bad")
+    pkg = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([OK]), max_rounds=3).build(
+        SPEC, {"files": [], "entry": "app.py"}, [])
+    assert len(pkg.checks_run) == 3 and not pkg.checks_run[-1]["pass"] and pkg.open_questions

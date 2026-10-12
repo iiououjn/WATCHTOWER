@@ -290,3 +290,13 @@ def test_local_calls_set_context_window_and_cap_output(parts):
     sock.ask("small", [{"role": "user", "content": "x"}], "big")
     assert calls[0]["num_ctx"] == 6144
     assert calls[0]["max_tokens"] == 2048
+
+
+def test_json_retry_never_grows_the_context_with_the_broken_reply(parts):
+    calls = []
+    broken = '{"files": [{"path": "a.py", "content": "print("hi")"}]}' + "x" * 5000
+    sock = scripted_socket(parts, [broken, '{"ok": 1}'], calls)
+    sock.ask_json("small", [{"role": "user", "content": "write code"}], "j")
+    retry = calls[1]["messages"]
+    assert len(retry) == 1 and broken not in str(retry)
+    assert retry[0]["content"].startswith("write code") and "escape" in retry[0]["content"]

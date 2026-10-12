@@ -7,6 +7,7 @@ from typing import Callable, Sequence
 
 from watchtower.engine.floor import WorkPackage, untrusted, untrusted_code
 from watchtower.engine.advisory import ADVISORY_ERRORS
+from watchtower.engine.model_socket import BadModelOutput
 from watchtower.engine.qafloor import parse_routes
 from watchtower.engine.sandbox import SandboxResult
 from watchtower.engine.stdlib_check import import_problems
@@ -114,8 +115,15 @@ class DevFloor:
                 notes = notes[1:]  # oldest notes go first: the snapshot must stay readable
                 parts["feedback"] = ("\n" + "\n".join(notes)) if notes else ""
             room = max(1500, min(6000, PROMPT_CHARS - len(CODE_PROMPT.format(files="", **parts))))
-            reply = self._ask(self._coder, CODE_PROMPT.format(
-                files=untrusted_code("workspace", self._ws.snapshot(room)), **parts))
+            try:
+                reply = self._ask(self._coder, CODE_PROMPT.format(
+                    files=untrusted_code("workspace", self._ws.snapshot(room)), **parts))
+            except BadModelOutput:  # a garbled reply costs this round, not the whole job
+                checks.append({"check": "tests", "round": round_no, "pass": False,
+                               "output": "coder reply was not valid JSON"})
+                notes = ["Your last reply was not valid JSON. Reply with one JSON object; escape every double "
+                         "quote and newline inside file contents (\\\" and \\n)."]
+                continue
             notes = self._write(reply.get("files"))
             self._ensure_packages()
             problems = import_problems(self._ws)

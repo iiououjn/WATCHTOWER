@@ -154,7 +154,8 @@ class ModelSocket:
         return Reply(text, model, pt, ct, seconds, usd)
 
     def ask_json(self, tier: str, messages: list[dict], job_id: str, retries: int = 1) -> dict:
-        """Ask for a JSON object; on unparseable output, retry once showing the model its error."""
+        """Ask for a JSON object; on unparseable output, ask again with the error noted. The broken reply is NOT
+        sent back: it can be ~2k tokens and would push the retry past the model's context window."""
         convo = list(messages)
         for _ in range(retries + 1):
             reply = self.ask(tier, convo, job_id, json_mode=True)
@@ -162,10 +163,9 @@ class ModelSocket:
                 return parse_json(reply.text)
             except ValueError as e:
                 self._audit.append("model_socket", "bad_json", {"model": reply.model, "error": str(e)}, job_id)
-                convo = convo + [
-                    {"role": "assistant", "content": reply.text},
-                    {"role": "user", "content": f"That was not valid JSON ({e}). Reply with only one JSON object."},
-                ]
+                note = (f"\n\nYour previous reply was not valid JSON ({str(e)[:120]}). Reply with only one JSON "
+                        "object; escape every double quote and newline inside strings (\\\" and \\n).")
+                convo = list(messages[:-1]) + [{**messages[-1], "content": messages[-1]["content"] + note}]
         raise BadModelOutput(f"{self._s.tiers[tier]} did not return valid JSON after {retries + 1} tries")
 
     def _swap_to(self, model: str, job_id: str) -> None:
