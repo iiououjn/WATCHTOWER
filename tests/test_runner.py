@@ -664,3 +664,15 @@ def test_owner_guardrails_set_the_send_back_limit(app_tower, settings):
     out = runner.start(job.id, extra={"auto_approve": True})
     assert out.status == "paused" and model.calls.count("f5.dev_gate") == 2
     runner.close()
+
+
+def test_every_floor_handoff_is_gated_once_per_attempt(app_tower, conn):
+    from watchtower.engine.bus import Bus
+    from watchtower.engine.governor.audit import AuditLog
+    runner, model, sandbox, job = app_tower(qa_ok=[False, True])
+    runner.start(job.id, extra={"auto_approve": True})
+    gates = [(e.detail["floor"], e.detail["attempt"], e.detail["passed"])
+             for e in Bus(AuditLog(conn)).events(job_id=job.id, topic="gate.verdict")]
+    assert gates == [("f2", 0, True), ("f3", 0, True), ("f4", 0, False), ("dev", 0, False),
+                     ("f2", 1, True), ("f3", 1, True), ("f4", 1, True), ("f5", 1, True), ("dev", 1, True)]
+    runner.close()

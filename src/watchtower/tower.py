@@ -124,19 +124,24 @@ class TowerPipeline:
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
             self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "
                        f"after {len(package.checks_run)} round(s) (attempt {attempt + 1})")
+            self._handoff(data, "f2", attempt, tests_ok and plan["entry"] in ws.files(),
+                          [] if tests_ok else ["unit tests do not pass"])
             if package.checks_run and package.checks_run[-1].get("pass") and plan["entry"] not in ws.files():
                 feedback = [f"the planned entry file {plan['entry']} does not exist; create it"]
                 package = WorkPackage("f2", package.summary, ws.files(), [], package.checks_run +
                                       [{"check": "entry", "pass": False}], feedback)
             elif package.checks_run and package.checks_run[-1].get("pass"):
                 f3 = smoke_test(run, plan["entry"], expect)
+                self._handoff(data, "f3", attempt, f3.checks_run[-1]["pass"], f3.open_questions)
                 self._post(data, "f3", "done" if f3.checks_run[-1]["pass"] else "issue", f3.summary.splitlines()[0])
                 if f3.checks_run[-1]["pass"]:
                     f4 = run_qa(run, plan["entry"], checks or qa.write_checks(spec, ws.snapshot()))
+                    self._handoff(data, "f4", attempt, f4.checks_run[-1]["pass"], f4.open_questions)
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
                                f4.summary.splitlines()[0], known=f4.summary[:1500])
                 if f4 is not None and f4.checks_run[-1]["pass"]:  # Floor 5 office: security scan, then spec audit
                     sec = security_package(security_scan(ws.root, ws.files()), self._g.security_fail_on)
+                    self._handoff(data, "f5", attempt, sec.checks_run[-1]["pass"], sec.open_questions)
                     self._post(data, "f5", "doing" if sec.checks_run[-1]["pass"] else "issue",
                                sec.summary.splitlines()[0], known=sec.summary[:1500])
                     if sec.checks_run[-1]["pass"]:
@@ -266,6 +271,11 @@ class TowerPipeline:
             except ADVISORY_ERRORS:  # a memo never pauses a job
                 answer = "no answer"
         self._board.note(job_id, sender.floor, "memo", f"{NAMES[sender.floor]} asked {NAMES[to]}: {question[:50]} → {answer}")
+
+    def _handoff(self, data: dict, floor: str, attempt: int, passed: bool, reasons: list[str]) -> None:
+        """F5 gate at a floor handoff: deterministic (the floor's own reality checks), recorded for all to see."""
+        self._bus.publish("gate.verdict", {"floor": floor, "attempt": attempt, "passed": passed, "kind": "handoff",
+                                           "reasons": [str(r)[:200] for r in reasons[:3]]}, data["job_id"])
 
     def _plan_qa(self, data: dict, plan: dict, qa_office: QAOffice) -> list[dict]:
         """Post the architect's plan, then let the QA office write its checks from the routes contract."""
