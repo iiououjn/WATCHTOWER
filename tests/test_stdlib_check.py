@@ -1,6 +1,6 @@
 import pytest
 
-from watchtower.engine.stdlib_check import import_problems
+from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import Workspace
 
 
@@ -39,7 +39,7 @@ def test_parens_too_deep_is_reported(tmp_path):
 
 
 def test_parser_recursion_is_reported_not_crash(tmp_path, monkeypatch):
-    from watchtower.engine import stdlib_check
+    from watchtower.floors.f2_dev import stdlib_check
 
     def boom(source):
         raise RecursionError("maximum recursion depth exceeded")

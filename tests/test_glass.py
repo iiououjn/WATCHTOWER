@@ -1,6 +1,6 @@
 import pytest
 
-from watchtower.engine.beacon.glass import Glass, GlassRules, load_glass_rules
+from watchtower.beacon.glass import Glass, GlassRules, load_glass_rules
 
 GOOD = "\n".join(f"Paragraph {i}: Fresnel lenses focus lighthouse beams over long distances." for i in range(6))
 RULES = GlassRules("f1", deny_domains=("spam.example",), allow_domains=())

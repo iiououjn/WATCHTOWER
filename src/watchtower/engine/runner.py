@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from typing import Iterator
 
 from watchtower.config import Settings
-from watchtower.engine.beacon.beacon import Beacon
-from watchtower.engine.beacon.fetcher import Fetcher
-from watchtower.engine.beacon.glass import Glass, load_glass_rules
-from watchtower.engine.beacon.search import Search, SearchUnavailable
+from watchtower.beacon.beacon import Beacon
+from watchtower.beacon.fetcher import Fetcher
+from watchtower.beacon.glass import Glass, load_glass_rules
+from watchtower.beacon.search import Search, SearchUnavailable
 from watchtower.engine.bus import Bus
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.governor.approvals import Approvals
@@ -18,8 +18,8 @@ from watchtower.engine.governor.budget import BudgetExceeded
 from watchtower.engine.jobs import JobStore
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput, CloudDisabled, LowMemory, ModelSocket, ModelUnavailable
-from watchtower.engine.pipeline import NeedsOwner, SpecRejected, TowerPipeline
-from watchtower.engine.releases import Releases
+from watchtower.tower import NeedsOwner, SpecRejected, TowerPipeline
+from watchtower.floors.f4_qa_deploy.releases import Releases
 from watchtower.engine.sandbox import Sandbox, SandboxUnavailable
 from watchtower.engine.scheduler import Scheduler, SchedulerBusy
 from watchtower.engine.workflow import Step, Workflow, WorkflowResult

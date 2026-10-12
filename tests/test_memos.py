@@ -1,7 +1,7 @@
 import pytest
 
 from conftest import APP_REPLIES, TOWER_REPLIES, FakeSandbox, RoleModel
-from watchtower.engine.board import Board
+from watchtower.floors.board import Board
 from watchtower.engine.bus import Bus
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.governor.budget import Budget

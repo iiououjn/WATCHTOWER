@@ -28,7 +28,7 @@ def load_roles(directory: Path = ROLES_DIR, tiers: Iterable[str] | None = None) 
     """Load every role YAML in a directory. The org chart is config, not code."""
     known_tiers = set(tiers) if tiers is not None else None
     roles: dict[str, Role] = {}
-    for path in sorted(directory.glob("*.yaml")):
+    for path in sorted(directory.rglob("*.yaml")):
         data = yaml.safe_load(path.read_text())
         if not isinstance(data, dict):
             raise ValueError(f"{path.name}: role file must be a mapping")

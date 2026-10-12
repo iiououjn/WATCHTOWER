@@ -5,23 +5,26 @@ import shlex
 from pathlib import Path
 from typing import Callable
 
-from watchtower.engine.beacon import glass as glass_mod
-from watchtower.engine.beacon.beacon import Beacon
-from watchtower.engine.board import FLOORS, NAMES, Board
-from watchtower.engine.buildfloor import smoke_test
+from watchtower.beacon import glass as glass_mod
+from watchtower.beacon.beacon import Beacon
+from watchtower.floors.board import FLOORS, NAMES, Board
+from watchtower.floors.f3_build.buildfloor import smoke_test
 from watchtower.engine.bus import Bus
-from watchtower.engine.devfloor import DevFloor
-from watchtower.engine.floor import Floor, WorkPackage, strs, untrusted
-from watchtower.engine.gate import Gate
+from watchtower.floors.f2_dev.devfloor import DevFloor
+from watchtower.floors.f1_research.office import Floor
+from watchtower.floors.framework import WorkPackage, strs, untrusted
+from watchtower.floors.gate import Gate
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput
-from watchtower.engine.office import F3Office, OversightOffice, QAOffice
-from watchtower.engine.oversight import is_failing as _failing, security_package, security_scan
-from watchtower.engine.qafloor import QAFloor, run_qa
+from watchtower.floors.f3_build.office import F3Office
+from watchtower.floors.f5_oversight.office import OversightOffice
+from watchtower.floors.f4_qa_deploy.office import QAOffice
+from watchtower.floors.f5_oversight.oversight import is_failing as _failing, security_package, security_scan
+from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
-from watchtower.engine.beacon.glass import INJECTION, normalize
-from watchtower.engine.releases import Releases, manifest_of, manifest_problems
+from watchtower.beacon.glass import INJECTION, normalize
+from watchtower.floors.f4_qa_deploy.releases import Releases, manifest_of, manifest_problems
 from watchtower.engine.workflow import Step
 from watchtower.engine.workspace import Workspace
 from watchtower.roles import Role

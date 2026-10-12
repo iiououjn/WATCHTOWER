@@ -17,9 +17,9 @@ from typing import Callable
 
 from watchtower.config import Settings
 from watchtower.engine.db import now
-from watchtower.engine.deploy_scripts import EDGE, FORWARD
+from watchtower.floors.f4_qa_deploy.deploy_scripts import EDGE, FORWARD
 from watchtower.engine.governor.audit import AuditLog
-from watchtower.engine.releases import Releases
+from watchtower.floors.f4_qa_deploy.releases import Releases
 
 _NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,29}")
 _JOB = re.compile(r"[A-Za-z0-9_-]+")

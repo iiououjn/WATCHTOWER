@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-watchtower = "watchtower.cli:app"
+watchtower = "watchtower.interface.cli:app"
 
 [build-system]
 requires = ["hatchling"]

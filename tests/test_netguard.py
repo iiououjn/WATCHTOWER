@@ -1,6 +1,6 @@
 import pytest
 
-from watchtower.engine.beacon.netguard import BlockedURL, check_url
+from watchtower.beacon.netguard import BlockedURL, check_url
 
 
 def resolver(mapping):

@@ -5,12 +5,12 @@ import re
 from pathlib import PurePosixPath
 from typing import Callable, Sequence
 
-from watchtower.engine.floor import WorkPackage, untrusted, untrusted_code
+from watchtower.floors.framework import WorkPackage, untrusted, untrusted_code
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.engine.model_socket import BadModelOutput
-from watchtower.engine.qafloor import parse_routes
+from watchtower.floors.f4_qa_deploy.qafloor import parse_routes
 from watchtower.engine.sandbox import SandboxResult
-from watchtower.engine.stdlib_check import import_problems
+from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import Workspace, WorkspaceError
 from watchtower.roles import Role
 

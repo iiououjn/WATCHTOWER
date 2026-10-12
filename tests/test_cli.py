@@ -2,7 +2,7 @@ import pytest
 from typer.testing import CliRunner
 
 from conftest import fake_response
-from watchtower import cli
+from watchtower.interface import cli
 from watchtower.engine.model_socket import ModelSocket
 
 runner = CliRunner()
@@ -336,7 +336,7 @@ def test_beacon_command_reports_accepted_and_rejected(monkeypatch):
 
 
 def test_beacon_command_search_down(monkeypatch):
-    from watchtower.engine.beacon.search import SearchUnavailable
+    from watchtower.beacon.search import SearchUnavailable
 
     class Down:
         def research(self, task, job_id):
@@ -379,12 +379,12 @@ def test_build_app_end_to_end_with_fakes(monkeypatch, tmp_path):
 
 class FakeDeployer:
     def __init__(self, fail=None):
-        from watchtower.engine.deploy import Deployment
+        from watchtower.floors.f4_qa_deploy.deploy import Deployment
         self.fail, self.calls = fail, []
         self.dep = Deployment(1, "app", "job1", "wt-app-app:1", 8100, "active", "t", None)
 
     def _do(self, *call):
-        from watchtower.engine.deploy import DeployError
+        from watchtower.floors.f4_qa_deploy.deploy import DeployError
         self.calls.append(call)
         if self.fail:
             raise DeployError(self.fail)

@@ -1,6 +1,6 @@
 import pytest
 
-from watchtower.engine.releases import Releases
+from watchtower.floors.f4_qa_deploy.releases import Releases
 
 
 @pytest.fixture

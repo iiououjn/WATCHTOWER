@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from watchtower.engine.oversight import security_package, security_scan
+from watchtower.floors.f5_oversight.oversight import security_package, security_scan
 
 BAD = ('import os, subprocess\ndef run(c):\n    os.system(c)\n    subprocess.call(c, shell=True)\n    eval(c)\n'
        'def q(db, n):\n    db.execute("SELECT * FROM t WHERE n = \'%s\'" % n)\n')

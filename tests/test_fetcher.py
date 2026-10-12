@@ -1,8 +1,8 @@
 import httpx
 import pytest
 
-from watchtower.engine.beacon.fetcher import MAX_BYTES, FetchError, Fetcher
-from watchtower.engine.beacon.netguard import BlockedURL
+from watchtower.beacon.fetcher import MAX_BYTES, FetchError, Fetcher
+from watchtower.beacon.netguard import BlockedURL
 
 ARTICLE = ("<html><head><title>Fresnel lens</title></head><body><article><h1>Fresnel lens</h1>"
            + "<p>A Fresnel lens is a compact lens used in lighthouses to project light far out to sea. </p>" * 8
@@ -152,7 +152,7 @@ def test_robots_redirect_is_followed_through_the_guard():
 
 
 def test_default_client_ignores_proxy_env_and_guards_connections(monkeypatch):
-    from watchtower.engine.beacon.fetcher import GuardedBackend
+    from watchtower.beacon.fetcher import GuardedBackend
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
     f = Fetcher(resolve=resolve)
     assert f._client._trust_env is False
@@ -160,6 +160,6 @@ def test_default_client_ignores_proxy_env_and_guards_connections(monkeypatch):
 
 
 def test_guarded_backend_refuses_rebound_private_ip():
-    from watchtower.engine.beacon.fetcher import GuardedBackend
+    from watchtower.beacon.fetcher import GuardedBackend
     with pytest.raises(BlockedURL):
         GuardedBackend(lambda host: ["127.0.0.1"]).connect_tcp("rebind.example", 443)
