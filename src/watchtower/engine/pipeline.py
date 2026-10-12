@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+from pathlib import Path
 from typing import Callable
 
 from watchtower.engine.beacon import glass as glass_mod
@@ -56,6 +57,10 @@ class SpecRejected(Exception):
     pass
 
 
+class AppRejected(SpecRejected):  # same outcome for the runner: the job fails
+    pass
+
+
 def spec_text(spec: dict) -> str:
     lines = [f"Title: {spec['title']}", f"Goal: {spec['goal']}", "Acceptance criteria:"]
     lines += [f"  - {a}" for a in spec["acceptance"]]
@@ -86,7 +91,8 @@ class TowerPipeline:
 
     def app_steps(self) -> list[Step]:
         return [Step("spec", self._spec), Step("approval", self._approval),
-                Step("research", self._research), Step("dev", self._dev)]
+                Step("research", self._research), Step("dev", self._dev),
+                Step("signoff_request", self._signoff_request), Step("signoff", self._signoff)]
 
     def _research(self, data: dict) -> dict:
         return self._f1(data) if data.get("research") else {"f1": None}
@@ -142,10 +148,8 @@ class TowerPipeline:
                        else f"gate sent back to {verdict.route}: {'; '.join(verdict.reasons)[:200]}")
             if verdict.passed:
                 self._retro(data, oversight)
-                if self._releases is not None:
-                    self._releases.record(job_id, plan["entry"], ws.root, ws.files())
-                self._bus.publish("app.released", {"entry": plan["entry"], "files": len(ws.files())}, job_id)
                 return {"dev": package.to_dict(), "files": ws.files(), "workspace": str(ws.root),
+                        "entry": plan["entry"],
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
                                    "Note: written by a local AI and tested only inside the sandbox — untested on "
                                    "your Mac. Read the code before running it.\n"
@@ -169,6 +173,27 @@ class TowerPipeline:
                 expect = f3_office.expect(spec, plan["routes"])
         self._retro(data, oversight)
         raise NeedsOwner(f"gate rejected the app {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")
+
+    def _signoff_request(self, data: dict) -> dict:
+        """Lifecycle: final audit → owner sign-off → done. Nothing is released until the owner signs off."""
+        if data.get("auto_approve"):
+            return {"signoff_id": None}
+        evidence = "\n".join(line for line in data["dev"]["summary"].splitlines()
+                             if line.startswith(("Tests:", "App ", "QA checks", "Security scan", "- [")))[:1500]
+        return {"signoff_id": self._approvals.request(data["job_id"], "signoff",
+                                                     f"{data['answer']}\n\nEvidence:\n{evidence}")}
+
+    def _signoff(self, data: dict) -> dict:
+        if data.get("signoff_id") is not None:
+            status = self._approvals.get(data["signoff_id"]).status
+            if status == "rejected":
+                raise AppRejected("app rejected by owner")
+            if status != "approved":
+                raise NeedsOwner(f"app awaiting your sign-off; review it, then: watchtower approve {data['job_id']}")
+        if self._releases is not None:
+            self._releases.record(data["job_id"], data["entry"], Path(data["workspace"]), data["files"])
+        self._bus.publish("app.released", {"entry": data["entry"], "files": len(data["files"])}, data["job_id"])
+        return {"released": True}
 
     def _lessons(self, data: dict) -> str:
         """Past retrospectives that match this job (stored untrusted; shown to the architect wrapped)."""

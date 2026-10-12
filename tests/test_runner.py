@@ -505,3 +505,35 @@ def test_past_lessons_reach_the_architect_wrapped(app_tower, conn):
     arch = [p for c, p in zip(model.calls, model.prompts) if c == "f2.architect"][0]
     assert '<untrusted source="retro">' in arch and "test file for every module" in arch
     runner.close()
+
+
+def test_app_needs_owner_sign_off_before_a_release_exists(app_tower, conn):
+    from watchtower.engine.governor.approvals import Approvals
+    from watchtower.engine.releases import Releases
+    runner, model, sandbox, job = app_tower()
+    approvals = Approvals(conn)
+    assert runner.start(job.id).status == "paused"  # spec approval
+    approvals.decide(approvals.pending_for(job.id).id, True)
+    out = runner.resume(job.id)
+    pending = approvals.pending_for(job.id)
+    assert out.status == "paused" and pending.kind == "signoff" and Releases(conn).get(job.id) is None
+    assert "app.py" in pending.summary and "Security scan" in pending.summary
+    approvals.decide(pending.id, True)
+    out = runner.resume(job.id)
+    assert out.status == "done" and Releases(conn).get(job.id) is not None and "watchtower deploy" in out.answer
+    assert model.calls.count("f2.coder") == 1  # sign-off never re-runs the floors
+    runner.close()
+
+
+def test_rejected_sign_off_fails_the_job_without_a_release(app_tower, conn):
+    from watchtower.engine.governor.approvals import Approvals
+    from watchtower.engine.releases import Releases
+    runner, model, sandbox, job = app_tower()
+    approvals = Approvals(conn)
+    runner.start(job.id)
+    approvals.decide(approvals.pending_for(job.id).id, True)
+    runner.resume(job.id)
+    approvals.decide(approvals.pending_for(job.id).id, False)
+    out = runner.resume(job.id)
+    assert out.status == "failed" and "rejected" in out.reason and Releases(conn).get(job.id) is None
+    runner.close()

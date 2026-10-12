@@ -68,7 +68,9 @@ def _report(outcome: RunOutcome, conn) -> None:
     elif outcome.status == "paused":
         pending = Approvals(conn).pending_for(outcome.job_id)
         if pending:
-            typer.echo(f"\nSpec for job {outcome.job_id} — awaiting your approval:\n")
+            what = "App for job {} — awaiting your sign-off" if pending.kind == "signoff" else \
+                "Spec for job {} — awaiting your approval"
+            typer.echo("\n" + what.format(outcome.job_id) + ":\n")
             typer.echo(_clean(pending.summary))
             typer.echo(f"\nApprove with: watchtower approve {outcome.job_id}   (or add --reject)", err=True)
         else:
@@ -202,6 +204,14 @@ def docker_status(settings: Settings, audit: AuditLog) -> tuple[bool, str]:
     return (problem is None), (problem or f"ready ({settings.sandbox_image})")
 
 
+def bandit_status() -> tuple[bool, str]:
+    from importlib.metadata import PackageNotFoundError, version
+    try:
+        return True, f"{version('bandit')} (offline security scanner)"
+    except PackageNotFoundError:
+        return False, "not installed; run: uv sync"
+
+
 @app.command()
 def doctor():
     """Check that the tower's engine parts are healthy."""
@@ -214,6 +224,7 @@ def doctor():
         ("RAM", ram is None or ram >= settings.min_free_ram_pct,
          "unknown" if ram is None else f"{ram}% free (need {settings.min_free_ram_pct}%)"),
         ("Audit chain", audit.verify(), "ok" if audit.verify() else "BROKEN"),
+        ("Bandit", *bandit_status()),
     ]
     for name, ok, detail in checks:
         typer.echo(f"{'✓' if ok else '✗'} {name:<12} {detail}")
@@ -319,8 +330,9 @@ def approve(job_id: str, reject: bool = typer.Option(False, "--reject", help="Re
     approvals.decide(pending.id, not reject)
     AuditLog(conn).append("owner", "approval_decided", {"approval_id": pending.id, "approved": not reject}, job_id)
     if reject:
-        JobStore(conn).set_status(job_id, "failed", "spec rejected by owner")
-        typer.echo(f"Job {job_id} failed: spec rejected by owner", err=True)
+        reason = f"{'app' if pending.kind == 'signoff' else 'spec'} rejected by owner"
+        JobStore(conn).set_status(job_id, "failed", reason)
+        typer.echo(f"Job {job_id} failed: {reason}", err=True)
         raise typer.Exit(1)
     runner = _runner(settings, conn)
     try:

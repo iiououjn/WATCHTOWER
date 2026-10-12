@@ -455,3 +455,23 @@ def test_app_job_audit_records_app_pipeline(monkeypatch, tmp_path):
     job = done_app_job(monkeypatch, tmp_path)
     created = [e for e in AuditLog(connect(load_settings().db_path)).entries(job_id=job) if e.action == "job_created"]
     assert created[0].detail["pipeline"] == "app"
+
+
+def test_sign_off_is_shown_and_rejectable_from_the_cli(monkeypatch, tmp_path):
+    from conftest import APP_REPLIES, FakeSandbox
+    use_roles(monkeypatch, APP_REPLIES)
+    monkeypatch.setattr(cli, "make_sandbox", lambda settings, conn: FakeSandbox(tmp_path / "apps"))
+    monkeypatch.setattr(cli.typer, "prompt", lambda *a, **k: "")
+    runner.invoke(cli.app, ["build", "a todo web app", "--app"])
+    job = latest_job_id()
+    signoff = runner.invoke(cli.app, ["approve", job])
+    assert signoff.exit_code == 3 and "sign-off" in signoff.output and "app.py" in signoff.output
+    rejected = runner.invoke(cli.app, ["approve", job, "--reject"])
+    assert rejected.exit_code == 1 and "app rejected by owner" in rejected.output
+
+
+def test_doctor_checks_bandit(monkeypatch):
+    monkeypatch.setattr(cli, "ollama_status", lambda s: (True, "ok"))
+    monkeypatch.setattr(cli, "docker_status", lambda s, a: (True, "ready"))
+    monkeypatch.setattr(cli, "free_ram_pct", lambda: 55)
+    assert "Bandit" in runner.invoke(cli.app, ["doctor"]).output
