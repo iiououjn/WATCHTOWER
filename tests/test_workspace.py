@@ -75,3 +75,9 @@ def test_delete_is_validated(ws):
 def test_os_level_bad_names_are_workspace_errors(ws, bad):
     with pytest.raises(WorkspaceError):
         ws.write(bad, "x")
+
+
+@pytest.mark.parametrize("name", ["a\nb.py", "a\rb.py", "a\x1bb.py", "a\tb.py"])
+def test_control_characters_in_names_are_refused(tmp_path, name):
+    with pytest.raises(WorkspaceError):
+        Workspace(tmp_path).write(name, "x = 1\n")

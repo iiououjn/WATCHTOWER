@@ -59,3 +59,42 @@ def test_bandit_timeout_or_missing_is_an_open_question(tmp_path):
 def test_only_listed_files_are_scanned(tmp_path):
     root = ws(tmp_path, {"app.py": "x = 1\n", "stray.py": BAD})
     assert security_scan(root, ["app.py"]) == []
+
+
+def test_nosec_comments_cannot_switch_bandit_off(tmp_path):
+    root = ws(tmp_path, {"app.py": "def f(x):\n    return eval(x)  # nosec\n"})
+    assert any(f["id"] == "B307" for f in security_scan(root, ["app.py"]))
+
+
+def test_bandit_never_imports_code_from_the_current_folder(tmp_path, monkeypatch):
+    evil = tmp_path / "cwd"
+    evil.mkdir()
+    marker = tmp_path / "pwned"
+    (evil / "bandit.py").write_text(f"open({str(marker)!r}, 'w').write('x')\n")
+    (evil / "json.py").write_text(f"open({str(marker)!r}, 'w').write('x')\n")
+    monkeypatch.chdir(evil)
+    root = ws(tmp_path / "w", {"app.py": BAD})
+    assert any(f["id"] == "B602" for f in security_scan(root, ["app.py"])) and not marker.exists()
+
+
+def test_unparseable_files_are_unknown_not_silently_clean(tmp_path):
+    out = '{"results": [], "errors": [{"filename": "/x/app.py", "reason": "syntax error"}]}'
+    found = security_scan(ws(tmp_path, {"app.py": "x = 1\n"}), ["app.py"],
+                          run=lambda argv, **kw: subprocess.CompletedProcess(argv, 0, out, ""))
+    assert any(f["severity"] == "UNKNOWN" and "could not parse" in f["text"] for f in found)
+
+
+def test_unreadable_file_is_a_finding_not_a_crash(tmp_path):
+    root = ws(tmp_path, {"app.py": "x = 1\n"})
+    found = security_scan(root, ["app.py", "gone.html"])
+    assert any(f["severity"] == "UNKNOWN" and f["file"] == "gone.html" for f in found)
+
+
+def test_serious_findings_come_first_and_minor_ones_are_capped():
+    low = [{"tool": "bandit", "id": f"B{i:03}", "severity": "LOW", "confidence": "HIGH", "file": "a.py",
+            "line": i, "text": "minor " * 20} for i in range(20)]
+    high = {"tool": "bandit", "id": "B602", "severity": "HIGH", "confidence": "HIGH", "file": "a.py",
+            "line": 99, "text": "shell=True"}
+    pkg = security_package(low + [high])
+    lines = pkg.summary.splitlines()
+    assert "B602" in lines[1] and len(pkg.summary) <= 2500 and "more minor" in pkg.summary

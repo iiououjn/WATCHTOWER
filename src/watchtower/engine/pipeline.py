@@ -20,7 +20,8 @@ from watchtower.engine.office import F3Office, OversightOffice, QAOffice
 from watchtower.engine.oversight import security_package, security_scan
 from watchtower.engine.qafloor import QAFloor, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
-from watchtower.engine.releases import Releases
+from watchtower.engine.beacon.glass import INJECTION, normalize
+from watchtower.engine.releases import Releases, manifest_of, manifest_problems
 from watchtower.engine.workflow import Step
 from watchtower.engine.workspace import Workspace
 from watchtower.roles import Role
@@ -147,9 +148,10 @@ class TowerPipeline:
             self._post(data, "f5", "done" if verdict.passed else "issue", "gate passed the app" if verdict.passed
                        else f"gate sent back to {verdict.route}: {'; '.join(verdict.reasons)[:200]}")
             if verdict.passed:
-                self._retro(data, oversight)
+                self._retro(data, oversight, passed=True)
                 return {"dev": package.to_dict(), "files": ws.files(), "workspace": str(ws.root),
-                        "entry": plan["entry"],
+                        "entry": plan["entry"], "manifest": manifest_of(ws.root, ws.files()),
+                        "evidence": _evidence(package.checks_run),
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
                                    "Note: written by a local AI and tested only inside the sandbox — untested on "
                                    "your Mac. Read the code before running it.\n"
@@ -171,17 +173,15 @@ class TowerPipeline:
                 plan = dev.plan(spec, research, feedback, lessons)
                 checks = self._plan_qa(data, plan, qa_office)
                 expect = f3_office.expect(spec, plan["routes"])
-        self._retro(data, oversight)
+        self._retro(data, oversight, passed=False)
         raise NeedsOwner(f"gate rejected the app {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")
 
     def _signoff_request(self, data: dict) -> dict:
         """Lifecycle: final audit → owner sign-off → done. Nothing is released until the owner signs off."""
         if data.get("auto_approve"):
             return {"signoff_id": None}
-        evidence = "\n".join(line for line in data["dev"]["summary"].splitlines()
-                             if line.startswith(("Tests:", "App ", "QA checks", "Security scan", "- [")))[:1500]
         return {"signoff_id": self._approvals.request(data["job_id"], "signoff",
-                                                     f"{data['answer']}\n\nEvidence:\n{evidence}")}
+                                                     f"{data['answer']}\n\nEvidence:\n{data['evidence']}")}
 
     def _signoff(self, data: dict) -> dict:
         if data.get("signoff_id") is not None:
@@ -190,8 +190,11 @@ class TowerPipeline:
                 raise AppRejected("app rejected by owner")
             if status != "approved":
                 raise NeedsOwner(f"app awaiting your sign-off; review it, then: watchtower approve {data['job_id']}")
+        problems = manifest_problems(Path(data["workspace"]), data["manifest"])
+        if problems:  # what ships is exactly what passed QA and the gate, or nothing
+            raise AppRejected("workspace changed after QA; nothing released: " + "; ".join(problems[:3]))
         if self._releases is not None:
-            self._releases.record(data["job_id"], data["entry"], Path(data["workspace"]), data["files"])
+            self._releases.record_manifest(data["job_id"], data["entry"], data["manifest"])
         self._bus.publish("app.released", {"entry": data["entry"], "files": len(data["files"])}, data["job_id"])
         return {"released": True}
 
@@ -204,11 +207,19 @@ class TowerPipeline:
                     hits.setdefault(h.source, h.text[:400])
         return "\n".join(list(hits.values())[:2])
 
-    def _retro(self, data: dict, oversight: OversightOffice) -> None:
+    def _retro(self, data: dict, oversight: OversightOffice, passed: bool) -> None:
+        """Never lets a retrospective problem cost the job: any error is logged and skipped."""
+        try:
+            self._write_retro(data, oversight, passed)
+        except Exception as e:  # noqa: BLE001 — advisory by design
+            self._bus.publish("retro.skipped", {"error": type(e).__name__}, data["job_id"])
+
+    def _write_retro(self, data: dict, oversight: OversightOffice, passed: bool) -> None:
         notes = [f"{n['floor']} {n['kind']}: {n['text']}" for n in self._board.notes(data["job_id"])][-12:]
-        lessons = oversight.retro(data["spec"], notes)
+        lessons = [x for x in oversight.retro(data["spec"], notes) if not INJECTION.search(normalize(x))]
         if lessons:
-            self._knowledge.add(f"Lessons from job {data['job_id']} ({data['spec']['title']}):\n"
+            outcome = "passed" if passed else "did not pass"
+            self._knowledge.add(f"Lessons from job {data['job_id']} ({data['spec']['title']}, {outcome}):\n"
                                 + "\n".join(f"- {x}" for x in lessons), f"watchtower://retro/{data['job_id']}",
                                 title=f"Retrospective: {data['spec']['title']}", trusted=False)
             self._post(data, "f5", "done", "lessons: " + "; ".join(lessons))
@@ -320,5 +331,23 @@ class TowerPipeline:
     def _context(self, task: str) -> str:
         # re-check stored sources against the CURRENT glass rules: a site denied later never reaches agents
         glass = glass_mod.Glass(glass_mod.load_glass_rules("f1"))
-        hits = [h for h in self._knowledge.search(task, limit=6, distinct=False) if glass.domain_allowed(h.source)]
+        hits = [h for h in self._knowledge.search(task, limit=6, distinct=False)
+                if glass.domain_allowed(h.source) and not h.source.startswith("watchtower://")]  # lessons: architect only
         return "\n".join(untrusted(h.source, h.text[:CONTEXT_CHARS]) for h in hits[:3])
+
+
+def _evidence(checks: list[dict]) -> str:
+    """Sign-off evidence built from the checks' own results — never from text the app could print."""
+    last = {}
+    for c in checks:
+        last[c.get("check")] = c
+    tests, http, qa, sec = last.get("tests", {}), last.get("http", {}), last.get("qa", {}), last.get("security", {})
+    results = qa.get("results") or []
+    findings = sec.get("findings") or []
+    serious = sum(f.get("severity") in ("HIGH", "MEDIUM") for f in findings)
+    return "\n".join([
+        f"- unit tests: {'pass' if tests.get('pass') else 'FAIL'}",
+        f"- app answered HTTP {http.get('status')}",
+        f"- QA: {sum(r.get('pass') is True for r in results)}/{len(results)} checks passed",
+        f"- security scan: {'pass' if sec.get('pass') else 'FAIL'} ({serious} serious, {len(findings) - serious} other)",
+    ])
