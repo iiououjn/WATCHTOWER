@@ -494,7 +494,10 @@ def test_one_test_or_tests_that_ignore_the_app_do_not_pass(tmp_path):
       "tests/helpers.py": "x = 1\n"}, False),
     ({"app.py": "x = 1\n", "conftest.py": "", "test_app.py": "import conftest\n"}, False),
     ({"app.py": "x = 1\n", "test_app.py": "import importlib\napp = importlib.import_module('app')\n"}, True),
-    ({"testimonials.py": "x = 1\n", "test_app.py": "import testimonials\n"}, True),
+    ({"apptestimonials.py": "x = 1\n", "test_app.py": "import apptestimonials\n"}, True),
+    ({"app.py": "x = 1\n", "tests_app.py": "import app\n"}, True),
+    ({"app.py": "x = 1\n", "testapp.py": "from app import x\n"}, True),
+    ({"app.py": "x = 1\n", "app_test.py": "import app\n"}, False),
     ({"app.py": "x = 1\n", "tests.py": "import app\n"}, True)])
 def test_test_bar_edge_cases(tmp_path, files, ok):
     ws = Workspace(tmp_path)
@@ -506,4 +509,4 @@ def test_test_bar_edge_cases(tmp_path, files, ok):
 def test_entry_must_be_importable(tmp_path):
     script = Script({"f2.architect": [{"entry": "2048.py", "routes": [], "files": [{"path": "2048.py", "purpose": "g"}]}]})
     plan = DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=Runner([OK])).plan(SPEC, "", [])
-    assert plan["entry"] == "app.py"
+    assert plan["entry"] == "app_2048.py" and [f["path"] for f in plan["files"]] == ["app_2048.py"]

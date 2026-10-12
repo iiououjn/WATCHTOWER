@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+from fnmatch import fnmatch
 from pathlib import PurePosixPath
 from typing import Callable, Sequence
 
@@ -76,10 +77,8 @@ def _compact_checks(checks: Sequence[dict]) -> str:
 
 
 def _is_test_file(path: str) -> bool:
-    """test_*.py, *_test.py, tests.py, or anything inside a tests/ (or test/) folder — not 'testimonials.py'."""
-    p = PurePosixPath(path)
-    return (p.name.startswith("test_") or p.stem.endswith("_test") or p.stem in ("tests", "test")
-            or any(part in ("tests", "test") for part in p.parts[:-1]))
+    """Exactly what the runner discovers: test*.py anywhere (_ensure_packages makes every folder a package)."""
+    return fnmatch(PurePosixPath(path).name, "test*.py")
 
 
 def app_is_tested(ws: Workspace) -> bool:
@@ -88,7 +87,8 @@ def app_is_tested(ws: Workspace) -> bool:
     py = [f for f in ws.files() if f.endswith(".py")]
     tests = [f for f in py if _is_test_file(f)]
     app = {PurePosixPath(f).with_suffix("").as_posix().replace("/", ".") for f in py
-           if f not in tests and PurePosixPath(f).stem not in ("__init__", "conftest")}
+           if f not in tests and PurePosixPath(f).stem not in ("__init__", "conftest")
+           and not {"tests", "test"} & set(PurePosixPath(f).parts[:-1])}  # helpers in tests/ are not the app
     app |= {m.split(".")[0] for m in app}  # 'import store' counts for store/db.py
     for name in tests:
         try:
@@ -164,8 +164,12 @@ class DevFloor:
                 seen.add(path.lower())
                 files.append({"path": path, "purpose": _UNSAFE.sub("", str(f.get("purpose", ""))).strip()[:80]})
         entry = _plan_path(out.get("entry")) or "app.py"
-        safe = _SAFE_ENTRY.fullmatch(entry) and ".." not in entry.split("/")
-        entry, files = (entry if safe else "app.py"), files[:15]
+        if not _SAFE_ENTRY.fullmatch(entry):
+            fixed = re.sub(r"(^|/)(?=\d)", r"\1app_", entry)  # '2048.py' → 'app_2048.py': tests can import it
+            if _SAFE_ENTRY.fullmatch(fixed):
+                files = [{**f, "path": fixed} if f["path"] == entry else f for f in files]
+            entry = fixed if _SAFE_ENTRY.fullmatch(fixed) else "app.py"
+        files = files[:15]
         files = [f for f in files if f["path"] == entry or f["path"].lower() != entry.lower()]
         if entry not in {f["path"] for f in files}:  # a 3B architect often names an entry it never plans
             files = files[:14] + [{"path": entry, "purpose": "the app's entry point: starts the HTTP server"}]
@@ -240,7 +244,7 @@ class DevFloor:
                 notes = self._write(reply.get("files"))
             self._ensure_packages()
             problems = import_problems(self._ws) if self._stdlib_only else []
-            has_tests = any(PurePosixPath(f).name.startswith("test") for f in self._ws.files() if f.endswith(".py"))
+            has_tests = any(_is_test_file(f) for f in self._ws.files())
             result = self._run(TEST_COMMAND)
             output = ((result.stdout or "") + (result.stderr or ""))[-2000:]
             summary = test_summary(result.stdout)

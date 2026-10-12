@@ -28,13 +28,21 @@ for _ in range(40):
         break
     except Exception:
         time.sleep(0.25)
+deadline = time.time() + 50  # leave room inside the 90 s sandbox limit: partial evidence beats none
+slow = []
+def filler(field):
+    f = field.lower()
+    return ("a@b.co" if "mail" in f else "2026-01-01" if "date" in f else "http://example.com" if "url" in f
+            or "link" in f else "1")
 def fetch(path, data=None):
     try:
         with urllib.request.urlopen(urllib.request.Request(base + path, data=data), timeout=3) as r:
             return r.read(200000).decode(errors="replace"), r.headers.get("Content-Type") or "", True
     except urllib.error.HTTPError as e:
         return e.read(200000).decode(errors="replace"), e.headers.get("Content-Type") or "", True
-    except Exception:
+    except Exception as e:  # only a timeout is "did not answer"; a crash on odd input is not this probe's call
+        if isinstance(e, TimeoutError) or "timed out" in str(e):
+            slow.append(("POST " if data else "GET ") + path)
         return "", "", False
 pages, answered = {}, 0
 def keep(name, got):
@@ -45,9 +53,13 @@ def keep(name, got):
         pages[name] = body.lower()
 for post in plan["posts"]:  # one field at a time: a validated field must not hide a raw text field
     for field, marker in post["markers"].items():
-        form = urllib.parse.urlencode({f: (marker if f == field else "1") for f in post["markers"]}).encode()
+        if time.time() > deadline:
+            break
+        form = urllib.parse.urlencode({f: (marker if f == field else filler(f)) for f in post["markers"]}).encode()
         keep("POST " + post["path"] + " " + field, fetch(post["path"], form))
 for path in plan["gets"]:
+    if time.time() > deadline:
+        break
     keep("GET " + path, fetch(path))
 hits = [{"post": post["path"], "field": field, "page": page.rsplit(" ", 1)[0] if page.startswith("POST") else page}
         for post in plan["posts"] for field, marker in post["markers"].items()
@@ -57,7 +69,8 @@ try:
 except Exception:
     p.kill()
 log.close()
-print("WATCHTOWER_XSS " + json.dumps({"answered": answered, "hits": hits}))
+print("WATCHTOWER_XSS " + json.dumps({"answered": answered, "hits": hits, "slow": sorted(set(slow))[:5],
+                                      "partial": time.time() > deadline}))
 """
 _RESULT = re.compile(r"^WATCHTOWER_XSS (.*)$", re.M)
 _PATH = re.compile(r"/[A-Za-z0-9._~/-]{0,80}")
@@ -70,7 +83,7 @@ def _safe(path) -> bool:
 
 def _finding(severity: str, entry: str, text: str) -> dict:
     return {"tool": "probe", "id": "XSS" if severity == "HIGH" else "XSS-PROBE", "severity": severity,
-            "confidence": "HIGH", "file": entry, "line": 0, "text": text}
+            "confidence": "HIGH", "file": "(running app)", "line": 0, "text": text}
 
 
 def xss_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: list[dict]) -> list[dict]:
@@ -101,6 +114,11 @@ def xss_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: lis
         for value, bucket in ((str(h.get("field"))[:30], fields), (str(h.get("page"))[:60], pages)):
             if value not in bucket:
                 bucket.append(value)
-    return [_finding("HIGH", entry, f"use html.escape on user text: POST {post} ({', '.join(fields)[:50]}) shows "
-                                    f"raw HTML on {'; '.join(pages[:2])}") for post, (fields, pages) in
-            list(by_post.items())[:5]]
+    findings = [_finding("HIGH", entry, f"use html.escape on user text: POST {post} ({', '.join(fields)[:50]}) shows "
+                                        f"raw HTML on {'; '.join(pages[:2])}") for post, (fields, pages) in
+                list(by_post.items())[:5]]
+    slow = [str(x)[:70] for x in (out.get("slow") or []) if isinstance(x, str)]
+    if slow or out.get("partial") is True:  # a route that hangs was not probed: say which, keep what was found
+        findings.append(_finding("MEDIUM", entry, f"{'; '.join(slow[:3]) or 'some routes'} did not answer within 3 s, "
+                                                  "so they could not be checked for HTML injection; make them answer"))
+    return findings

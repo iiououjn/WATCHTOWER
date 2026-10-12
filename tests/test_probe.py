@@ -123,3 +123,25 @@ def test_fix_advice_survives_the_finding_line_cut(tmp_path):
     from watchtower.floors.f5_oversight.oversight import _line
     findings = xss_probe(run_real(tmp_path, False), "app.py", ROUTES)
     assert "html.escape" in _line(findings[0])
+
+
+def test_a_hanging_route_is_named_and_other_evidence_is_kept(tmp_path):
+    app = APP.format(escape=False).replace(
+        "    def do_POST(self):\n", "    def do_POST(self):\n        if self.path == '/slow':\n            import time; time.sleep(5)\n")
+    routes = ROUTES + [{"method": "POST", "path": "/slow", "fields": ["x"], "shows": ""}]
+    findings = xss_probe(run_real(tmp_path, False, app=app), "app.py", routes)
+    by_id = {f["id"]: f for f in findings}
+    assert "XSS" in by_id and "/slow" in by_id["XSS-PROBE"]["text"] and "did not answer" in by_id["XSS-PROBE"]["text"]
+
+
+def test_filler_matches_validated_field_names(tmp_path):
+    app = APP.format(escape=False).replace(
+        'items.append(data.get("item", [""])[0])',
+        'assert "@" in data.get("email", [""])[0]; items.append(data.get("item", [""])[0])')
+    routes = [ROUTES[0], {"method": "POST", "path": "/add", "fields": ["item", "email"], "shows": ""}, ROUTES[2]]
+    assert [f["id"] for f in xss_probe(run_real(tmp_path, False, app=app), "app.py", routes)] == ["XSS"]
+
+
+def test_findings_do_not_blame_the_entry_file(tmp_path):
+    findings = xss_probe(run_real(tmp_path, False), "app.py", ROUTES)
+    assert findings[0]["file"] == "(running app)"
