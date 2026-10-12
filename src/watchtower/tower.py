@@ -83,7 +83,8 @@ class TowerPipeline:
     def __init__(self, ask: Callable[[Role, dict, str], dict], roles: dict[str, Role],
                  approvals: Approvals, bus: Bus, knowledge: Knowledge,
                  beacon_factory: Callable[[Callable[[str], dict]], Beacon] | None = None, sandbox=None,
-                 releases: Releases | None = None, guardrails: Guardrails | None = None):
+                 releases: Releases | None = None, guardrails: Guardrails | None = None,
+                 before_sandbox: Callable[[str], object] | None = None):
         self._ask = ask
         self._roles = roles
         self._approvals = approvals
@@ -92,6 +93,7 @@ class TowerPipeline:
         self._beacon_factory = beacon_factory
         self._sandbox = sandbox
         self._releases = releases
+        self._before_sandbox = before_sandbox  # frees RAM for Docker (unloads the model when RAM is low)
         self._g = guardrails or load_guardrails(None)
         self._board = Board(bus)
         self._known: dict[tuple[str, str], str] = {}  # (job, floor) → what that floor can tell others
@@ -111,7 +113,10 @@ class TowerPipeline:
         job_id, spec, r = data["job_id"], data["spec"], self._roles
         ask = lambda role, prompt: self._call(role, data, prompt)  # noqa: E731
         ws = Workspace(self._sandbox.workspace(job_id))
-        run = lambda cmd: self._sandbox.run(job_id, cmd, timeout=90)  # noqa: E731
+        def run(cmd: list[str]):
+            if self._before_sandbox is not None:
+                self._before_sandbox(job_id)
+            return self._sandbox.run(job_id, cmd, timeout=90)
         dev = DevFloor(r["f2.architect"], r["f2.coder"], ask=ask, workspace=ws, run=run, hr=r["f2.hr"],
                        stdlib_only=self._g.stdlib_only)
         f3_office = F3Office(r["f3.lead"], r["f3.hr"], ask)

@@ -62,7 +62,7 @@ class JobRunner:
         self._tower = TowerPipeline(self._ask_role, load_roles(tiers=settings.tiers), Approvals(conn), bus,
                                     Knowledge(conn), beacon_factory=beacon_factory,
                                     sandbox=sandbox or Sandbox(settings, AuditLog(conn)), releases=Releases(conn),
-                                    guardrails=load_guardrails(settings.home))
+                                    guardrails=load_guardrails(settings.home), before_sandbox=getattr(socket, "make_room", None))
         checkpoints = settings.home / "checkpoints.db"
         self._wfs = {
             "demo": Workflow([Step("plan", self._plan), Step("answer", self._answer)], checkpoints,

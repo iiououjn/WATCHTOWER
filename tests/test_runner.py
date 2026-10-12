@@ -901,3 +901,12 @@ def test_a_page_cannot_forge_the_credible_mark(conn):
     text = pipe._context("fresnel lenses")
     assert '[credible] <untrusted source="https://www.nps.gov/f">' in text  # the mark sits outside the data
     assert text.count("[credible] <untrusted") == 1
+
+
+def test_tower_makes_room_before_every_sandbox_run(app_tower):
+    runner, model, sandbox, job = app_tower()
+    seen = []
+    runner._tower._before_sandbox = lambda job_id: seen.append(len(sandbox.calls))
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert seen == list(range(len(sandbox.calls))) and len(seen) >= 3
+    runner.close()

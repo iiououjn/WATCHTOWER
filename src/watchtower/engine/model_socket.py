@@ -191,6 +191,18 @@ class ModelSocket:
                 )
         self._loaded = model
 
+    def make_room(self, job_id: str | None = None) -> bool:
+        """Before a sandbox run: if RAM is low, unload our model so Docker and the model never fight over it
+        (on 8 GB a resident 7B + a running container means minutes of swap). Reloading costs seconds."""
+        if not self._loaded:
+            return False
+        pct = self._free_ram()
+        if pct is None or pct >= self._s.sandbox_free_ram_pct:
+            return False
+        self._audit.append("model_socket", "make_room", {"model": self._loaded, "free_pct": pct}, job_id)
+        self.unload_all(job_id)
+        return True
+
     def unload_all(self, job_id: str | None = None) -> None:
         """Free RAM after a job: unload the model this process loaded, never another process's."""
         if self._loaded:

@@ -23,6 +23,7 @@ class Settings:
     default_max_seconds: int = 3600
     default_max_usd: float = 0.0
     min_free_ram_pct: int = 20
+    sandbox_free_ram_pct: int = 35  # below this, the model is unloaded before each sandbox run
     agent_slots: int = 1
     sandbox_image: str = "python:latest"
     num_ctx: int = 6144  # set explicitly so Ollama never silently truncates the system prompt

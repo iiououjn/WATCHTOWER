@@ -300,3 +300,16 @@ def test_json_retry_never_grows_the_context_with_the_broken_reply(parts):
     retry = calls[1]["messages"]
     assert len(retry) == 1 and broken not in str(retry)
     assert retry[0]["content"].startswith("write code") and "escape" in retry[0]["content"]
+
+
+def test_make_room_unloads_the_model_before_the_sandbox_when_ram_is_low(parts):
+    unloaded, ram = [], [100]
+    settings, budget, audit = parts
+    sock = ModelSocket(settings, budget, audit, completion_fn=lambda **kw: fake_response(),
+                       unload_fn=unloaded.append, resident_fn=lambda: [], free_ram_fn=lambda: ram[0])
+    sock.ask("small", [{"role": "user", "content": "x"}], "j")
+    assert sock.make_room("j") is False and unloaded == []  # plenty of RAM: keep the model warm
+    ram[0] = 12
+    assert sock.make_room("j") is True and unloaded == ["ollama/llama3.2:3b"] and sock.loaded is None
+    assert sock.make_room("j") is False  # nothing loaded any more
+    assert any(e.action == "make_room" for e in audit.entries(job_id="j"))
