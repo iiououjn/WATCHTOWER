@@ -393,7 +393,9 @@ class TowerPipeline:
         glass = glass_mod.Glass(glass_mod.load_glass_rules("f1"))
         hits = [h for h in self._knowledge.search(task, limit=12, distinct=False)  # over-fetch: lessons are dropped
                 if glass.domain_allowed(h.source) and not h.source.startswith("watchtower://")]  # lessons: architect only
-        return "\n".join(untrusted(h.source, h.text[:CONTEXT_CHARS]) for h in hits[:3])
+        hits = sorted(hits[:3], key=lambda h: -glass.credibility(h.source))  # step 3: credible sources first
+        return "\n".join(untrusted(h.source, ("(credible source) " if glass.credibility(h.source) == 2 else "")
+                                  + h.text[:CONTEXT_CHARS]) for h in hits)
 
 
 def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:

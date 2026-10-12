@@ -793,3 +793,15 @@ def test_evidence_shows_the_full_app_probe():
     text = _evidence([{"check": "http", "pass": True, "status": "200"},
                       {"check": "routes", "pass": True, "results": [{"path": "/a", "status": 200}] * 3}])
     assert "full app: 3/3 contract routes answered" in text
+
+
+def test_f1_context_ranks_credible_sources_first(conn):
+    from watchtower.engine.knowledge import Knowledge
+    from watchtower.tower import TowerPipeline
+    k = Knowledge(conn)
+    k.add("Fresnel lenses focus lighthouse beams. " * 5, "https://blog.example/fresnel", trusted=False)
+    k.add("Fresnel lenses focus lighthouse beams well. " * 5, "https://www.nps.gov/fresnel", trusted=False)
+    pipe = TowerPipeline.__new__(TowerPipeline)
+    pipe._knowledge = k
+    text = pipe._context("fresnel lenses")
+    assert text.index("nps.gov") < text.index("blog.example") and "credible source" in text

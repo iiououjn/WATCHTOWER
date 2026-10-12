@@ -1,0 +1,11 @@
+# Glass 3 — what the Beacon may pass to the Build floor: docs and Q&A that explain crashes. Owner-editable.
+name: f3
+deny_domains: []
+allow_domains:
+  - docs.python.org
+  - stackoverflow.com
+  - developer.mozilla.org
+credible_domains: []
+low_credibility_domains: []
+min_chars: 200
+max_injection_ratio: 0.3

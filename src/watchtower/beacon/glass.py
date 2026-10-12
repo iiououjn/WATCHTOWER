@@ -45,6 +45,8 @@ class GlassRules:
     allow_domains: tuple[str, ...]
     min_chars: int = 200
     max_injection_ratio: float = 0.3
+    credible_domains: tuple[str, ...] = ()
+    low_credibility_domains: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,8 @@ def load_glass_rules(floor: str, directory: Path = GLASS_DIR) -> GlassRules:
         allow_domains=tuple(data.get("allow_domains") or ()),
         min_chars=int(data.get("min_chars", 200)),
         max_injection_ratio=float(data.get("max_injection_ratio", 0.3)),
+        credible_domains=tuple(data.get("credible_domains") or ()),
+        low_credibility_domains=tuple(data.get("low_credibility_domains") or ()),
     )
 
 
@@ -87,12 +91,25 @@ class Glass:
             return False
         return not self._rules.allow_domains or _matches(host, self._rules.allow_domains)
 
+    def credibility(self, url: str) -> int:
+        """Glass step 3, by rule not by model: 2 = credible (listed, allow-listed, .gov/.edu), 1 = normal,
+        0 = low (rejected)."""
+        host = (urlsplit(url).hostname or "").lower()
+        if _matches(host, self._rules.low_credibility_domains):
+            return 0
+        if (_matches(host, self._rules.credible_domains) or host.endswith((".gov", ".edu"))
+                or (self._rules.allow_domains and _matches(host, self._rules.allow_domains))):
+            return 2
+        return 1
+
     def inspect(self, url: str, text: str, task: str) -> GlassVerdict:
         host = (urlsplit(url).hostname or "").lower()
         if _matches(host, self._rules.deny_domains):
             return self._reject(f"domain {host} is denied by glass {self._rules.name}")
         if self._rules.allow_domains and not _matches(host, self._rules.allow_domains):
             return self._reject(f"domain {host} is not on glass {self._rules.name}'s allow list")
+        if self.credibility(url) == 0:
+            return self._reject(f"domain {host} has low credibility on glass {self._rules.name}")
         if SECRET.search(text):
             return self._reject("page contains secret-like strings")
         paragraphs = [normalize(p).strip() for p in text.splitlines() if p.strip()]

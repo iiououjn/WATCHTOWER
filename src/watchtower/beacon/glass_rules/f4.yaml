@@ -1,0 +1,12 @@
+# Glass 4 — what the Beacon may pass to the QA floor: HTTP references. Owner-editable.
+name: f4
+deny_domains: []
+allow_domains:
+  - developer.mozilla.org
+  - www.rfc-editor.org
+  - httpwg.org
+  - docs.python.org
+credible_domains: []
+low_credibility_domains: []
+min_chars: 200
+max_injection_ratio: 0.3

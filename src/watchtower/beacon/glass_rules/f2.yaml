@@ -1,0 +1,13 @@
+# Glass 2 — what the Beacon may pass to the Dev floor: technical docs and API references only. Owner-editable.
+name: f2
+deny_domains: []
+allow_domains:
+  - docs.python.org
+  - peps.python.org
+  - developer.mozilla.org
+  - html.spec.whatwg.org
+  - www.w3.org
+credible_domains: []      # allow-listed sites already count as credible
+low_credibility_domains: []
+min_chars: 200
+max_injection_ratio: 0.3
