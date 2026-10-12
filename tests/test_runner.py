@@ -280,7 +280,7 @@ def test_rejected_spec_fails_the_job_even_if_resumed(tower, conn):
     runner.close()
 
 
-from watchtower.engine.beacon.search import SearchUnavailable
+from watchtower.beacon.search import SearchUnavailable
 
 
 class FakeBeacon:
@@ -342,7 +342,7 @@ def test_search_unavailable_pauses_job(online_tower, conn):
 
 
 def test_newly_denied_domains_never_reach_agents(online_tower, conn, monkeypatch):
-    from watchtower.engine.beacon import glass as glass_mod
+    from watchtower.beacon import glass as glass_mod
     Knowledge(conn).add("Fresnel lenses compared in depth for lighthouses.", "https://spam.example/old")
     monkeypatch.setattr(glass_mod, "load_glass_rules", lambda floor: glass_mod.GlassRules(
         "f1", deny_domains=("spam.example",), allow_domains=()))
@@ -416,7 +416,7 @@ def test_smoke_failure_output_reaches_the_coder(app_tower):
 
 
 def test_passing_app_is_recorded_as_a_release(app_tower, conn):
-    from watchtower.engine.releases import Releases
+    from watchtower.floors.f4_qa_deploy.releases import Releases
     runner, model, sandbox, job = app_tower()
     runner.start(job.id, extra={"auto_approve": True})
     rel = Releases(conn).get(job.id)
@@ -426,7 +426,7 @@ def test_passing_app_is_recorded_as_a_release(app_tower, conn):
 
 
 def test_qa_failure_routes_to_coder_with_detail_and_skips_model_gate(app_tower, conn):
-    from watchtower.engine.releases import Releases
+    from watchtower.floors.f4_qa_deploy.releases import Releases
     runner, model, sandbox, job = app_tower(qa_ok=[False, True])
     out = runner.start(job.id, extra={"auto_approve": True})
     assert out.status == "done" and model.calls.count("f5.dev_gate") == 1
@@ -437,7 +437,7 @@ def test_qa_failure_routes_to_coder_with_detail_and_skips_model_gate(app_tower, 
 
 
 def test_app_that_never_passes_qa_has_no_release(app_tower, conn):
-    from watchtower.engine.releases import Releases
+    from watchtower.floors.f4_qa_deploy.releases import Releases
     runner, model, sandbox, job = app_tower(qa_ok=False)
     out = runner.start(job.id, extra={"auto_approve": True})
     assert out.status == "paused" and Releases(conn).get(job.id) is None
@@ -509,7 +509,7 @@ def test_past_lessons_reach_the_architect_wrapped(app_tower, conn):
 
 def test_app_needs_owner_sign_off_before_a_release_exists(app_tower, conn):
     from watchtower.engine.governor.approvals import Approvals
-    from watchtower.engine.releases import Releases
+    from watchtower.floors.f4_qa_deploy.releases import Releases
     runner, model, sandbox, job = app_tower()
     approvals = Approvals(conn)
     assert runner.start(job.id).status == "paused"  # spec approval
@@ -527,7 +527,7 @@ def test_app_needs_owner_sign_off_before_a_release_exists(app_tower, conn):
 
 def test_rejected_sign_off_fails_the_job_without_a_release(app_tower, conn):
     from watchtower.engine.governor.approvals import Approvals
-    from watchtower.engine.releases import Releases
+    from watchtower.floors.f4_qa_deploy.releases import Releases
     runner, model, sandbox, job = app_tower()
     approvals = Approvals(conn)
     runner.start(job.id)
@@ -550,7 +550,7 @@ def _to_signoff(app_tower, conn):
 
 
 def test_files_changed_after_qa_are_never_released(app_tower, conn):
-    from watchtower.engine.releases import Releases
+    from watchtower.floors.f4_qa_deploy.releases import Releases
     runner, model, sandbox, job, approvals = _to_signoff(app_tower, conn)
     app = sandbox.workspace(job.id) / "app.py"
     original = app.read_text()
@@ -564,7 +564,7 @@ def test_files_changed_after_qa_are_never_released(app_tower, conn):
 
 
 def test_stray_files_from_running_or_browsing_the_app_do_not_block_release(app_tower, conn):
-    from watchtower.engine.releases import Releases
+    from watchtower.floors.f4_qa_deploy.releases import Releases
     runner, model, sandbox, job, approvals = _to_signoff(app_tower, conn)
     root = sandbox.workspace(job.id)
     (root / ".DS_Store").write_bytes(b"\0\1")
@@ -585,7 +585,7 @@ def test_sign_off_names_only_commands_that_work_before_approval(app_tower, conn)
 
 
 def test_evidence_says_incomplete_when_bandit_did_not_run(app_tower, conn, monkeypatch):
-    from watchtower.engine import pipeline
+    from watchtower import tower as pipeline
     monkeypatch.setattr(pipeline, "security_scan", lambda root, files: [
         {"tool": "bandit", "id": "-", "severity": "UNKNOWN", "confidence": "-", "file": "-", "line": 0,
          "text": "Bandit is not installed"}])

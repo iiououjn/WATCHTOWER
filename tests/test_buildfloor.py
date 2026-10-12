@@ -1,4 +1,4 @@
-from watchtower.engine.buildfloor import SMOKE_SCRIPT, smoke_test
+from watchtower.floors.f3_build.buildfloor import SMOKE_SCRIPT, smoke_test
 from watchtower.engine.sandbox import SandboxResult
 
 

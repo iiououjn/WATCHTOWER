@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from watchtower.engine.model_socket import BadModelOutput
-from watchtower.engine.qafloor import MAX_CHECKS, QA_SCRIPT, QAFloor, parse_checks, run_qa
+from watchtower.floors.f4_qa_deploy.qafloor import MAX_CHECKS, QA_SCRIPT, QAFloor, parse_checks, run_qa
 from watchtower.engine.sandbox import SandboxResult
 from watchtower.roles import Role
 

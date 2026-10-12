@@ -4,7 +4,7 @@ import json
 import re
 from typing import Callable
 
-from watchtower.engine.floor import WorkPackage, untrusted_code
+from watchtower.floors.framework import WorkPackage, untrusted_code
 from watchtower.engine.model_socket import BadModelOutput
 from watchtower.engine.sandbox import SandboxResult
 from watchtower.roles import Role

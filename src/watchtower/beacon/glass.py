@@ -9,10 +9,10 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from watchtower.engine.floor import truthy, untrusted
+from watchtower.floors.framework import truthy, untrusted
 from watchtower.engine.model_socket import BadModelOutput
 
-GLASS_DIR = Path(__file__).resolve().parents[2] / "glass"
+GLASS_DIR = Path(__file__).resolve().parent / "glass_rules"
 INJECTION = re.compile(
     r"\b(ignore|disregard|forget|override)\b.{0,40}\b(instructions|prompts|messages|rules|above|guidelines)\b"
     r"|\byour (previous |prior |original )?(instructions|rules|prompt)\b|you are now|new instructions\s*:"

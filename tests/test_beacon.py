@@ -1,10 +1,10 @@
 import pytest
 
-from watchtower.engine.beacon.beacon import Beacon
-from watchtower.engine.beacon.fetcher import FetchError, Page
-from watchtower.engine.beacon.glass import Glass, GlassRules
-from watchtower.engine.beacon.netguard import BlockedURL
-from watchtower.engine.beacon.search import Search, SearchUnavailable
+from watchtower.beacon.beacon import Beacon
+from watchtower.beacon.fetcher import FetchError, Page
+from watchtower.beacon.glass import Glass, GlassRules
+from watchtower.beacon.netguard import BlockedURL
+from watchtower.beacon.search import Search, SearchUnavailable
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.knowledge import Knowledge
 

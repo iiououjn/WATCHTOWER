@@ -8,13 +8,13 @@ import click
 import typer
 
 from watchtower.config import Settings, load_settings
-from watchtower.engine.beacon.beacon import Beacon
-from watchtower.engine.beacon.fetcher import Fetcher
-from watchtower.engine.beacon.glass import Glass, load_glass_rules
-from watchtower.engine.beacon.search import Search, SearchUnavailable
+from watchtower.beacon.beacon import Beacon
+from watchtower.beacon.fetcher import Fetcher
+from watchtower.beacon.glass import Glass, load_glass_rules
+from watchtower.beacon.search import Search, SearchUnavailable
 from watchtower.engine.bus import Bus
 from watchtower.engine.db import connect
-from watchtower.engine.deploy import DeployError, Deployer
+from watchtower.floors.f4_qa_deploy.deploy import DeployError, Deployer
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.governor.budget import Budget

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from watchtower.engine.floor import WorkPackage, strs, truthy, untrusted, untrusted_code
+from watchtower.floors.framework import WorkPackage, strs, truthy, untrusted, untrusted_code
 from watchtower.roles import Role
 
 GATE_PROMPT = (

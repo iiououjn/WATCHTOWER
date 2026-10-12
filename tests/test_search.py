@@ -1,6 +1,6 @@
 import pytest
 
-from watchtower.engine.beacon.search import Search, SearchUnavailable
+from watchtower.beacon.search import Search, SearchUnavailable
 
 
 def test_maps_provider_results():

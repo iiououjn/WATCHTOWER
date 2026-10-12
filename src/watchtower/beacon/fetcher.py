@@ -11,7 +11,7 @@ import httpcore
 import httpx
 import trafilatura
 
-from watchtower.engine.beacon.netguard import BlockedURL, Resolver, check_url, public_ip, system_resolver
+from watchtower.beacon.netguard import BlockedURL, Resolver, check_url, public_ip, system_resolver
 from watchtower.engine.db import now
 
 MAX_BYTES = 2_000_000

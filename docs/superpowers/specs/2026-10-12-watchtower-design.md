@@ -78,6 +78,20 @@ Owner ─▶ CLI / Dashboard  (FastAPI + WebSocket ⇄ Engine)
  ═════════════ GROUND ENGINE (under and around everything) ═════════════
 ```
 
+Code layout mirrors the lighthouse:
+
+```
+src/watchtower/
+  engine/      Ground Engine (model_socket, memory, knowledge, bus, scheduler, workflow, sandbox,
+               workspace, tools/, governor/, db, jobs, runner)
+  beacon/      Beacon (search, fetcher, netguard) + glass.py with per-floor rules in glass_rules/
+  floors/      framework (work package, untrusted wrappers), gate, board,
+               f1_research/ f2_dev/ f3_build/ f4_qa_deploy/ f5_oversight/  (each floor's office + tools)
+  roles/       role YAML per floor: f1/ f2/ f3/ f4/ f5/ csuite/ glass/
+  tower.py     wires the floors, gates, approvals and sign-off into the job workflow
+  interface/   CLI (API + dashboard later)
+```
+
 Job lifecycle: `draft → spec_approved → F1 → F2 → F3 → F4 → final_audit → owner_signoff → done`, with backward transitions allowed on gate failure (bounded by retry limits).
 
 ---

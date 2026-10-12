@@ -7,8 +7,8 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
-from watchtower.engine.beacon.glass import SECRET
-from watchtower.engine.floor import WorkPackage
+from watchtower.beacon.glass import SECRET
+from watchtower.floors.framework import WorkPackage
 
 BANDIT_TIMEOUT = 60
 FAILING = {"HIGH", "MEDIUM"}

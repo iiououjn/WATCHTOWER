@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from watchtower.engine.beacon.fetcher import FetchError
-from watchtower.engine.beacon.glass import Glass
-from watchtower.engine.beacon.netguard import BlockedURL
-from watchtower.engine.beacon.search import Search
+from watchtower.beacon.fetcher import FetchError
+from watchtower.beacon.glass import Glass
+from watchtower.beacon.netguard import BlockedURL
+from watchtower.beacon.search import Search
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.knowledge import Knowledge
 

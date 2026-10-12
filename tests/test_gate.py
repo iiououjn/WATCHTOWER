@@ -1,5 +1,5 @@
-from watchtower.engine.floor import WorkPackage
-from watchtower.engine.gate import Gate
+from watchtower.floors.framework import WorkPackage
+from watchtower.floors.gate import Gate
 from watchtower.roles import Role
 
 REVIEWER = Role("f5.gate", "Gate", "f5", "work", (), "review")
@@ -70,8 +70,8 @@ def test_no_routes_means_no_route():
 
 
 def test_open_questions_reach_the_gate_as_untrusted_data():
-    from watchtower.engine.floor import WorkPackage
-    from watchtower.engine.gate import Gate
+    from watchtower.floors.framework import WorkPackage
+    from watchtower.floors.gate import Gate
     from watchtower.roles import Role
     prompts = []
     gate = Gate(lambda role, p: prompts.append(p) or {"pass": True}, Role("f5.gate", "G", "f5", "small", (), "g"))
@@ -82,8 +82,8 @@ def test_open_questions_reach_the_gate_as_untrusted_data():
 
 
 def test_gate_reads_code_unescaped_but_tags_cannot_be_forged():
-    from watchtower.engine.floor import WorkPackage
-    from watchtower.engine.gate import Gate
+    from watchtower.floors.framework import WorkPackage
+    from watchtower.floors.gate import Gate
     from watchtower.roles import Role
     prompts = []
     gate = Gate(lambda role, p: prompts.append(p) or {"pass": True}, Role("f5.gate", "G", "f5", "small", (), "g"))

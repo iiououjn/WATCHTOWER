@@ -1,7 +1,7 @@
 import pytest
 
-from watchtower.engine.office import QAOffice
-from watchtower.engine.qafloor import parse_routes
+from watchtower.floors.f4_qa_deploy.office import QAOffice
+from watchtower.floors.f4_qa_deploy.qafloor import parse_routes
 from watchtower.roles import Role
 
 LEAD = Role("f4.lead", "QA Lead", "f4", "small", (), "l")
@@ -73,7 +73,7 @@ def test_no_contract_means_no_test_first_checks():
 
 
 def test_f3_office_expectation_and_diagnosis_degrade_gracefully():
-    from watchtower.engine.office import F3Office
+    from watchtower.floors.f3_build.office import F3Office
     lead = Role("f3.lead", "Build Lead", "f3", "small", (), "l")
     hr = Role("f3.hr", "Build HR", "f3", "small", (), "h")
     s = Script({"f3.lead": [{"expect_text": "Todo list"}], "f3.hr": [{"diagnosis": "import json in app.py"}]})
@@ -105,7 +105,7 @@ def test_qa_office_on_low_memory_degrades_instead_of_pausing():
 
 
 def oversight(replies):
-    from watchtower.engine.office import OversightOffice
+    from watchtower.floors.f5_oversight.office import OversightOffice
     s = Script({"f5.lead": [{"focus": ["adding works"]}], "f5.auditor": [{"findings": []}], **replies})
     return OversightOffice(Role("f5.lead", "OL", "f5", "small", (), "l"),
                            Role("f5.auditor", "A", "f5", "small", (), "a"), s), s

@@ -1,4 +1,4 @@
-from watchtower.engine.board import Board
+from watchtower.floors.board import Board
 from watchtower.engine.bus import Bus
 from watchtower.engine.governor.audit import AuditLog
 

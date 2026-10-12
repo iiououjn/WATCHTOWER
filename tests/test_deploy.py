@@ -7,10 +7,10 @@ import urllib.request
 
 import pytest
 
-from watchtower.engine.deploy import DeployError, Deployer, http_ok
-from watchtower.engine.deploy_scripts import EDGE, FORWARD
+from watchtower.floors.f4_qa_deploy.deploy import DeployError, Deployer, http_ok
+from watchtower.floors.f4_qa_deploy.deploy_scripts import EDGE, FORWARD
 from watchtower.engine.governor.audit import AuditLog
-from watchtower.engine.releases import Releases
+from watchtower.floors.f4_qa_deploy.releases import Releases
 
 
 class Docker:
