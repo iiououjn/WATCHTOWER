@@ -139,6 +139,29 @@ def _failure_note(found: list[dict], stuck: str = "", diagnosis: str = "") -> st
             + ("\nFloor 2 HR diagnosis:\n" + untrusted("f2.hr", diagnosis) if diagnosis else ""))
 
 
+_SYNTAX = re.compile(r"^(\S+) has a syntax error on line (\d+)")
+
+
+def _problem_note(problems: list[str], ws: Workspace, tests_ok: bool) -> str:
+    """Problems the test run cannot show (syntax errors in files the tests never import, banned imports),
+    with the lines around a syntax error. When the tests already pass, say this is all that is left."""
+    parts = []
+    for p in problems[:3]:
+        parts.append(p)
+        match = _SYNTAX.match(p)
+        try:
+            lines = ws.read(match.group(1)).splitlines() if match else []
+        except (WorkspaceError, OSError):
+            lines = []
+        if lines:
+            n = int(match.group(2))
+            excerpt = "\n".join(f"{i + 1:4}| {lines[i]}" for i in range(max(0, n - 3), min(len(lines), n + 2)))
+            parts.append(untrusted_code(match.group(1), excerpt[:600]))
+    head = ("Your unit tests pass; this is the only thing left to fix:" if tests_ok
+            else "Also fix these problems (the tests cannot show them):")
+    return head + "\n" + "\n".join(parts)
+
+
 STUCK_NOTE = ("The same tests failed again after your last change: {names}. Before changing the app again, check "
               "each failing test itself: tests run in alphabetical order and share module-level state (reset it "
               "in setUp), and a test's own expected value can be wrong — fix the test when it is.")
@@ -341,7 +364,6 @@ class DevFloor:
                 carry = ["Floor 2 HR reviewed your code and asked for changes:\n" + untrusted("f2.hr", verdict[1])]
                 notes += carry  # kept through a garbled reply
                 continue
-            notes += problems
             if not has_tests:
                 notes.append("There are no unittest files yet: add test_*.py with real tests.")
             elif not ran_tests:
@@ -359,9 +381,14 @@ class DevFloor:
                 diagnoses += 1  # one F2 HR diagnosis per stuck set, at most 2 per build
                 diagnosis, diagnosed_for = self._diagnose_tests(_failure_rows(found)), failing
             shown = diagnosis if stuck and failing == diagnosed_for else ""  # never another set's diagnosis
-            carry = [_failure_note(found, STUCK_NOTE.format(names=", ".join(sorted({f["test"] for f in found})))
-                                   if stuck else "", shown) if found  # last: trimming drops the oldest first
-                     else "Test output:\n" + untrusted("sandbox", (output or "(no output)")[-1200:])]
+            tests_ok = (result.exit_code == 0 and real >= 1 and summary is not None
+                        and not summary.get("failures") and not summary.get("errors"))
+            carry = [] if tests_ok and problems else [
+                _failure_note(found, STUCK_NOTE.format(names=", ".join(sorted({f["test"] for f in found})))
+                              if stuck else "", shown) if found  # last: trimming drops the oldest first
+                else "Test output:\n" + untrusted("sandbox", (output or "(no output)")[-1200:])]
+            if problems:  # the very last note: never trimmed, kept through a garbled reply
+                carry.append(_problem_note(problems, self._ws, tests_ok))
             notes += carry
             last_failing = failing
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"

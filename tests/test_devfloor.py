@@ -719,3 +719,32 @@ def test_hr_change_request_survives_a_garbled_reply(tmp_path):
         SPEC, PLAN3, [])
     coder = [p for r, p in calls if r == "f2.coder"]
     assert "add a delete route" in coder[2]
+
+
+BROKEN_MAIN = ("import os\nfrom todo import add_todo\nhtml = '<h1>Todo</h1>'\nhtml += '<form>\n"
+               "    <input name=item>\n  </form>'\nprint(html)\n")
+
+
+def test_when_only_a_syntax_error_remains_the_coder_is_told_exactly_that(tmp_path):
+    ws = Workspace(tmp_path)
+    for name, body in (("todo.py", "items = []\n"), ("__main__.py", BROKEN_MAIN),
+                       ("test_todo.py", "import unittest\nimport todo\n")):
+        ws.write(name, body)
+    script = Script({"f2.coder": [{"files": []}]})
+    plan = {"entry": "app.py", "routes": [], "files": [{"path": "todo.py", "purpose": "t"}]}
+    d = DevFloor(ARCH, CODER, ask=script, workspace=ws, run=Runner([OK]), max_rounds=2)
+    assert not d.build(SPEC, plan, []).checks_run[-1]["pass"]
+    second = script.prompts["f2.coder"][1]
+    note = second[second.index("only thing left"):]
+    assert "__main__.py" in note and "line 4" in note and "html += '<form>" in note
+
+
+def test_the_problem_note_is_last_so_trimming_keeps_it(tmp_path):
+    ws = Workspace(tmp_path)
+    ws.write("__main__.py", BROKEN_MAIN)
+    ws.write("test_todo.py", "import unittest\nimport __main__\n")
+    big_feedback = ["reviewer note " + "y" * 590 for _ in range(6)]
+    script = Script({"f2.coder": [{"files": []}]})
+    d = DevFloor(ARCH, CODER, ask=script, workspace=ws, run=Runner([OK]), max_rounds=2)
+    d.build(SPEC, {"entry": "app.py", "routes": [], "files": []}, big_feedback)
+    assert "only thing left" in script.prompts["f2.coder"][1]
