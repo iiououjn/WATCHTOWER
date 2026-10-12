@@ -17,7 +17,7 @@ from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput
 from watchtower.engine.office import F3Office, OversightOffice, QAOffice
-from watchtower.engine.oversight import security_package, security_scan
+from watchtower.engine.oversight import is_failing as _failing, security_package, security_scan
 from watchtower.engine.qafloor import QAFloor, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.engine.beacon.glass import INJECTION, normalize
@@ -180,8 +180,11 @@ class TowerPipeline:
         """Lifecycle: final audit → owner sign-off → done. Nothing is released until the owner signs off."""
         if data.get("auto_approve"):
             return {"signoff_id": None}
+        answer = data["answer"].replace(  # deploying needs a release, and a release needs this sign-off first
+            f"Safer — deploy it isolated, with no internet: watchtower deploy {data['job_id']}",
+            f"After you approve: watchtower deploy {data['job_id']}  (isolated, no internet)")
         return {"signoff_id": self._approvals.request(data["job_id"], "signoff",
-                                                     f"{data['answer']}\n\nEvidence:\n{data['evidence']}")}
+                                                     f"{answer}\n\nEvidence:\n{data['evidence']}")}
 
     def _signoff(self, data: dict) -> dict:
         if data.get("signoff_id") is not None:
@@ -190,9 +193,12 @@ class TowerPipeline:
                 raise AppRejected("app rejected by owner")
             if status != "approved":
                 raise NeedsOwner(f"app awaiting your sign-off; review it, then: watchtower approve {data['job_id']}")
+        if not data.get("manifest"):
+            raise NeedsOwner("this job was checkpointed before release pinning; rebuild it")
         problems = manifest_problems(Path(data["workspace"]), data["manifest"])
         if problems:  # what ships is exactly what passed QA and the gate, or nothing
-            raise AppRejected("workspace changed after QA; nothing released: " + "; ".join(problems[:3]))
+            raise NeedsOwner("workspace changed after QA; nothing released: " + "; ".join(problems[:3])
+                             + f". Restore those files, then: watchtower resume {data['job_id']}")
         if self._releases is not None:
             self._releases.record_manifest(data["job_id"], data["entry"], data["manifest"])
         self._bus.publish("app.released", {"entry": data["entry"], "files": len(data["files"])}, data["job_id"])
@@ -331,7 +337,7 @@ class TowerPipeline:
     def _context(self, task: str) -> str:
         # re-check stored sources against the CURRENT glass rules: a site denied later never reaches agents
         glass = glass_mod.Glass(glass_mod.load_glass_rules("f1"))
-        hits = [h for h in self._knowledge.search(task, limit=6, distinct=False)
+        hits = [h for h in self._knowledge.search(task, limit=12, distinct=False)  # over-fetch: lessons are dropped
                 if glass.domain_allowed(h.source) and not h.source.startswith("watchtower://")]  # lessons: architect only
         return "\n".join(untrusted(h.source, h.text[:CONTEXT_CHARS]) for h in hits[:3])
 
@@ -344,10 +350,17 @@ def _evidence(checks: list[dict]) -> str:
     tests, http, qa, sec = last.get("tests", {}), last.get("http", {}), last.get("qa", {}), last.get("security", {})
     results = qa.get("results") or []
     findings = sec.get("findings") or []
-    serious = sum(f.get("severity") in ("HIGH", "MEDIUM") for f in findings)
+    serious = sum(_failing(f) for f in findings)
+    unknown = sum(f.get("severity") == "UNKNOWN" for f in findings)
+    if unknown:
+        scan = f"INCOMPLETE — a scanner did not run (see watchtower doctor); {serious} serious found"
+    else:
+        scan = f"{'pass' if sec.get('pass') else 'FAIL'} ({serious} serious, {len(findings) - serious} minor)"
+    qa_line = (f"{sum(r.get('pass') is True for r in results)}/{len(results)} checks passed" if results
+               else "no QA checks ran")
     return "\n".join([
         f"- unit tests: {'pass' if tests.get('pass') else 'FAIL'}",
         f"- app answered HTTP {http.get('status')}",
-        f"- QA: {sum(r.get('pass') is True for r in results)}/{len(results)} checks passed",
-        f"- security scan: {'pass' if sec.get('pass') else 'FAIL'} ({serious} serious, {len(findings) - serious} other)",
+        f"- QA: {qa_line}",
+        f"- security scan: {scan}",
     ])

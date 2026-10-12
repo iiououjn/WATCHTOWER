@@ -26,16 +26,19 @@ def manifest_of(root: Path, files: list[str]) -> dict[str, str]:
 
 
 def manifest_problems(root: Path, manifest: dict[str, str]) -> list[str]:
-    """What differs between the folder now and a manifest: changed, missing or extra files."""
+    """Which released files are changed or missing. Extra files (.DS_Store, an app's own data file) are
+    ignored: they are never shipped — deploy copies manifest files only and re-hashes each copy."""
     problems = []
     for name, digest in manifest.items():
         path = root / name
-        if not path.is_file() or path.is_symlink():
-            problems.append(f"{name} is missing")
-        elif _sha(path) != digest:
-            problems.append(f"{name} changed after QA")
-    present = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts}
-    return problems + [f"{name} is not in the release" for name in sorted(present - set(manifest))]
+        try:
+            if not path.is_file() or path.is_symlink():
+                problems.append(f"{name} is missing")
+            elif _sha(path) != digest:
+                problems.append(f"{name} changed after QA")
+        except OSError as e:
+            problems.append(f"{name} cannot be read ({type(e).__name__})")
+    return problems
 
 
 class Releases:

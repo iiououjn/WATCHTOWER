@@ -552,10 +552,46 @@ def _to_signoff(app_tower, conn):
 def test_files_changed_after_qa_are_never_released(app_tower, conn):
     from watchtower.engine.releases import Releases
     runner, model, sandbox, job, approvals = _to_signoff(app_tower, conn)
-    (sandbox.workspace(job.id) / "app.py").write_text("import os\nos.system('rm -rf ~')\n")
+    app = sandbox.workspace(job.id) / "app.py"
+    original = app.read_text()
+    app.write_text("import os\nos.system('rm -rf ~')\n")
     approvals.decide(approvals.pending_for(job.id).id, True)
     out = runner.resume(job.id)
-    assert out.status == "failed" and "changed after QA" in out.reason and Releases(conn).get(job.id) is None
+    assert out.status == "paused" and "changed after QA" in out.reason and Releases(conn).get(job.id) is None
+    app.write_text(original)  # restoring the QA'd bytes lets the signed-off app be released
+    assert runner.resume(job.id).status == "done" and Releases(conn).get(job.id) is not None
+    runner.close()
+
+
+def test_stray_files_from_running_or_browsing_the_app_do_not_block_release(app_tower, conn):
+    from watchtower.engine.releases import Releases
+    runner, model, sandbox, job, approvals = _to_signoff(app_tower, conn)
+    root = sandbox.workspace(job.id)
+    (root / ".DS_Store").write_bytes(b"\0\1")
+    (root / "todos.json").write_text("[]")
+    approvals.decide(approvals.pending_for(job.id).id, True)
+    assert runner.resume(job.id).status == "done"
+    assert set(Releases(conn).get(job.id).manifest) == {"app.py", "test_app.py"}
+    assert Releases(conn).verify(job.id, root) == []
+    runner.close()
+
+
+def test_sign_off_names_only_commands_that_work_before_approval(app_tower, conn):
+    runner, model, sandbox, job, approvals = _to_signoff(app_tower, conn)
+    summary = approvals.pending_for(job.id).summary
+    assert f"After you approve: watchtower deploy {job.id}" in summary
+    assert f"Safer — deploy it isolated" not in summary
+    runner.close()
+
+
+def test_evidence_says_incomplete_when_bandit_did_not_run(app_tower, conn, monkeypatch):
+    from watchtower.engine import pipeline
+    monkeypatch.setattr(pipeline, "security_scan", lambda root, files: [
+        {"tool": "bandit", "id": "-", "severity": "UNKNOWN", "confidence": "-", "file": "-", "line": 0,
+         "text": "Bandit is not installed"}])
+    runner, model, sandbox, job, approvals = _to_signoff(app_tower, conn)
+    evidence = approvals.pending_for(job.id).summary.split("Evidence:")[1]
+    assert "security scan: INCOMPLETE" in evidence and "watchtower doctor" in evidence
     runner.close()
 
 
@@ -564,7 +600,7 @@ def test_deleted_file_before_sign_off_fails_cleanly(app_tower, conn):
     (sandbox.workspace(job.id) / "test_app.py").unlink()
     approvals.decide(approvals.pending_for(job.id).id, True)
     out = runner.resume(job.id)
-    assert out.status == "failed" and "changed after QA" in out.reason
+    assert out.status == "paused" and "missing" in out.reason
     runner.close()
 
 
