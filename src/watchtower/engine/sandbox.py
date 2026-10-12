@@ -27,8 +27,9 @@ class SandboxResult:
 
 
 class Sandbox:
-    """Runs agent code in a locked-down Docker container. Only the job's own workspace
-    (~/.watchtower/workspaces/<job>) is mounted — never the owner's files."""
+    """Runs agent code in a locked-down Docker container. The job's workspace is mounted READ-ONLY and
+    copied into a 64 MB in-memory scratch dir, so executed code can never change, plant or fill files on
+    the host — only the checked Workspace writer does that. The owner's files are never mounted."""
 
     def __init__(self, settings: Settings, audit: AuditLog, run: Callable = subprocess.run):
         self._s = settings
@@ -73,10 +74,11 @@ class Sandbox:
             "--network", "none", "--read-only", "--tmpfs", "/tmp:rw,size=64m",
             "--memory", "512m", "--cpus", "1", "--pids-limit", "128",
             "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "1000:1000",
-            "-v", f"{workspace}:/work:rw", "-w", "/work",
+            "-v", f"{workspace}:/src:ro", "--tmpfs", "/work:rw,size=64m,uid=1000,gid=1000", "-w", "/work",
             self._s.sandbox_image,
             # hard limit inside the container, so it dies even if the host-side kill misses it
-            "timeout", "-s", "KILL", str(max(1, int(timeout))), *command,
+            "timeout", "-s", "KILL", str(max(1, int(timeout))),
+            "sh", "-c", 'cp -a /src/. /work/ && exec "$@"', "sh", *command,
         ]
         self._audit.append("sandbox", "sandbox_run", {"program": command[0], "argc": len(command)}, job_id)
         try:

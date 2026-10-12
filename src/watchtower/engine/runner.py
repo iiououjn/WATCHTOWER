@@ -19,7 +19,7 @@ from watchtower.engine.jobs import JobStore
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput, CloudDisabled, LowMemory, ModelSocket, ModelUnavailable
 from watchtower.engine.pipeline import NeedsOwner, SpecRejected, TowerPipeline
-from watchtower.engine.sandbox import SandboxUnavailable
+from watchtower.engine.sandbox import Sandbox, SandboxUnavailable
 from watchtower.engine.scheduler import Scheduler, SchedulerBusy
 from watchtower.engine.workflow import Step, Workflow, WorkflowResult
 from watchtower.roles import Role, load_roles
@@ -46,7 +46,7 @@ class JobRunner:
     """Runs a job as a checkpointed plan → answer workflow and decides paused vs failed."""
 
     def __init__(self, settings: Settings, conn: sqlite3.Connection, socket: ModelSocket,
-                 scheduler: Scheduler, bus: Bus, beacon_factory=None):
+                 scheduler: Scheduler, bus: Bus, beacon_factory=None, sandbox=None):
         self._jobs = JobStore(conn)
         self._socket = socket
         self._scheduler = scheduler
@@ -58,12 +58,14 @@ class JobRunner:
                 return Beacon(Search(), Fetcher(), Glass(load_glass_rules("f1"), ask), Knowledge(conn),
                               AuditLog(conn))
         self._tower = TowerPipeline(self._ask_role, load_roles(tiers=settings.tiers), Approvals(conn), bus,
-                                    Knowledge(conn), beacon_factory=beacon_factory)
+                                    Knowledge(conn), beacon_factory=beacon_factory,
+                                    sandbox=sandbox or Sandbox(settings, AuditLog(conn)))
         checkpoints = settings.home / "checkpoints.db"
         self._wfs = {
             "demo": Workflow([Step("plan", self._plan), Step("answer", self._answer)], checkpoints,
                              should_pause=self._jobs.pause_requested),
             "tower": Workflow(self._tower.steps(), checkpoints, should_pause=self._jobs.pause_requested),
+            "app": Workflow(self._tower.app_steps(), checkpoints, should_pause=self._jobs.pause_requested),
         }
 
     def start(self, job_id: str, tier: str = "small", extra: dict | None = None) -> RunOutcome:

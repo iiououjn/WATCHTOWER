@@ -47,11 +47,16 @@ def _open():
     return settings, connect(settings.db_path)
 
 
+def make_sandbox(settings: Settings, conn) -> Sandbox:
+    return Sandbox(settings, AuditLog(conn))
+
+
 def _runner(settings: Settings, conn) -> JobRunner:
     audit = AuditLog(conn)
     bus = Bus(audit)
     socket = build_socket(settings, Budget(conn), audit)
-    return JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus)
+    return JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus,
+                     sandbox=make_sandbox(settings, conn))
 
 
 def _report(outcome: RunOutcome, conn) -> None:
@@ -66,7 +71,7 @@ def _report(outcome: RunOutcome, conn) -> None:
             typer.echo(_clean(pending.summary))
             typer.echo(f"\nApprove with: watchtower approve {outcome.job_id}   (or add --reject)", err=True)
         else:
-            typer.echo(f"Job {outcome.job_id} paused: {outcome.reason}", err=True)
+            typer.echo(_clean(f"Job {outcome.job_id} paused: {outcome.reason}"), err=True)
             typer.echo(f"Resume with: watchtower resume {outcome.job_id}", err=True)
     else:
         typer.echo(f"Job {outcome.job_id} failed: {outcome.reason}", err=True)
@@ -257,6 +262,8 @@ def build(
     goal: str,
     yes: bool = typer.Option(False, "--yes", help="Skip CPO questions and auto-approve the spec"),
     offline: bool = typer.Option(False, "--offline", help="Do not search the web"),
+    app: bool = typer.Option(False, "--app", help="Build a working web app (floors 2-3)"),
+    research: bool = typer.Option(False, "--research", help="Research the web first (app jobs)"),
     max_tokens: Optional[int] = typer.Option(None, min=1, help="Token budget for this job"),
 ):
     """Run a goal through the tower: CPO spec → your approval → Floor 1 → gate."""
@@ -264,7 +271,7 @@ def build(
         typer.echo("Error: goal must not be empty", err=True)
         raise typer.Exit(2)
     settings, conn = _open()
-    job = JobStore(conn).create(goal, pipeline="tower")
+    job = JobStore(conn).create(goal, pipeline="app" if app else "tower")
     Budget(conn).open(job.id, settings.tower_max_tokens if max_tokens is None else max_tokens,
                       settings.default_max_seconds, settings.default_max_usd)
     AuditLog(conn).append("owner", "job_created", {"prompt": job.prompt, "pipeline": "tower"}, job.id)
@@ -287,7 +294,8 @@ def build(
                 JobStore(conn).set_status(job.id, "failed", "cancelled by owner during CPO questions")
                 typer.echo(f"\nJob {job.id} cancelled.", err=True)
                 raise typer.Exit(130)
-        outcome = runner.start(job.id, extra={"answers": answers, "auto_approve": yes, "offline": offline})
+        outcome = runner.start(job.id, extra={"answers": answers, "auto_approve": yes, "offline": offline,
+                                                    "research": research})
     finally:
         runner.close()
     _report(outcome, conn)
