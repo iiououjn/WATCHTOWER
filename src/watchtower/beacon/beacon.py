@@ -28,6 +28,11 @@ class Beacon:
             if len(accepted) >= self._max_pages:
                 break
             known = self._knowledge.has_source(result.url)
+            if known is not None and not (self._glass.domain_allowed(result.url) and self._glass.credibility(result.url)):
+                # accepted earlier through another floor's glass: this glass would refuse it, so it never passes
+                self._audit.append("beacon", "beacon_skip", {"url": result.url, "reason": "not allowed by this glass"},
+                                   job_id)
+                continue
             if known is not None:  # already passed the glass earlier: reuse, don't refetch or re-judge
                 self._audit.append("beacon", "beacon_cached", {"url": result.url, "doc_id": known}, job_id)
                 accepted.append(known)

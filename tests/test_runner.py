@@ -306,7 +306,7 @@ def online_tower(conn, settings):
         socket = ModelSocket(settings, budget, audit, completion_fn=model, unload_fn=lambda m: None,
                              resident_fn=lambda: [], free_ram_fn=lambda: 100)
         runner = JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus,
-                           beacon_factory=lambda ask: beacon)
+                           beacon_factory=lambda ask, floor="f1": beacon)
         job = jobs.create("compare lighthouse lenses", pipeline="tower")
         budget.open(job.id, 100_000, 3600, 0.0)
         return runner, model, job
@@ -805,3 +805,76 @@ def test_f1_context_ranks_credible_sources_first(conn):
     pipe._knowledge = k
     text = pipe._context("fresnel lenses")
     assert text.index("nps.gov") < text.index("blog.example") and "credible source" in text
+
+
+class LookoutFactory:
+    def __init__(self, conn):
+        self.conn, self.calls = conn, []
+
+    def __call__(self, ask, floor="f1"):
+        factory = self
+
+        class B:
+            def research(self, query, job_id):
+                factory.calls.append((floor, query))
+                Knowledge(factory.conn).add(("Reference for " + query + ": use send_response(200). ") * 5,
+                                            "https://docs.python.org/3/ref/" + floor)
+                Knowledge(factory.conn).add(("Reference for " + query + ": see stackoverflow. ") * 5,
+                                            "https://stackoverflow.com/q/" + floor)
+                Knowledge(factory.conn).add(("Reference for " + query + ": owasp says. ") * 5,
+                                            "https://owasp.org/" + floor)
+                return []
+        return B()
+
+
+@pytest.fixture
+def lookout_tower(conn, settings, tmp_path):
+    audit = AuditLog(conn)
+    bus, budget, jobs = Bus(audit), Budget(conn), JobStore(conn)
+
+    def make(replies=None, **sandbox_kw):
+        factory = LookoutFactory(conn)
+        model = RoleModel({**TOWER_REPLIES, **APP_REPLIES, **(replies or {})})
+        socket = ModelSocket(settings, budget, audit, completion_fn=model, unload_fn=lambda m: None,
+                             resident_fn=lambda: [], free_ram_fn=lambda: 100)
+        sandbox = FakeSandbox(tmp_path / "ws", **sandbox_kw)
+        runner = JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus,
+                           beacon_factory=factory, sandbox=sandbox)
+        job = jobs.create("a todo web app", pipeline="app")
+        budget.open(job.id, 200_000, 3600, 0.0)
+        return runner, model, sandbox, job, factory
+    return make
+
+
+def test_without_research_no_floor_asks_the_beacon(lookout_tower):
+    runner, model, sandbox, job, factory = lookout_tower(http="None")
+    runner.start(job.id, extra={"auto_approve": True})
+    assert factory.calls == []
+    runner.close()
+
+
+def test_floors_ask_the_beacon_through_their_glass_with_research(lookout_tower):
+    runner, model, sandbox, job, factory = lookout_tower(
+        {"f1.lead": [{"tasks": ["todo apps"]}], "f1.worker": [{"result": "todo", "sources": []}]},
+        qa_ok=[False, True])
+    runner.start(job.id, extra={"auto_approve": True, "research": True})
+    floors = [f for f, q in factory.calls]
+    assert "f2" in floors and "f4" in floors
+    arch = [p for c, p in zip(model.calls, model.prompts) if c == "f2.architect"][0]
+    assert "docs.python.org/3/ref/f2" in arch and "stackoverflow.com/q/f2" not in arch
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert any("docs.python.org/3/ref/f4" in p for p in coder)
+    runner.close()
+
+
+def test_crash_lookup_reaches_build_hr(lookout_tower):
+    arch = {**APP_REPLIES["f2.architect"][0], "routes": APP_REPLIES["f2.architect"][0]["routes"]
+            + [{"method": "GET", "path": "/items", "shows": "items"}]}
+    runner, model, sandbox, job, factory = lookout_tower(
+        {"f1.lead": [{"tasks": ["todo apps"]}], "f1.worker": [{"result": "todo", "sources": []}],
+         "f2.architect": [arch]}, probe=[500, 200])
+    runner.start(job.id, extra={"auto_approve": True, "research": True})
+    assert ("f3", "KeyError: items python") in factory.calls
+    hr = [p for c, p in zip(model.calls, model.prompts) if c == "f3.hr"]
+    assert hr and "stackoverflow.com/q/f3" in hr[0]
+    runner.close()
