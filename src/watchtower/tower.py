@@ -123,7 +123,15 @@ class TowerPipeline:
         checks = self._plan_qa(data, plan, qa_office)
         expect = f3_office.expect(spec, plan["routes"])
         for attempt in range(self._g.max_send_backs + 1):
-            package, f3, f4, sec, audit = dev.build(spec, plan, feedback, checks), None, None, None, ""
+            written: list[int] = []  # F2 workers write the missing planned files first (MVP unit first)
+
+            def on_unit(i: int, n: int, paths: list[str]) -> None:
+                written.append(i)
+                self._post(data, "f2", "doing", f"coder unit {i}/{n} written: {', '.join(paths)}")
+            unit_notes = dev.write_units(spec, plan, checks, on_unit=on_unit)
+            package = dev.build(spec, plan, list(feedback) + unit_notes, checks,
+                                test_first=bool(written) and not feedback and not unit_notes)
+            f3, f4, sec, audit = None, None, None, ""
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
             self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "
                        f"after {len(package.checks_run)} round(s) (attempt {attempt + 1})")

@@ -753,3 +753,13 @@ def test_gate_prompt_fits_with_maximum_owner_rules(app_tower, settings):
     assert gate.index("Guardrails") < gate.index("Reply as JSON")  # the JSON instruction comes after the rules
     runner.close()
 
+
+
+def test_f2_unit_workers_write_before_the_test_loop(app_tower, conn):
+    from watchtower.floors.board import Board
+    runner, model, sandbox, job = app_tower()
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert model.calls.count("f2.coder") == 1  # one unit wrote both files; tests passed without a fix call
+    notes = [n["text"] for n in Board(Bus(AuditLog(conn))).notes(job.id) if n["floor"] == "f2"]
+    assert any("unit 1/1" in t for t in notes)
+    runner.close()

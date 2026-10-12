@@ -334,3 +334,61 @@ def test_third_party_imports_allowed_when_guardrails_say_so(tmp_path):
     pkg = DevFloor(ARCH, CODER, ask=s, workspace=Workspace(tmp_path), run=Runner([OK]), stdlib_only=False).build(
         SPEC, {"files": [], "entry": "app.py"}, [])
     assert pkg.checks_run[-1]["pass"]
+
+
+from watchtower.engine.model_socket import BadModelOutput  # noqa: E402
+from watchtower.floors.f2_dev.devfloor import units  # noqa: E402
+
+PLAN3 = {"entry": "app.py", "routes": [], "files": [
+    {"path": "store.py", "purpose": "data"}, {"path": "app.py", "purpose": "server"},
+    {"path": "test_app.py", "purpose": "tests"}]}
+
+
+def test_units_put_the_mvp_first_and_cap_sizes():
+    many = {"entry": "app.py", "routes": [], "files": [{"path": f"m{i}.py", "purpose": "x"} for i in range(13)]
+            + [{"path": "app.py", "purpose": "server"}, {"path": "test_app.py", "purpose": "t"}]}
+    split = units(many)
+    assert [f["path"] for f in split[0]] == ["app.py", "test_app.py"]
+    assert len(split) <= 4 and all(0 < len(u) <= 3 for u in split)
+    paths = [f["path"] for u in split for f in u]
+    assert len(paths) == len(set(paths)) and paths[2] == "m0.py"
+
+
+def test_unit_workers_write_only_their_own_files(tmp_path):
+    script = Script({"f2.coder": [{"files": [APP, TEST, {"path": "evil.py", "content": "x"}]},
+                                  {"files": [{"path": "store.py", "content": "S = 1\n"}]}]})
+    d, seen = dev(tmp_path, script, Runner([OK])), []
+    notes = d.write_units(SPEC, PLAN3, on_unit=lambda i, n, paths: seen.append((i, n, paths)))
+    assert sorted(Workspace(tmp_path).files()) == ["app.py", "store.py", "test_app.py"]
+    assert any("evil.py" in n for n in notes) and seen == [(1, 2, ["app.py", "test_app.py"]), (2, 2, ["store.py"])]
+    second = script.prompts["f2.coder"][1]
+    assert "store.py" in second and "print('app')" in second  # later units see what earlier units wrote
+
+
+def test_garbage_unit_reply_costs_only_that_unit(tmp_path):
+    calls = []
+
+    def ask(role, prompt):
+        calls.append(prompt)
+        if len(calls) == 1:
+            raise BadModelOutput("x")
+        return {"files": [{"path": "store.py", "content": "S = 1\n"}]}
+    d = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([OK]))
+    d.write_units(SPEC, PLAN3)
+    assert Workspace(tmp_path).files() == ["store.py"] and len(calls) == 2
+
+
+def test_units_skip_files_that_already_exist(tmp_path):
+    Workspace(tmp_path).write("app.py", "x = 1\n")
+    Workspace(tmp_path).write("test_app.py", "import unittest\n")
+    script = Script({"f2.coder": [{"files": [{"path": "store.py", "content": "S = 1\n"}]}]})
+    dev(tmp_path, script, Runner([OK])).write_units(SPEC, PLAN3)
+    assert len(script.prompts["f2.coder"]) == 1 and "store.py" in script.prompts["f2.coder"][0]
+
+
+def test_build_tests_first_when_units_just_wrote_the_files(tmp_path):
+    Workspace(tmp_path).write("app.py", "x = 1\n")
+    Workspace(tmp_path).write("test_app.py", "import unittest\n")
+    script = Script({"f2.coder": [{"files": [APP]}]})
+    package = dev(tmp_path, script, Runner([OK])).build(SPEC, PLAN3, [], test_first=True)
+    assert package.checks_run[-1]["pass"] and script.prompts["f2.coder"] == []
