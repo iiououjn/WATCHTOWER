@@ -13,6 +13,8 @@ from watchtower.engine.gate import Gate
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput
+from watchtower.engine.qafloor import QAFloor, run_qa
+from watchtower.engine.releases import Releases
 from watchtower.engine.workflow import Step
 from watchtower.engine.workspace import Workspace
 from watchtower.roles import Role
@@ -52,7 +54,8 @@ class TowerPipeline:
 
     def __init__(self, ask: Callable[[Role, dict, str], dict], roles: dict[str, Role],
                  approvals: Approvals, bus: Bus, knowledge: Knowledge,
-                 beacon_factory: Callable[[Callable[[str], dict]], Beacon] | None = None, sandbox=None):
+                 beacon_factory: Callable[[Callable[[str], dict]], Beacon] | None = None, sandbox=None,
+                 releases: Releases | None = None):
         self._ask = ask
         self._roles = roles
         self._approvals = approvals
@@ -60,6 +63,7 @@ class TowerPipeline:
         self._knowledge = knowledge
         self._beacon_factory = beacon_factory
         self._sandbox = sandbox
+        self._releases = releases
 
     def steps(self) -> list[Step]:
         return [Step("spec", self._spec), Step("approval", self._approval), Step("f1", self._f1)]
@@ -78,32 +82,43 @@ class TowerPipeline:
         run = lambda cmd: self._sandbox.run(job_id, cmd, timeout=90)  # noqa: E731
         dev = DevFloor(r["f2.architect"], r["f2.coder"], ask=ask, workspace=ws, run=run)
         gate = Gate(ask, r["f5.dev_gate"])
+        qa = QAFloor(r["f4.qa"], ask)
         research = (data.get("f1") or {}).get("summary", "")
         plan, feedback = dev.plan(spec, research, []), []
         for attempt in range(MAX_SEND_BACKS + 1):
-            package, f3 = dev.build(spec, plan, feedback), None
+            package, f3, f4 = dev.build(spec, plan, feedback), None, None
             if package.checks_run and package.checks_run[-1].get("pass") and plan["entry"] not in ws.files():
                 feedback = [f"the planned entry file {plan['entry']} does not exist; create it"]
                 package = WorkPackage("f2", package.summary, ws.files(), [], package.checks_run +
                                       [{"check": "entry", "pass": False}], feedback)
             elif package.checks_run and package.checks_run[-1].get("pass"):
                 f3 = smoke_test(run, plan["entry"])
-                package = WorkPackage("dev", f"{package.summary}\n\n{f3.summary}\n\nCode:\n{ws.snapshot(3000)}",
-                                      ws.files(), [], package.checks_run + f3.checks_run,
-                                      package.open_questions + f3.open_questions)
+                if f3.checks_run[-1]["pass"]:
+                    f4 = run_qa(run, plan["entry"], qa.write_checks(spec, ws.snapshot()))
+                later = [p for p in (f3, f4) if p is not None]
+                package = WorkPackage("dev", "\n\n".join([package.summary] + [p.summary for p in later])
+                                      + f"\n\nCode:\n{ws.snapshot(3000)}", ws.files(), [],
+                                      package.checks_run + [c for p in later for c in p.checks_run],
+                                      package.open_questions + [q for p in later for q in p.open_questions])
             verdict = gate.check(spec, package, DEV_ROUTES)
             self._bus.publish("gate.verdict", {"floor": "dev", "attempt": attempt, "passed": verdict.passed,
                                                "reasons": verdict.reasons, "route": verdict.route}, job_id)
             if verdict.passed:
+                if self._releases is not None:
+                    self._releases.record(job_id, plan["entry"], ws.root, ws.files())
+                self._bus.publish("app.released", {"entry": plan["entry"], "files": len(ws.files())}, job_id)
                 return {"dev": package.to_dict(), "files": ws.files(), "workspace": str(ws.root),
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
                                    "Note: written by a local AI and tested only inside the sandbox — untested on "
                                    "your Mac. Read the code before running it.\n"
                                    f"Run it: cd {shlex.quote(str(ws.root))} && python {shlex.quote(plan['entry'])}"
-                                   "  (then open http://127.0.0.1:8000)")}
+                                   "  (then open http://127.0.0.1:8000)\n"
+                                   f"Safer — deploy it isolated, with no internet: watchtower deploy {job_id}")}
             feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]
             if f3 is not None and not f3.checks_run[-1]["pass"]:  # show the coder the app's real error
                 feedback = feedback + ["Floor 3 started the app and it failed:\n" + untrusted("sandbox", f3.summary)]
+            elif f4 is not None and not f4.checks_run[-1]["pass"]:
+                feedback = feedback + ["Floor 4 QA checks failed:\n" + untrusted("sandbox", f4.summary)]
             if verdict.route in ("design", "research"):
                 plan = dev.plan(spec, research, feedback)
         raise NeedsOwner(f"gate rejected the app {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")

@@ -23,7 +23,7 @@ class Settings:
     default_max_usd: float = 0.0
     min_free_ram_pct: int = 20
     agent_slots: int = 1
-    sandbox_image: str = "python:3.12-slim"
+    sandbox_image: str = "python:latest"
     num_ctx: int = 6144  # set explicitly so Ollama never silently truncates the system prompt
     max_output_tokens: int = 2048
     online: bool = False  # the Beacon may search the web
@@ -40,6 +40,6 @@ def load_settings() -> Settings:
         home=home,
         tiers=dict(DEFAULT_TIERS),
         min_free_ram_pct=int(os.environ.get("WATCHTOWER_MIN_FREE_RAM_PCT", 20)),
-        sandbox_image=os.environ.get("WATCHTOWER_SANDBOX_IMAGE", "python:3.12-slim"),
+        sandbox_image=os.environ.get("WATCHTOWER_SANDBOX_IMAGE", "python:latest"),
         online=os.environ.get("WATCHTOWER_OFFLINE") != "1",
     )

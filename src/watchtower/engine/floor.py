@@ -31,7 +31,7 @@ def untrusted(source: str, text: str) -> str:
 
 
 SOURCE_ATTR = re.compile(r'<untrusted source="([^"]*)">')
-REALITY_FLOORS = {"f2", "f3", "dev"}
+REALITY_FLOORS = {"f2", "f3", "f4", "dev"}
 SECOND_LEVEL = {"co", "com", "org", "net", "gov", "ac", "edu"}
 
 

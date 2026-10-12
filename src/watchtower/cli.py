@@ -14,6 +14,7 @@ from watchtower.engine.beacon.glass import Glass, load_glass_rules
 from watchtower.engine.beacon.search import Search, SearchUnavailable
 from watchtower.engine.bus import Bus
 from watchtower.engine.db import connect
+from watchtower.engine.deploy import DeployError, Deployer
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.governor.budget import Budget
@@ -274,7 +275,7 @@ def build(
     job = JobStore(conn).create(goal, pipeline="app" if app else "tower")
     Budget(conn).open(job.id, settings.tower_max_tokens if max_tokens is None else max_tokens,
                       settings.default_max_seconds, settings.default_max_usd)
-    AuditLog(conn).append("owner", "job_created", {"prompt": job.prompt, "pipeline": "tower"}, job.id)
+    AuditLog(conn).append("owner", "job_created", {"prompt": job.prompt, "pipeline": job.pipeline}, job.id)
     runner = _runner(settings, conn)
     try:
         answers = []
@@ -358,3 +359,55 @@ def beacon(query: str, pages: int = typer.Option(3, min=1, max=10)):
         elif e.action == "glass_pass":
             typer.echo(_clean(f"✓ {e.detail.get('url')}"))
     typer.echo(f"{len(docs)} page(s) added to knowledge (untrusted).")
+
+
+def make_deployer(settings: Settings, conn) -> Deployer:
+    return Deployer(settings, conn, AuditLog(conn))
+
+
+def _deploy_call(fn, *args):
+    try:
+        return fn(*args)
+    except DeployError as e:
+        typer.echo(_clean(f"Deploy failed: {e}"), err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def deploy(job_id: str, name: str = typer.Option("app", "--name", help="Deployment name (slot)")):
+    """Deploy a finished app job to local Docker: no internet for the app, reachable only on this Mac."""
+    settings, conn = _open()
+    job = JobStore(conn).get(job_id)
+    if job is None or job.pipeline != "app" or job.status != "done":
+        state = "unknown" if job is None else f"a {job.pipeline} job that is {job.status}"
+        typer.echo(f"Error: job {job_id} is {state}; only finished app jobs (build --app) can be deployed", err=True)
+        raise typer.Exit(2)
+    d = _deploy_call(make_deployer(settings, conn).deploy, job_id, name)
+    typer.echo(f"Deployed job {job_id} as '{d.name}' (deployment {d.id}): http://127.0.0.1:{d.port}\n"
+               "Isolated: the app has no internet, is reachable only from this Mac, and its pages may only "
+               "talk to the app itself (strict CSP). Links you click can still open other sites.\n"
+               f"Stop it: watchtower undeploy {d.name}    Previous version: watchtower rollback {d.name}")
+
+
+@app.command()
+def rollback(name: str):
+    """Go back to the previous deployment of NAME."""
+    settings, conn = _open()
+    d = _deploy_call(make_deployer(settings, conn).rollback, name)
+    typer.echo(f"'{d.name}' rolled back to deployment {d.id} (job {d.job_id}): http://127.0.0.1:{d.port}")
+
+
+@app.command()
+def undeploy(name: str):
+    """Stop and remove the running deployment NAME (images are kept for rollback)."""
+    settings, conn = _open()
+    _deploy_call(make_deployer(settings, conn).undeploy, name)
+    typer.echo(f"'{name}' stopped.")
+
+
+@app.command()
+def deployments(limit: int = typer.Option(20, min=1, max=200)):
+    """List deployments, newest first."""
+    settings, conn = _open()
+    for d in make_deployer(settings, conn).list(limit):
+        typer.echo(f"{d.id:>4}  {d.name:<12} job {d.job_id}  127.0.0.1:{d.port}  {d.status:<11} {d.created_at}")

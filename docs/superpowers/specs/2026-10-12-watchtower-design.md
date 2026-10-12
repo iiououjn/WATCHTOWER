@@ -129,7 +129,7 @@ Every step writes a checkpoint. On crash or restart, the Scheduler resumes each 
 | **F1 Research** | Spec → research brief | Every claim has a source link; sources passed Glass 1 |
 | **F2 Dev** | Brief → architecture + code (workers drive **Aider** inside the Sandbox) | Lint, type check, unit tests pass in Sandbox |
 | **F3 Build** | Code → MVP → full app (Aider inside the Sandbox) | App builds and runs in Sandbox; smoke test |
-| **F4 Deploy/QA** | App → deployed + QA report | Playwright E2E pass; health check; rollback ready. Default deploy target: local Docker. Vercel (free plan) optional, owner-approved, token from Keychain |
+| **F4 Deploy/QA** | App → deployed + QA report | QA model (other family) writes HTTP acceptance checks, run in Sandbox; pass → release (file hashes). Owner runs `watchtower deploy`: local Docker, internal network (no internet), 127.0.0.1 only, CSP edge; health check; auto-rollback. Playwright later (opt-in, ~1.5 GB). Vercel (free plan) later, owner-approved, token from Keychain |
 | **F5 Oversight** | Every package → verdict | Guardrails, Semgrep + gitleaks + `npm audit`/`pip-audit`, spec match, cross-family model review |
 
 **Coding engine:** F2/F3 workers do not implement their own file-editing loop. They orchestrate **Aider** (open source, Ollama-compatible) running inside the Sandbox, giving it scoped tasks and collecting diffs + test results into the work package.
