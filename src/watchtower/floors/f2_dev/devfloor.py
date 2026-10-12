@@ -127,7 +127,7 @@ class DevFloor:
             if path is not None and path.lower() not in seen:  # one name per file, even on case-blind disks
                 seen.add(path.lower())
                 files.append({"path": path, "purpose": _UNSAFE.sub("", str(f.get("purpose", ""))).strip()[:80]})
-        entry = str(out.get("entry") or "app.py").strip()
+        entry = _plan_path(out.get("entry")) or "app.py"
         safe = _SAFE_ENTRY.fullmatch(entry) and ".." not in entry.split("/")
         entry, files = (entry if safe else "app.py"), files[:15]
         files = [f for f in files if f["path"] == entry or f["path"].lower() != entry.lower()]
@@ -139,12 +139,13 @@ class DevFloor:
                     on_unit: Callable[[int, int, list[str]], None] | None = None) -> list[str]:
         """F2 workers: one coder call per unit that still has missing files, back to back on the coder model.
         A worker writes only its own unit's files; a garbled reply costs that unit (the fix loop catches up)."""
-        present = set(self._ws.files())
-        todo = [[f for f in u if f["path"] not in present] for u in units(plan)]
+        present = {p.lower() for p in self._ws.files()}  # macOS disks are case-blind: App.py is app.py
+        todo = [[f for f in u if f["path"].lower() not in present] for u in units(plan)]
         todo = [u for u in todo if u]  # a worker writes only files that do not exist yet: never a fixed one
         qa = ("Floor 4 QA will run these HTTP checks against the app:\n"
               + untrusted("f4", _compact_checks(qa_checks)) + "\n") if qa_checks else ""
         notes: list[str] = []
+        stray: list[str] = []
         for i, unit in enumerate(todo, start=1):
             paths = [f["path"] for f in unit]
             parts = dict(spec=_spec_text(spec), plan=untrusted("f2.architect", json.dumps(plan)), qa=qa, i=i,
@@ -159,13 +160,14 @@ class DevFloor:
                 continue
             files = reply.get("files") if isinstance(reply.get("files"), list) else []
             mine = [f for f in files if isinstance(f, dict) and f.get("path") in paths and f.get("delete") is not True]
-            notes += [f"File rejected: {str(f.get('path'))[:100]!r} is not in coder {i}'s unit"
-                      for f in files if isinstance(f, dict) and f not in mine]
+            stray += [str(f.get("path"))[:100] for f in files if isinstance(f, dict) and f not in mine]
             before = set(self._ws.files())
             notes += self._write(mine)
             if on_unit is not None and set(self._ws.files()) - before:
                 on_unit(i, len(todo), paths)
-        return notes
+        written = {p.lower() for p in self._ws.files()}  # a stray file another unit then wrote is no news
+        return notes + [f"File rejected: {p!r} was outside your unit" for p in dict.fromkeys(stray)
+                        if p.lower() not in written]
 
     def build(self, spec: dict, plan: dict, feedback: Sequence[str], qa_checks: Sequence[dict] = (),
               test_first: bool = False) -> WorkPackage:

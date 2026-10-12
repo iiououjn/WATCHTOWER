@@ -403,7 +403,7 @@ def test_units_never_overwrite_existing_files(tmp_path):
     script = Script({"f2.coder": [{"files": [{"path": "util.py", "content": "U = 1\n"},
                                              {"path": "store.py", "content": "REWRITE\n"}]}]})
     notes = dev(tmp_path, script, Runner([OK])).write_units(SPEC, plan)
-    assert Workspace(tmp_path).read("store.py") == "FIXED = 1\n" and any("store.py" in n for n in notes)
+    assert Workspace(tmp_path).read("store.py") == "FIXED = 1\n" and Workspace(tmp_path).read("util.py") == "U = 1\n"
 
 
 def test_plan_paths_are_normalised_and_unwritable_ones_dropped(tmp_path):
@@ -436,3 +436,26 @@ def test_low_memory_in_a_unit_pauses_instead_of_retrying(tmp_path):
     with pytest.raises(LowMemory):
         d.write_units(SPEC, PLAN3)
     assert len(calls) == 1
+
+
+def test_entry_is_normalised_like_plan_paths(tmp_path):
+    for entry, expected in (("./server.py", "server.py"), ("src//app.py", "src/app.py")):
+        script = Script({"f2.architect": [{"entry": entry, "routes": [], "files": [
+            {"path": expected, "purpose": "s"}]}]})
+        plan = DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=Runner([OK])).plan(SPEC, "", [])
+        assert plan["entry"] == expected and [f["path"] for f in plan["files"]] == [expected]
+
+
+def test_units_compare_names_case_blind(tmp_path):
+    Workspace(tmp_path).write("App.py", "FIXED = 1\n")
+    plan = {"entry": "app.py", "routes": [], "files": [{"path": "app.py", "purpose": "s"}]}
+    script = Script({"f2.coder": [{"files": [{"path": "app.py", "content": "REWRITE\n"}]}]})
+    dev(tmp_path, script, Runner([OK])).write_units(SPEC, plan)
+    assert script.prompts["f2.coder"] == [] and Workspace(tmp_path).read("App.py") == "FIXED = 1\n"
+
+
+def test_out_of_unit_rejection_is_dropped_once_the_owner_unit_wrote_it(tmp_path):
+    script = Script({"f2.coder": [{"files": [APP, TEST, {"path": "store.py", "content": "WRONG\n"}]},
+                                  {"files": [{"path": "store.py", "content": "S = 1\n"}]}]})
+    notes = dev(tmp_path, script, Runner([OK])).write_units(SPEC, PLAN3)
+    assert notes == [] and Workspace(tmp_path).read("store.py") == "S = 1\n"

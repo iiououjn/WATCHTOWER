@@ -96,8 +96,10 @@ except Exception:
     p.kill()
 log.close()
 print("WATCHTOWER_PROBE " + json.dumps(results))
-print("WATCHTOWER_LOG " + json.dumps(open(log.name, "rb").read().decode(errors="replace")[-1000:]))
+print("WATCHTOWER_LOG " + json.dumps(open(log.name, "rb").read().decode(errors="replace")[-2500:]))
 """
+_ACCESS = re.compile(r'"(GET|POST|HEAD|PUT|DELETE) \S* HTTP/[\d.]+" \d{3}')
+_ERROR = re.compile(r"\b\w*(Error|Exception)\b")
 _PROBE = re.compile(r"^WATCHTOWER_PROBE (.*)$", re.M)
 _PROBE_LOG = re.compile(r"^WATCHTOWER_LOG (.*)$", re.M)
 _ROUTE_PATH = re.compile(r"/[A-Za-z0-9._~/?=&%+-]{0,80}")
@@ -116,7 +118,7 @@ def route_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: l
     silence). Exactly one result line counts: a second one means the app tried to forge it."""
     paths = _probe_paths(routes)
     if not paths:
-        return WorkPackage("f3", "Full app: no other GET routes to probe", [entry], [],
+        return WorkPackage("f3", "Full app: no other GET routes to probe (MVP: GET / answered)", [entry], [],
                            [{"check": "routes", "pass": True, "results": []}], [])
     result = run(["python", "-c", PROBE_SCRIPT, entry, json.dumps(paths)])
     output = (result.stdout or "") + (result.stderr or "")
@@ -139,11 +141,14 @@ def route_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: l
         log = ""
     if result.timed_out:
         bad_note = "probe timed out: the app answered too slowly"
-    error = [ln.strip() for ln in str(log).splitlines() if ln.strip()][-2:] if failed else []
+    useful = [ln.strip() for ln in str(log).splitlines() if ln.strip() and not _ACCESS.search(ln)]
+    errors = [ln for ln in useful if _ERROR.search(ln)]  # the exception, not the server's access log
+    error = (errors or useful)[-2:] if failed else []
     lines = [f"- GET {r['path']} → {r['status'] if r['status'] is not None else 'no answer'}" for r in results]
     summary = (f"Full app: {len(results) - len(failed)}/{len(results)} routes answered"
                + (f" ({bad_note})" if bad_note else "")  # the cause first: feedback items are cut at 600 chars
-               + (f"\nApp error: {' | '.join(error)[-300:]}" if error else "") + "\n" + "\n".join(lines))
+               + (f"\nApp error: {' | '.join(error)[-300:]}" if error else "") + "\n" + "\n".join(lines)
+               + (f"\nApp output:\n{chr(10).join(useful)[-600:]}" if failed and useful else ""))
     questions = [f"GET {r['path']} did not answer properly" for r in failed[:3]]
     return WorkPackage("f3", summary, [entry], [], [{"check": "routes", "pass": not failed, "results": results}],
                        questions)

@@ -131,11 +131,12 @@ class TowerPipeline:
                 self._post(data, "f2", "doing", f"coder unit {i}/{n} written: {', '.join(paths)}")
             unit_notes = dev.write_units(spec, plan, checks, on_unit=on_unit) if units_due else []
             units_due = False
-            missing = [f["path"] for f in plan["files"] if f["path"] not in ws.files()]
+            present = {p.lower() for p in ws.files()}
+            missing = [f["path"] for f in plan["files"] if f["path"].lower() not in present]
             if written and missing:
                 unit_notes.append(f"planned files still missing: {', '.join(missing[:8])}; write them")
-            package = dev.build(spec, plan, list(feedback) + unit_notes, checks,
-                                test_first=bool(written) and not feedback and not unit_notes)
+            package = dev.build(spec, plan, unit_notes + list(feedback), checks,  # unit notes first: never cut
+                                test_first=bool(written) and not feedback and not missing)
             f3, f4, sec, audit = None, None, None, ""
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
             self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "

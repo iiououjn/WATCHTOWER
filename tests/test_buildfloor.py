@@ -134,3 +134,26 @@ def test_full_app_line_leads_the_f3_summary():
 def test_timed_out_probe_says_so():
     run, _ = runner(SandboxResult(124, "", "", True))
     assert "timed out" in route_probe(run, "app.py", ROUTES).summary
+
+
+def test_real_traceback_survives_access_log_noise(tmp_path):
+    (tmp_path / "app.py").write_text(
+        "import os\nfrom http.server import BaseHTTPRequestHandler, HTTPServer\n"
+        "class H(BaseHTTPRequestHandler):\n"
+        "    def do_GET(self):\n"
+        "        if self.path == '/items':\n            raise KeyError('items')\n"
+        "        self.send_response(200); self.end_headers(); self.wfile.write(b'ok')\n"
+        "HTTPServer(('127.0.0.1', int(os.environ['PORT'])), H).serve_forever()\n")
+    paths = ["/items", "/about", "/contact"]
+    out = subprocess.run([sys.executable, "-c", PROBE_SCRIPT, "app.py", json.dumps(paths)],
+                         cwd=tmp_path, capture_output=True, text=True, timeout=30,
+                         env={"WT_PORT": "18766", "PATH": "/usr/bin:/bin"})
+    pkg = route_probe(lambda cmd: SandboxResult(out.returncode, out.stdout, out.stderr, False), "app.py",
+                      [{"method": "GET", "path": p, "fields": [], "shows": ""} for p in paths])
+    first = pkg.summary.splitlines()[1]
+    assert "KeyError" in first and "HTTP/1.1" not in first
+
+
+def test_no_other_routes_still_shows_the_mvp_result():
+    run, _ = runner(SandboxResult(0, "SMOKE_STATUS 200\n", "", False))
+    assert "MVP" in build_check(run, "app.py", "", ROUTES[:1]).summary.splitlines()[0]
