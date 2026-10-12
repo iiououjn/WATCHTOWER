@@ -12,6 +12,7 @@ runner = CliRunner()
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
     monkeypatch.setenv("WATCHTOWER_OFFLINE", "1")  # tests never touch the network
+    monkeypatch.setattr(cli, "docker_status", lambda s, a: (True, "ready"))  # nor real Docker (tests override)
     return tmp_path
 
 
@@ -515,3 +516,19 @@ def test_doctor_checks_every_glass_file(monkeypatch, tmp_path):
     monkeypatch.setattr(glass_mod, "GLASS_DIR", tmp_path)
     result = runner.invoke(cli.app, ["doctor"])
     assert result.exit_code == 1 and "✗ Glass" in result.output and "f3" in result.output
+
+
+def test_run_checks_docker_before_any_model_work(monkeypatch):
+    calls = []
+    use_completion(monkeypatch, lambda **kw: calls.append(kw) or fake_response("{}", 1, 1))
+    monkeypatch.setattr(cli, "docker_status", lambda s, a: (False, "Docker is not running; start Docker Desktop"))
+    result = runner.invoke(cli.app, ["run", "a todo app", "--yes"])
+    assert result.exit_code == 2 and "start Docker Desktop" in result.output and calls == []
+    assert "todo app" not in runner.invoke(cli.app, ["status"]).output  # no orphan job
+
+
+def test_research_does_not_need_docker(monkeypatch):
+    monkeypatch.setattr(cli, "docker_status", lambda s, a: (_ for _ in ()).throw(AssertionError("not asked")))
+    use_completion(monkeypatch, lambda **kw: fake_response('{"title": "t", "goal": "g", "acceptance": ["a"]}', 1, 1))
+    result = runner.invoke(cli.app, ["research", "lighthouses", "--yes", "--offline"])
+    assert "Docker" not in result.output
