@@ -92,12 +92,12 @@ def _report(outcome: RunOutcome, conn) -> None:
 
 
 @app.command()
-def run(
+def ask(
     prompt: str,
     tier: str = typer.Option("small", help="Model tier: small | work | review"),
     max_tokens: Optional[int] = typer.Option(None, min=1, help="Token budget for this job"),
 ):
-    """Run a prompt as a checkpointed plan → answer job."""
+    """Quick question to one model (checkpointed plan → answer); no floors involved."""
     if not prompt.strip():
         typer.echo("Error: prompt must not be empty", err=True)
         raise typer.Exit(2)
@@ -292,15 +292,29 @@ def knowledge_search(query: str, limit: int = typer.Option(5, min=1, max=50)):
 
 
 @app.command()
-def build(
-    goal: str,
-    yes: bool = typer.Option(False, "--yes", help="Skip CPO questions and auto-approve the spec"),
+def run(
+    idea: str,
+    yes: bool = typer.Option(False, "--yes", help="Skip CPO questions; auto-approve spec and sign-off"),
     offline: bool = typer.Option(False, "--offline", help="Do not search the web"),
-    app: bool = typer.Option(False, "--app", help="Build a working web app (floors 2-3)"),
-    research: bool = typer.Option(False, "--research", help="Research the web first (app jobs)"),
+    research: bool = typer.Option(False, "--research", help="Floor 1 researches the web first"),
     max_tokens: Optional[int] = typer.Option(None, min=1, help="Token budget for this job"),
 ):
-    """Run a goal through the tower: CPO spec → your approval → Floor 1 → gate."""
+    """Run an idea through the whole tower: CPO spec → floors 1-5 → CEO → your sign-off."""
+    _tower_job(idea, True, yes, offline, research, max_tokens)
+
+
+@app.command("research")
+def research_cmd(
+    topic: str,
+    yes: bool = typer.Option(False, "--yes", help="Skip CPO questions and auto-approve the spec"),
+    offline: bool = typer.Option(False, "--offline", help="Do not search the web"),
+    max_tokens: Optional[int] = typer.Option(None, min=1, help="Token budget for this job"),
+):
+    """Floor 1 only: CPO spec → research brief with sources → gate."""
+    _tower_job(topic, False, yes, offline, False, max_tokens)
+
+
+def _tower_job(goal: str, app: bool, yes: bool, offline: bool, research: bool, max_tokens: Optional[int]) -> None:
     if not goal.strip():
         typer.echo("Error: goal must not be empty", err=True)
         raise typer.Exit(2)
@@ -415,7 +429,7 @@ def deploy(job_id: str, name: str = typer.Option("app", "--name", help="Deployme
     job = JobStore(conn).get(job_id)
     if job is None or job.pipeline != "app" or job.status != "done":
         state = "unknown" if job is None else f"a {job.pipeline} job that is {job.status}"
-        typer.echo(f"Error: job {job_id} is {state}; only finished app jobs (build --app) can be deployed", err=True)
+        typer.echo(f"Error: job {job_id} is {state}; only finished app jobs (watchtower run) can be deployed", err=True)
         raise typer.Exit(2)
     d = _deploy_call(make_deployer(settings, conn).deploy, job_id, name)
     typer.echo(f"Deployed job {job_id} as '{d.name}' (deployment {d.id}): http://127.0.0.1:{d.port}\n"

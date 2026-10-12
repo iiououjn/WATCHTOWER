@@ -132,7 +132,7 @@ Every step writes a checkpoint. On crash or restart, the Scheduler resumes each 
 - **HR vs F5:** HR checks quality *inside* one floor. F5 checks *across* floors plus guardrails and security.
 - **Idle agents ("breaks"):** agents exist only when the Scheduler assigns a task. On completion they persist context to Memory and go idle (no compute, no tokens). Concurrency default = 1 active thinking agent (8 GB limit), configurable.
 - **Work package (handoff contract):** structured output of each floor — `summary`, `artifacts` (files), `sources`, `checks_run` + results, `open_questions`. Validated against a schema; invalid packages are rejected.
-- **Gate:** F5 evaluates each package → `pass` or `send_back(reasons)`. Max 3 send-backs per gate, then escalate to Owner.
+- **Gate:** F5 evaluates each package → `pass` or `send_back(reasons)`. Every floor handoff (F2→F3→F4→F5) gets a deterministic F5 gate (the floor's own reality checks, recorded as gate events); one cross-family model gate then reviews the whole package against the spec and guardrails. Max send-backs come from `guardrails.yaml` (default 3), then escalate to Owner.
 
 ---
 
@@ -141,14 +141,14 @@ Every step writes a checkpoint. On crash or restart, the Scheduler resumes each 
 | Floor | Input → Output | Objective checks (reality first) |
 |---|---|---|
 | **F1 Research** | Spec → research brief | Every claim has a source link; sources passed Glass 1 |
-| **F2 Dev** | Brief → architecture + code (workers drive **Aider** inside the Sandbox) | Lint, type check, unit tests pass in Sandbox |
-| **F3 Build** | Code → MVP → full app (Aider inside the Sandbox) | App builds and runs in Sandbox; smoke test |
+| **F2 Dev** | Brief → architecture + code. Architect plans files + a routes contract (CTO approves); Coder writes/fixes files in a loop driven by real Sandbox test output; Dev HR reviews | Unit tests pass in Sandbox (runner's own summary, ≥1 real test); standard-library-only check |
+| **F3 Build** | Code → MVP → full app | App runs in Sandbox and answers HTTP 200; Build Lead's home-page expectation (soft); Build HR diagnoses crashes for the coder |
 | **F4 Deploy/QA** | App → deployed + QA report | QA model (other family) writes HTTP acceptance checks, run in Sandbox; pass → release (file hashes). Owner runs `watchtower deploy`: local Docker, internal network (no internet), 127.0.0.1 only, CSP edge; health check; auto-rollback. Playwright later (opt-in, ~1.5 GB). Vercel (free plan) later, owner-approved, token from Keychain |
-| **F5 Oversight** | Every package → verdict | Guardrails, Semgrep + gitleaks + `npm audit`/`pip-audit`, spec match, cross-family model review |
+| **F5 Oversight** | Every package → verdict | `guardrails.yaml`; Bandit + secret patterns (offline; serious findings fail); Spec Auditor; cross-family model gate; retrospective lessons; CEO recommendation → owner sign-off before any release |
 
-**Coding engine:** F2/F3 workers do not implement their own file-editing loop. They orchestrate **Aider** (open source, Ollama-compatible) running inside the Sandbox, giving it scoped tasks and collecting diffs + test results into the work package.
+**Coding engine:** the Coder agent writes complete files through the checked Workspace writer and is driven by real Sandbox test results (a tool-using loop). Aider was dropped: an extra process and RAM on 8 GB, and the loop already gets real test output.
 
-**Guardrails:** an owner-editable policy file (`guardrails.yaml`) that F5 enforces at every gate. v1 rules:
+**Guardrails:** an owner-editable policy file (`guardrails.yaml`, packaged defaults; the owner's copy in `~/.watchtower/` overrides key by key) that F5 enforces at every gate. v1 rules:
 - **Spec match:** output must satisfy the approved spec's acceptance criteria; no unrequested features.
 - **Evidence:** claims cite sources; code claims backed by passing checks.
 - **Safety:** no secrets in code or logs; no disallowed licenses in dependencies; no actions outside the role's tool permissions.
@@ -166,7 +166,7 @@ Each rule maps to a deterministic check where possible, and to a tier-review mod
 ## 7. Beacon + Glass layers
 
 ### Beacon (two sides)
-- **Search side:** targeted search on floor request via **SearXNG** (self-hosted in Docker, free) + page fetch/extract.
+- **Search side:** targeted search on floor request via DuckDuckGo (free, no Docker); SearXNG (self-hosted) optional later + page fetch/extract.
 - **Watch side:** scheduled watch list (security advisories for used dependencies, library releases). Not a continuous full-internet crawl.
 - All results stored in Knowledge (RAG) with provenance (URL, fetch time, hash).
 
@@ -188,7 +188,7 @@ Each glass has floor-specific rules (e.g. Glass 2 only passes technical docs and
 ## 8. Interface
 
 - **API:** FastAPI (REST) + WebSocket for live events.
-- **CLI:** `watchtower run "<idea>"`, `status`, `approve <id>`, `pause`, `resume`, `logs`, `budget`.
+- **CLI:** `watchtower run "<idea>"` (whole tower), `research "<topic>"` (Floor 1 brief), `ask` (one model), `status`, `approve <id>`, `pause`, `resume`, `logs`, `budget`, `deploy`/`rollback`/`undeploy`/`deployments`, `doctor`, `knowledge`, `beacon`.
 - **Dashboard (Next.js, localhost):** animated lighthouse — floors light when active, agents shown working/idle, beacon rotates while searching. Panels: approval queue, job timeline, work packages, audit log, budget meters.
 - **Auth from day one:** local login; data model has `user` and `workspace` scoping so multi-user/SaaS needs no schema rewrite.
 

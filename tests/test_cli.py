@@ -25,7 +25,7 @@ def use_completion(monkeypatch, fn):
 
 def test_run_success(monkeypatch):
     use_completion(monkeypatch, lambda **kw: fake_response("Hello from the tower", 3, 4))
-    result = runner.invoke(cli.app, ["run", "hello"])
+    result = runner.invoke(cli.app, ["ask", "hello"])
     assert result.exit_code == 0, result.output
     assert "Hello from the tower" in result.output
     status = runner.invoke(cli.app, ["status"])
@@ -35,7 +35,7 @@ def test_run_success(monkeypatch):
 @pytest.mark.parametrize("bad", ["", "   "])
 def test_run_rejects_empty_prompt(monkeypatch, bad):
     use_completion(monkeypatch, lambda **kw: fake_response())
-    result = runner.invoke(cli.app, ["run", bad])
+    result = runner.invoke(cli.app, ["ask", bad])
     assert result.exit_code == 2
     assert "empty" in result.output
     assert "No jobs" in runner.invoke(cli.app, ["status"]).output
@@ -46,7 +46,7 @@ def test_run_ollama_down(monkeypatch):
         raise ConnectionError("refused")
 
     use_completion(monkeypatch, broken)
-    result = runner.invoke(cli.app, ["run", "hello"])
+    result = runner.invoke(cli.app, ["ask", "hello"])
     assert result.exit_code == 3
     assert "ollama pull" in result.output
     assert "Traceback" not in result.output
@@ -55,14 +55,14 @@ def test_run_ollama_down(monkeypatch):
 
 def test_run_budget_exceeded(monkeypatch):
     use_completion(monkeypatch, lambda **kw: fake_response("x", 50, 50))
-    result = runner.invoke(cli.app, ["run", "hello", "--max-tokens", "10"])
+    result = runner.invoke(cli.app, ["ask", "hello", "--max-tokens", "10"])
     assert result.exit_code == 1
     assert "budget exceeded" in result.output
 
 
 def test_logs_and_budget(monkeypatch):
     use_completion(monkeypatch, lambda **kw: fake_response("ok", 1, 1))
-    runner.invoke(cli.app, ["run", "hello"])
+    runner.invoke(cli.app, ["ask", "hello"])
     from watchtower.config import load_settings
     from watchtower.engine.db import connect
     from watchtower.engine.jobs import JobStore
@@ -87,7 +87,7 @@ def test_budget_unknown_job():
 @pytest.mark.parametrize("bad", ["0", "-5"])
 def test_run_rejects_non_positive_max_tokens(monkeypatch, bad):
     use_completion(monkeypatch, lambda **kw: fake_response())
-    result = runner.invoke(cli.app, ["run", "hello", "--max-tokens", bad])
+    result = runner.invoke(cli.app, ["ask", "hello", "--max-tokens", bad])
     assert result.exit_code == 2
     assert "No jobs" in runner.invoke(cli.app, ["status"]).output
 
@@ -102,7 +102,7 @@ def test_unexpected_error_never_leaves_job_running(monkeypatch, exc, code, statu
             pass
 
     monkeypatch.setattr(cli, "build_socket", lambda s, b, a: Exploding())
-    result = runner.invoke(cli.app, ["run", "hello"])
+    result = runner.invoke(cli.app, ["ask", "hello"])
     assert result.exit_code == code
     assert runner.invoke(cli.app, ["status"]).output.split()[1] == status
     assert f"job.{status}" in runner.invoke(cli.app, ["logs"]).output
@@ -117,7 +117,7 @@ def latest_job_id():
 
 def test_run_rejects_unknown_tier_before_creating_job(monkeypatch):
     use_completion(monkeypatch, lambda **kw: fake_response())
-    result = runner.invoke(cli.app, ["run", "hello", "--tier", "giant"])
+    result = runner.invoke(cli.app, ["ask", "hello", "--tier", "giant"])
     assert result.exit_code == 2
     assert "No jobs" in runner.invoke(cli.app, ["status"]).output
 
@@ -131,7 +131,7 @@ def test_paused_job_resumes_to_done(monkeypatch):
         return fake_response("final answer", 1, 1)
 
     use_completion(monkeypatch, flaky)
-    assert runner.invoke(cli.app, ["run", "hello"]).exit_code == 3
+    assert runner.invoke(cli.app, ["ask", "hello"]).exit_code == 3
     job_id = latest_job_id()
     state["down"] = False
     result = runner.invoke(cli.app, ["resume", job_id])
@@ -142,7 +142,7 @@ def test_paused_job_resumes_to_done(monkeypatch):
 def test_resume_rejects_unknown_and_done_jobs(monkeypatch):
     use_completion(monkeypatch, lambda **kw: fake_response("ok", 1, 1))
     assert runner.invoke(cli.app, ["resume", "nope"]).exit_code == 2
-    runner.invoke(cli.app, ["run", "hello"])
+    runner.invoke(cli.app, ["ask", "hello"])
     result = runner.invoke(cli.app, ["resume", latest_job_id()])
     assert result.exit_code == 2
     assert "only paused jobs" in result.output
@@ -157,7 +157,7 @@ def test_force_resume_stuck_running_job(monkeypatch):
         return fake_response("recovered", 1, 1)
 
     use_completion(monkeypatch, flaky)
-    runner.invoke(cli.app, ["run", "hello"])
+    runner.invoke(cli.app, ["ask", "hello"])
     job_id = latest_job_id()
     from watchtower.config import load_settings
     from watchtower.engine.db import connect
@@ -172,7 +172,7 @@ def test_force_resume_stuck_running_job(monkeypatch):
 def test_pause_requires_running_job(monkeypatch):
     use_completion(monkeypatch, lambda **kw: fake_response("ok", 1, 1))
     assert runner.invoke(cli.app, ["pause", "nope"]).exit_code == 2
-    runner.invoke(cli.app, ["run", "hello"])
+    runner.invoke(cli.app, ["ask", "hello"])
     result = runner.invoke(cli.app, ["pause", latest_job_id()])
     assert result.exit_code == 2
     assert "not running" in result.output
@@ -234,7 +234,7 @@ def test_terminal_escape_sequences_are_stripped(tmp_path, monkeypatch):
     out = runner.invoke(cli.app, ["knowledge", "search", "lighthouse"]).output
     assert "\x1b" not in out and "\x07" not in out and "lighthouse" in out
     use_completion(monkeypatch, lambda **kw: fake_response("safe \x1b]0;pwned\x07 answer", 1, 1))
-    answer = runner.invoke(cli.app, ["run", "hello"]).output
+    answer = runner.invoke(cli.app, ["ask", "hello"]).output
     assert "\x1b" not in answer and "safe" in answer and "answer" in answer
 
 
@@ -249,14 +249,14 @@ def use_roles(monkeypatch, replies=None):
 
 def test_build_with_yes_runs_to_done(monkeypatch):
     use_roles(monkeypatch)
-    result = runner.invoke(cli.app, ["build", "compare lighthouse lenses", "--yes"])
+    result = runner.invoke(cli.app, ["research", "compare lighthouse lenses", "--yes"])
     assert result.exit_code == 0, result.output
     assert "Fresnel" in result.output
 
 
 def test_build_asks_questions_then_waits_for_approval(monkeypatch):
     model = use_roles(monkeypatch, {"cpo": [{"questions": ["Who is it for?"]}, TOWER_REPLIES["cpo"][0]]})
-    result = runner.invoke(cli.app, ["build", "compare lighthouse lenses"], input="students\n")
+    result = runner.invoke(cli.app, ["research", "compare lighthouse lenses"], input="students\n")
     assert result.exit_code == 3, result.output
     assert "Who is it for?" in result.output
     assert "names two lens types" in result.output
@@ -269,7 +269,7 @@ def test_build_asks_questions_then_waits_for_approval(monkeypatch):
 
 def test_reject_fails_job(monkeypatch):
     use_roles(monkeypatch, {"cpo": [{"questions": []}, TOWER_REPLIES["cpo"][0]]})
-    runner.invoke(cli.app, ["build", "compare lighthouse lenses"])
+    runner.invoke(cli.app, ["research", "compare lighthouse lenses"])
     result = runner.invoke(cli.app, ["approve", latest_job_id(), "--reject"])
     assert result.exit_code == 1
     assert runner.invoke(cli.app, ["status"]).output.split()[1] == "failed"
@@ -282,14 +282,14 @@ def test_approve_without_pending_approval(monkeypatch):
 
 def test_build_continues_when_cpo_questions_fail(monkeypatch):
     use_roles(monkeypatch, {"cpo": ["not json", "still not json", TOWER_REPLIES["cpo"][0]]})
-    result = runner.invoke(cli.app, ["build", "compare lighthouse lenses"])
+    result = runner.invoke(cli.app, ["research", "compare lighthouse lenses"])
     assert "continuing without questions" in result.output
     assert result.exit_code == 3
 
 
 def test_approve_requires_paused_job_and_keeps_approval_pending(monkeypatch):
     use_roles(monkeypatch, {"cpo": [{"questions": []}, TOWER_REPLIES["cpo"][0]]})
-    runner.invoke(cli.app, ["build", "compare lighthouse lenses"])
+    runner.invoke(cli.app, ["research", "compare lighthouse lenses"])
     job_id = latest_job_id()
     from watchtower.config import load_settings
     from watchtower.engine.db import connect
@@ -310,7 +310,7 @@ def test_ctrl_c_during_cpo_questions_does_not_strand_the_job(monkeypatch):
         raise click.exceptions.Abort()
 
     monkeypatch.setattr(cli.typer, "prompt", abort)
-    result = runner.invoke(cli.app, ["build", "compare lighthouse lenses"])
+    result = runner.invoke(cli.app, ["research", "compare lighthouse lenses"])
     assert result.exit_code == 130
     assert runner.invoke(cli.app, ["status"]).output.split()[1] == "failed"
 
@@ -318,7 +318,7 @@ def test_ctrl_c_during_cpo_questions_does_not_strand_the_job(monkeypatch):
 def test_unexpected_error_asking_questions_continues(monkeypatch):
     use_roles(monkeypatch)
     monkeypatch.setattr(cli.JobRunner, "cpo_questions", lambda self, job_id: (_ for _ in ()).throw(RuntimeError("x")))
-    result = runner.invoke(cli.app, ["build", "compare lighthouse lenses"])
+    result = runner.invoke(cli.app, ["research", "compare lighthouse lenses"])
     assert "continuing without questions" in result.output
 
 
@@ -357,13 +357,13 @@ def test_build_offline_flag_is_passed(monkeypatch):
 
     monkeypatch.setattr(cli.JobRunner, "start", spy)
     use_roles(monkeypatch)
-    runner.invoke(cli.app, ["build", "compare lighthouse lenses", "--yes", "--offline"])
+    runner.invoke(cli.app, ["research", "compare lighthouse lenses", "--yes", "--offline"])
     assert seen.get("offline") is True
 
 
 def test_build_uses_tower_budget(monkeypatch):
     use_roles(monkeypatch)
-    runner.invoke(cli.app, ["build", "compare lighthouse lenses", "--yes"])
+    runner.invoke(cli.app, ["research", "compare lighthouse lenses", "--yes"])
     assert "tokens: " in (out := runner.invoke(cli.app, ["budget", latest_job_id()]).output)
     assert "/ 300000" in out
 
@@ -372,7 +372,7 @@ def test_build_app_end_to_end_with_fakes(monkeypatch, tmp_path):
     from conftest import APP_REPLIES, FakeSandbox
     use_roles(monkeypatch, APP_REPLIES)
     monkeypatch.setattr(cli, "make_sandbox", lambda settings, conn: FakeSandbox(tmp_path / "apps"))
-    result = runner.invoke(cli.app, ["build", "a todo web app", "--app", "--yes"])
+    result = runner.invoke(cli.app, ["run", "a todo web app", "--yes"])
     assert result.exit_code == 0, result.output
     assert "App ready" in result.output and "python app.py" in result.output
 
@@ -407,7 +407,7 @@ def done_app_job(monkeypatch, tmp_path):
     from conftest import APP_REPLIES, FakeSandbox
     use_roles(monkeypatch, APP_REPLIES)
     monkeypatch.setattr(cli, "make_sandbox", lambda settings, conn: FakeSandbox(tmp_path / "apps"))
-    assert runner.invoke(cli.app, ["build", "a todo web app", "--app", "--yes"]).exit_code == 0
+    assert runner.invoke(cli.app, ["run", "a todo web app", "--yes"]).exit_code == 0
     return latest_job_id()
 
 
@@ -426,7 +426,7 @@ def test_deploy_refuses_unknown_or_non_app_jobs(monkeypatch):
     monkeypatch.setattr(cli, "make_deployer", lambda settings, conn: fake)
     assert runner.invoke(cli.app, ["deploy", "nope"]).exit_code == 2
     use_completion(monkeypatch, lambda **kw: fake_response("hi", 1, 1))
-    runner.invoke(cli.app, ["run", "hello"])
+    runner.invoke(cli.app, ["ask", "hello"])
     result = runner.invoke(cli.app, ["deploy", latest_job_id()])
     assert result.exit_code == 2 and "app" in result.output and fake.calls == []
 
@@ -462,7 +462,7 @@ def test_sign_off_is_shown_and_rejectable_from_the_cli(monkeypatch, tmp_path):
     use_roles(monkeypatch, APP_REPLIES)
     monkeypatch.setattr(cli, "make_sandbox", lambda settings, conn: FakeSandbox(tmp_path / "apps"))
     monkeypatch.setattr(cli.typer, "prompt", lambda *a, **k: "")
-    runner.invoke(cli.app, ["build", "a todo web app", "--app"])
+    runner.invoke(cli.app, ["run", "a todo web app"])
     job = latest_job_id()
     signoff = runner.invoke(cli.app, ["approve", job])
     assert signoff.exit_code == 3 and "sign-off" in signoff.output and "app.py" in signoff.output
@@ -490,6 +490,6 @@ def test_doctor_reports_bad_guardrails(monkeypatch, home):
 def test_bad_guardrails_stop_jobs_with_a_clear_message(monkeypatch, home):
     use_completion(monkeypatch, lambda **kw: fake_response("hi", 1, 1))
     (home / "guardrails.yaml").write_text("surprise: 1\n")
-    result = runner.invoke(cli.app, ["run", "hello"])
+    result = runner.invoke(cli.app, ["ask", "hello"])
     assert result.exit_code == 2 and "guardrails" in result.output and "Traceback" not in result.output
     assert "hello" not in runner.invoke(cli.app, ["status"]).output  # no orphan job left behind
