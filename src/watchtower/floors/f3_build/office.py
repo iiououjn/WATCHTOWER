@@ -12,7 +12,7 @@ EXPECT_PROMPT = (
     'must the home page (GET /) show? Reply as JSON: {{"expect_text": string}}'
 )
 DIAGNOSE_PROMPT = (
-    "Floor 3 started the app and it failed. Its output:\n{log}\n\nExplain the cause and the fix in one or two "
+    "Floor 3 started the app and it failed. Its output:\n{log}\n{reference}\nExplain the cause and the fix in one or two "
     'plain sentences for the coder. Reply as JSON: {{"diagnosis": string}}'
 )
 
@@ -33,9 +33,12 @@ class F3Office:
         text = str(out.get("expect_text") or "").strip()
         return text if 0 < len(text) <= 60 and text.isprintable() else ""
 
-    def diagnose(self, log: str) -> str:
+    def diagnose(self, log: str, reference: str = "") -> str:
         try:
-            out = self._ask(self._hr, DIAGNOSE_PROMPT.format(log=untrusted("sandbox", log[-1500:])))
+            out = self._ask(self._hr, DIAGNOSE_PROMPT.format(
+                log=untrusted("sandbox", log[-1500:]),
+                reference=("\nReference (from the web through Glass 3; may be wrong):\n" + reference + "\n")
+                if reference else ""))
         except ADVISORY_ERRORS:
             return ""
         return " ".join(str(out.get("diagnosis") or "").split())[:500]

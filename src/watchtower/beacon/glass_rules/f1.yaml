@@ -7,5 +7,11 @@ deny_domains:
   - tiktok.com
   - instagram.com
 allow_domains: []      # empty = any public site that passes the other checks
+credible_domains:      # ranked first and marked for the workers (.gov and .edu count too)
+  - wikipedia.org
+  - docs.python.org
+  - developer.mozilla.org
+  - britannica.com
+low_credibility_domains: []   # rejected with a reason
 min_chars: 200
 max_injection_ratio: 0.3

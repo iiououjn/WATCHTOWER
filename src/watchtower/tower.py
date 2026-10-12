@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
+from http import HTTPStatus
 from pathlib import Path
 from typing import Callable
 
 from watchtower.beacon import glass as glass_mod
 from watchtower.beacon.beacon import Beacon
+from watchtower.beacon.lookout import Lookout, crash_query
 from watchtower.floors.board import FLOORS, NAMES, Board
 from watchtower.floors.f3_build.buildfloor import build_check
 from watchtower.engine.bus import Bus
@@ -118,7 +121,12 @@ class TowerPipeline:
         oversight = OversightOffice(r["f5.lead"], r["f5.auditor"], ask)
         research, lessons = (data.get("f1") or {}).get("summary", ""), self._lessons(data)
         cto = CTO(r["cto"], ask)
-        plan, feedback = self._approved_plan(data, dev, cto, research, lessons, []), []
+        online = data.get("research") and not data.get("offline")  # floors 2–5 search only with --research
+        look = Lookout(self._beacon_factory if online else None, self._knowledge)
+        peek = lambda floor, query, hits=2, chars=700: look.ask(  # noqa: E731
+            floor, query, job_id, lambda prompt: self._ask(r[f"glass.{floor}"], data, prompt), hits, chars)
+        docs = peek("f2", "python standard library http.server " + spec["title"])
+        plan, feedback = self._approved_plan(data, dev, cto, research, lessons, [], docs), []
         units_due = True  # F2 workers write units on the first build and after each re-plan, never on a fix
         focus = oversight.focus(spec)
         checks = self._plan_qa(data, plan, qa_office)
@@ -191,16 +199,19 @@ class TowerPipeline:
             feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]
             if f3 is not None and not f3.checks_run[-1]["pass"]:  # show the coder the app's real error
                 feedback = feedback + ["Floor 3 started the app and it failed:\n" + untrusted("sandbox", f3.summary)]
-                diagnosis = f3_office.diagnose(f3.summary)
+                crash = crash_query(f3.summary)
+                diagnosis = f3_office.diagnose(f3.summary, peek("f3", crash) if crash else "")
                 if diagnosis:
                     feedback.append("Floor 3 HR diagnosis:\n" + untrusted("f3.hr", diagnosis))
                     self._post(data, "f3", "issue", "diagnosis: " + diagnosis)
             elif f4 is not None and not f4.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 4 QA checks failed:\n" + untrusted("sandbox", f4.summary)]
+                feedback += _reference("4", peek("f4", _status_query(f4.checks_run[-1]), 1, 480))  # + header ≤ 600
             elif sec is not None and not sec.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 5 security scan found problems; fix them:\n" + untrusted("security", sec.summary)]
+                feedback += _reference("5", peek("f5", _finding_query(sec.checks_run[-1], self._g.security_fail_on), 1, 480))
             if verdict.route in ("design", "research"):
-                plan, units_due = self._approved_plan(data, dev, cto, research, lessons, feedback), True
+                plan, units_due = self._approved_plan(data, dev, cto, research, lessons, feedback, docs), True
                 checks = self._plan_qa(data, plan, qa_office)
                 expect = f3_office.expect(spec, plan["routes"])
         self._retro(data, oversight, passed=False)
@@ -299,14 +310,14 @@ class TowerPipeline:
         self._board.note(job_id, sender.floor, "memo", f"{NAMES[sender.floor]} asked {NAMES[to]}: {question[:50]} → {answer}")
 
     def _approved_plan(self, data: dict, dev: DevFloor, cto: CTO, research: str, lessons: str,
-                       feedback: list[str]) -> dict:
+                       feedback: list[str], docs: str = "") -> dict:
         """Architect plans; the CTO approves or asks for changes once (one re-plan, never a loop)."""
-        plan = dev.plan(data["spec"], research, feedback, lessons)
+        plan = dev.plan(data["spec"], research, feedback, lessons, docs)
         approved, changes = cto.review(data["spec"], plan, self._g.rules)
         if not approved and changes:
             self._post(data, "f2", "issue", "CTO asked for: " + "; ".join(changes))
             try:  # CTO changes first: the architect sees only the first few feedback items
-                plan = dev.plan(data["spec"], research, [f"CTO: {c}" for c in changes[:3]] + list(feedback), lessons)
+                plan = dev.plan(data["spec"], research, [f"CTO: {c}" for c in changes[:3]] + list(feedback), lessons, docs)
             except ADVISORY_ERRORS:  # the C-suite is advisory: a failed re-plan keeps the plan we have
                 self._post(data, "f2", "issue", "re-plan for the CTO failed; keeping the first plan")
         return plan
@@ -366,12 +377,14 @@ class TowerPipeline:
         r = self._roles
         beacon = None
         if self._beacon_factory is not None and not data.get("offline"):
-            beacon = self._beacon_factory(lambda prompt: self._ask(r["glass.f1"], data, prompt))
+            beacon = self._beacon_factory(lambda prompt: self._ask(r["glass.f1"], data, prompt), "f1")
 
         def context(task: str) -> str:
-            if beacon is not None:
-                beacon.research(task, data["job_id"])
-            return self._context(task)
+            if beacon is None:
+                return self._context(task)
+            beacon.research(task, data["job_id"])
+            conflicts = getattr(beacon, "conflicts", [])  # glass step 5: workers learn where sources disagree
+            return self._context(task) + ("\n" + untrusted("glass", "\n".join(conflicts[:3])) if conflicts else "")
 
         floor = Floor("f1", r["f1.lead"], r["f1.worker"], r["f1.hr"], ask=ask, context=context,
                       min_domains=self._g.min_source_domains if beacon is not None else 0)
@@ -393,7 +406,33 @@ class TowerPipeline:
         glass = glass_mod.Glass(glass_mod.load_glass_rules("f1"))
         hits = [h for h in self._knowledge.search(task, limit=12, distinct=False)  # over-fetch: lessons are dropped
                 if glass.domain_allowed(h.source) and not h.source.startswith("watchtower://")]  # lessons: architect only
-        return "\n".join(untrusted(h.source, h.text[:CONTEXT_CHARS]) for h in hits[:3])
+        hits = sorted(hits[:3], key=lambda h: -glass.credibility(h.source))  # step 3: credible sources first
+        return "\n".join(("[credible] " if glass.credibility(h.source) == 2 else "")  # outside the data: unforgeable
+                         + untrusted(h.source, h.text[:CONTEXT_CHARS]) for h in hits)
+
+
+def _reference(glass: str, text: str) -> list[str]:
+    return [f"Reference for this failure (from the web through Glass {glass}; may be wrong):\n{text}"] if text else []
+
+
+def _status_query(check: dict) -> str:
+    """F4 lookup: the HTTP status of the first failing QA check, as words (never the app's output)."""
+    for r in check.get("results") or []:
+        status = r.get("status")
+        if not r.get("pass") and isinstance(status, int) and 100 <= status <= 599:
+            try:
+                return f"HTTP {status} {HTTPStatus(status).phrase} python http.server"
+            except ValueError:
+                return f"HTTP {status} python http.server"
+    return ""
+
+
+def _finding_query(check: dict, fail_on) -> str:
+    """F5 lookup: the Bandit test id of the first failing finding (secrets need no lookup)."""
+    for f in check.get("findings") or []:
+        if f.get("tool") == "bandit" and _failing(f, fail_on) and re.fullmatch(r"B\d{3}", str(f.get("id"))):
+            return f"bandit {f['id']} python"
+    return ""
 
 
 def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:

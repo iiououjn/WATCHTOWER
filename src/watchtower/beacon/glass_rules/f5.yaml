@@ -1,0 +1,13 @@
+# Glass 5 — what the Beacon may pass to the Oversight floor: security references. Owner-editable.
+name: f5
+deny_domains: []
+allow_domains:
+  - owasp.org
+  - cwe.mitre.org
+  - bandit.readthedocs.io
+  - docs.python.org
+  - nvd.nist.gov
+credible_domains: []
+low_credibility_domains: []
+min_chars: 200
+max_injection_ratio: 0.3

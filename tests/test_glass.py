@@ -96,3 +96,56 @@ def test_bad_relevance_output_rejects_page_not_job():
 
     v = Glass(RULES, ask=broken).inspect("https://a.example/x", GOOD, "t")
     assert not v.passed and "relevance check failed" in v.reasons[0]
+
+
+@pytest.mark.parametrize("floor,good,bad", [
+    ("f2", "https://docs.python.org/3/library/http.server.html", "https://randomblog.example/post"),
+    ("f3", "https://stackoverflow.com/questions/1", "https://randomblog.example/post"),
+    ("f4", "https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/404", "https://randomblog.example/post"),
+    ("f5", "https://owasp.org/www-community/attacks/xss/", "https://randomblog.example/post")])
+def test_each_floor_glass_has_its_own_allow_list(floor, good, bad):
+    glass = Glass(load_glass_rules(floor))
+    assert glass.domain_allowed(good) and not glass.domain_allowed(bad)
+    assert glass.inspect(bad, GOOD, "x").reasons[0].endswith("allow list")
+
+
+def test_credibility_tiers():
+    rules = GlassRules("f1", deny_domains=(), allow_domains=(), credible_domains=("docs.python.org",),
+                       low_credibility_domains=("contentfarm.example",))
+    glass = Glass(rules)
+    assert glass.credibility("https://docs.python.org/3/") == 2 and glass.credibility("https://x.gov/a") == 2
+    assert glass.credibility("https://uni.edu/a") == 2 and glass.credibility("https://blog.example/a") == 1
+    assert glass.credibility("https://www.contentfarm.example/a") == 0
+    verdict = glass.inspect("https://contentfarm.example/a", GOOD, "x")
+    assert not verdict.passed and "credibility" in verdict.reasons[0]
+
+
+def test_allow_listed_glass_counts_its_sites_as_credible():
+    assert Glass(load_glass_rules("f2")).credibility("https://docs.python.org/3/") == 2
+
+
+def test_old_rules_files_without_credibility_keys_load(tmp_path):
+    (tmp_path / "f9.yaml").write_text("name: f9\ndeny_domains: []\n")
+    rules = load_glass_rules("f9", tmp_path)
+    assert rules.credible_domains == () and rules.low_credibility_domains == ()
+
+
+def test_every_glass_has_a_relevance_role():
+    from watchtower.roles import load_roles
+    roles = load_roles()
+    assert all(f"glass.f{n}" in roles for n in range(1, 6))
+
+
+def test_domain_lists_written_as_text_or_odd_case_still_work(tmp_path):
+    (tmp_path / "f9.yaml").write_text("deny_domains: Reddit.com\nlow_credibility_domains: spam.example\n"
+                                      "credible_domains: ['  NPS.gov ', '']\n")
+    glass = Glass(load_glass_rules("f9", tmp_path))
+    assert not glass.domain_allowed("https://www.reddit.com/r/x")
+    assert glass.credibility("https://spam.example/a") == 0 and glass.credibility("https://nps.gov/a") == 2
+    assert glass.credibility("https://other.example/a") == 1
+
+
+def test_junk_in_a_domain_list_is_an_error_not_an_open_glass(tmp_path):
+    (tmp_path / "f9.yaml").write_text("allow_domains:\n  - null\n")
+    with pytest.raises(ValueError):
+        load_glass_rules("f9", tmp_path)

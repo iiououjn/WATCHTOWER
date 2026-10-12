@@ -38,6 +38,13 @@ RELEVANCE_PROMPT = (
 )
 
 
+CONSISTENCY_PROMPT = (
+    "Task:\n{task}\n\nNew page:\n{new}\n\nEarlier page from another site:\n{old}\n\n"
+    "Do the two pages contradict each other on a factual point about the task? Reply as JSON: "
+    '{{"contradiction": boolean, "point": string}}'
+)
+
+
 @dataclass(frozen=True)
 class GlassRules:
     name: str
@@ -45,6 +52,8 @@ class GlassRules:
     allow_domains: tuple[str, ...]
     min_chars: int = 200
     max_injection_ratio: float = 0.3
+    credible_domains: tuple[str, ...] = ()
+    low_credibility_domains: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -54,14 +63,24 @@ class GlassVerdict:
     text: str
 
 
+def _domains(value) -> tuple[str, ...]:
+    """An owner-written domain list: one name or a list; names trimmed and lower-cased; junk dropped."""
+    items = [value] if isinstance(value, str) else value if isinstance(value, list) else [] if value is None else None
+    if items is None or not all(isinstance(x, str) for x in items):  # junk must fail loudly, never open the glass
+        raise ValueError("glass rules: domain lists must be site names")
+    return tuple(d for d in (x.strip().lower() for x in items) if d)
+
+
 def load_glass_rules(floor: str, directory: Path = GLASS_DIR) -> GlassRules:
     data = yaml.safe_load((directory / f"{floor}.yaml").read_text()) or {}
     return GlassRules(
         name=str(data.get("name") or floor),
-        deny_domains=tuple(data.get("deny_domains") or ()),
-        allow_domains=tuple(data.get("allow_domains") or ()),
+        deny_domains=_domains(data.get("deny_domains")),
+        allow_domains=_domains(data.get("allow_domains")),
         min_chars=int(data.get("min_chars", 200)),
         max_injection_ratio=float(data.get("max_injection_ratio", 0.3)),
+        credible_domains=_domains(data.get("credible_domains")),
+        low_credibility_domains=_domains(data.get("low_credibility_domains")),
     )
 
 
@@ -87,12 +106,25 @@ class Glass:
             return False
         return not self._rules.allow_domains or _matches(host, self._rules.allow_domains)
 
+    def credibility(self, url: str) -> int:
+        """Glass step 3, by rule not by model: 2 = credible (listed, allow-listed, .gov/.edu), 1 = normal,
+        0 = low (rejected)."""
+        host = (urlsplit(url).hostname or "").lower()
+        if _matches(host, self._rules.low_credibility_domains):
+            return 0
+        if (_matches(host, self._rules.credible_domains) or host.endswith((".gov", ".edu"))
+                or (self._rules.allow_domains and _matches(host, self._rules.allow_domains))):
+            return 2
+        return 1
+
     def inspect(self, url: str, text: str, task: str) -> GlassVerdict:
         host = (urlsplit(url).hostname or "").lower()
         if _matches(host, self._rules.deny_domains):
             return self._reject(f"domain {host} is denied by glass {self._rules.name}")
         if self._rules.allow_domains and not _matches(host, self._rules.allow_domains):
             return self._reject(f"domain {host} is not on glass {self._rules.name}'s allow list")
+        if self.credibility(url) == 0:
+            return self._reject(f"domain {host} has low credibility on glass {self._rules.name}")
         if SECRET.search(text):
             return self._reject("page contains secret-like strings")
         paragraphs = [normalize(p).strip() for p in text.splitlines() if p.strip()]
@@ -117,6 +149,21 @@ class Glass:
             if not truthy(verdict.get("relevant")):
                 return self._reject(f"not relevant: {str(verdict.get('reason') or 'no reason given')[:200]}")
         return GlassVerdict(True, notes, clean)
+
+    def consistent(self, text: str, other: str, task: str, new_url: str, old_url: str) -> str:
+        """Glass step 5: the contradiction point between a new page and an earlier one, or ''. A note, never
+        a reject: Knowledge is never proof (the Beacon filled it). Model garbage or low memory → ''."""
+        if self._ask is None:
+            return ""
+        from watchtower.engine.advisory import ADVISORY_ERRORS
+        try:
+            out = self._ask(CONSISTENCY_PROMPT.format(task=task, new=untrusted(new_url, text[:1200]),
+                                                      old=untrusted(old_url, other[:1200])))
+        except ADVISORY_ERRORS:
+            return ""
+        if out.get("contradiction") is not True:
+            return ""
+        return " ".join(str(out.get("point") or "a factual point").split())[:200]
 
     @staticmethod
     def _reject(reason: str) -> GlassVerdict:
