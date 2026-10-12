@@ -7,7 +7,7 @@ from pathlib import Path
 
 DEFAULT_TIERS = {
     "small": "ollama/llama3.2:3b",
-    "work": "ollama/qwen2.5-coder:3b",
+    "work": "ollama/qwen2.5-coder:7b",
     "review": "ollama/llama3.2:3b",
 }
 

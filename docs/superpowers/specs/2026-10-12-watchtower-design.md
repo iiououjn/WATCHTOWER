@@ -114,7 +114,7 @@ A single Python service on the Mac. Nine modules, each with one job and a narrow
 
 ### Model tiers (default config, all local, $0)
 - **tier-small** (glass filters, summarizing, classifying): ~3B local model (e.g. Llama 3.2 3B / Qwen 2.5 3B).
-- **tier-work** (coding, planning): best local model that fits RAM.
+- **tier-work** (coding, planning): best local model that fits RAM — Qwen2.5-Coder 7B by default (the only local coder whose apps passed their own tests on 8 GB); the 3B is the cooler fallback (`WATCHTOWER_WORK_MODEL`). The model is unloaded before each Sandbox run when free RAM is low.
 - **tier-review** (F5): a *different model family* from tier-work, loaded sequentially.
 - **tier-cloud** (optional, off): Claude / Gemini / others. Requires owner approval and a per-job $ cap.
 - **Free-tier privacy rule:** providers that may train on prompts never receive private code or secrets; the Glass layers enforce this.
@@ -128,7 +128,7 @@ Every step writes a checkpoint. On crash or restart, the Scheduler resumes each 
 
 - **Roles as config:** each role is a YAML file — name, model tier, allowed tools, prompt, output schema. The org chart changes without code changes.
 - **Per floor:** 1 **Lead** (plans, splits work), N **Workers** (execute tasks), 1 **HR** (in-floor quality and process check before handoff).
-- **Tower-wide C-suite:** **CPO** (turns the owner's prompt into a spec via clarifying questions), **CTO** (approves tech choices), **CEO** (final recommendation; the owner signs off). All report to the **Owner**.
+- **Tower-wide C-suite:** **CPO** (turns the owner's prompt into a spec via clarifying questions; an app spec carries 3–6 testable acceptance criteria — one re-ask when thin, then marked tower defaults), **CTO** (approves tech choices), **CEO** (final recommendation; the owner signs off). All report to the **Owner**.
 - **HR vs F5:** HR checks quality *inside* one floor. F5 checks *across* floors plus guardrails and security.
 - **Idle agents ("breaks"):** agents exist only when the Scheduler assigns a task. On completion they persist context to Memory and go idle (no compute, no tokens). Concurrency default = 1 active thinking agent (8 GB limit), configurable.
 - **Work package (handoff contract):** structured output of each floor — `summary`, `artifacts` (files), `sources`, `checks_run` + results, `open_questions`. Validated against a schema; invalid packages are rejected.
@@ -141,10 +141,10 @@ Every step writes a checkpoint. On crash or restart, the Scheduler resumes each 
 | Floor | Input → Output | Objective checks (reality first) |
 |---|---|---|
 | **F1 Research** | Spec → research brief | Every claim has a source link; sources passed Glass 1 |
-| **F2 Dev** | Brief → architecture + code. Architect (Lead) plans files + a routes contract (CTO approves) and the plan is split into coder units (MVP unit first: entry + tests); Coder workers write one unit each, then fix in a loop driven by real Sandbox test output; Dev HR reviews the integrated code | Unit tests pass in Sandbox (runner's own summary, ≥1 real test); standard-library-only check |
+| **F2 Dev** | Brief → architecture + code. Architect (Lead) plans files + a routes contract (CTO approves) and the plan is split into coder units (MVP unit first: entry + tests); Coder workers write one unit each, then fix in a loop driven by real Sandbox test output; Dev HR reviews the integrated code | Unit tests pass in Sandbox (runner's own summary, ≥2 real tests, and a test imports the app itself); standard-library-only check |
 | **F3 Build** | Code → MVP → full app | MVP: app runs in Sandbox and GET / answers 200 (Build Lead's home-page text is a soft check); full app: probe workers GET every route of the contract (no 404/5xx/silence); Build HR diagnoses failures for the coder |
 | **F4 Deploy/QA** | App → deployed + QA report | QA model (other family) writes HTTP acceptance checks, run in Sandbox; pass → release (file hashes). Owner runs `watchtower deploy`: local Docker, internal network (no internet), 127.0.0.1 only, CSP edge; health check; auto-rollback. Playwright later (opt-in, ~1.5 GB). Vercel (free plan) later, owner-approved, token from Keychain |
-| **F5 Oversight** | Every package → verdict | `guardrails.yaml`; Bandit + secret patterns (offline; serious findings fail); Spec Auditor; cross-family model gate; retrospective lessons; CEO recommendation → owner sign-off before any release |
+| **F5 Oversight** | Every package → verdict | `guardrails.yaml`; Bandit + secret patterns (offline; serious findings fail); HTML-injection probe in the Sandbox (a harmless tag posted into every form must never come back raw); Spec Auditor; cross-family model gate; retrospective lessons; CEO recommendation → owner sign-off before any release |
 
 **Coding engine:** the Coder agent writes complete files through the checked Workspace writer and is driven by real Sandbox test results (a tool-using loop). Aider was dropped: an extra process and RAM on 8 GB, and the loop already gets real test output.
 

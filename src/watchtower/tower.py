@@ -24,11 +24,13 @@ from watchtower.floors.f3_build.office import F3Office
 from watchtower.floors.f5_oversight.office import OversightOffice
 from watchtower.floors.f4_qa_deploy.office import QAOffice
 from watchtower.floors.f5_oversight.oversight import is_failing as _failing, security_package, security_scan
+from watchtower.floors.f5_oversight.probe import xss_probe
 from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.beacon.glass import INJECTION, normalize
 from watchtower.floors.f4_qa_deploy.releases import Releases, manifest_of, manifest_problems
 from watchtower.csuite.ceo import CEO
+from watchtower.csuite.cpo import enough_criteria
 from watchtower.csuite.cto import CTO
 from watchtower.engine.workflow import Step
 from watchtower.guardrails import Guardrails, load_guardrails
@@ -53,11 +55,10 @@ QUESTIONS_PROMPT = (
 SPEC_PROMPT = (
     "Owner's goal:\n{goal}\n\nReference data (use it to understand the owner's terms):\n{context}\n\n"
     "Owner's answers to your questions:\n{qa}\n\n"
-    "Write a short spec. Reply as JSON: "
-    '{{"title": string, "goal": string, "acceptance": [string], "out_of_scope": [string]}}'
+    "Write a short spec with 3 to 5 acceptance criteria, each one checkable (for an app: what a user does and "
+    'what the page then shows). Reply as JSON: {{"title": string, "goal": string, "acceptance": [string], '
+    '"out_of_scope": [string]}}'
 )
-
-
 class NeedsOwner(Exception):
     pass
 
@@ -102,7 +103,7 @@ class TowerPipeline:
         return [Step("spec", self._spec), Step("approval", self._approval), Step("f1", self._f1)]
 
     def app_steps(self) -> list[Step]:
-        return [Step("spec", self._spec), Step("approval", self._approval),
+        return [Step("spec", self._app_spec), Step("approval", self._approval),
                 Step("research", self._research), Step("dev", self._dev),
                 Step("signoff_request", self._signoff_request), Step("signoff", self._signoff)]
 
@@ -171,7 +172,8 @@ class TowerPipeline:
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
                                f4.summary.splitlines()[0], known=f4.summary[:1500])
                 if f4 is not None and f4.checks_run[-1]["pass"]:  # Floor 5 office: security scan, then spec audit
-                    sec = security_package(security_scan(ws.root, ws.files()), self._g.security_fail_on)
+                    sec = security_package(xss_probe(run, plan["entry"], plan["routes"])  # probe first: never cut
+                                           + security_scan(ws.root, ws.files()), self._g.security_fail_on)
                     self._handoff(data, "f5", attempt, sec.checks_run[-1]["pass"], sec.open_questions)
                     self._post(data, "f5", "doing" if sec.checks_run[-1]["pass"] else "issue",
                                sec.summary.splitlines()[0], known=sec.summary[:1500])
@@ -351,7 +353,10 @@ class TowerPipeline:
         out = self._ask(self._roles["cpo"], data, QUESTIONS_PROMPT.format(goal=data["prompt"], context=self._context(data["prompt"]) or "(none)"))
         return strs(out.get("questions"), cap=3)
 
-    def _spec(self, data: dict) -> dict:
+    def _app_spec(self, data: dict) -> dict:
+        return self._spec(data, app=True)
+
+    def _spec(self, data: dict, app: bool = False) -> dict:
         qa = "\n".join(f"Q: {x['q']}\nA: {x['a'] or '(no answer)'}" for x in data.get("answers") or []) or "(none)"
         raw = self._ask(self._roles["cpo"], data, SPEC_PROMPT.format(goal=data["prompt"], qa=qa,
                                                                         context=self._context(data["prompt"]) or "(none)"))
@@ -363,6 +368,8 @@ class TowerPipeline:
         }
         if not spec["acceptance"]:
             raise BadModelOutput("CPO spec has no acceptance criteria; resume to retry")
+        if app:
+            spec["acceptance"] = enough_criteria(lambda prompt: self._ask(self._roles["cpo"], data, prompt), spec)
         approval_id = None
         if not data.get("auto_approve"):
             approval_id = self._approvals.request(data["job_id"], "spec", spec_text(spec))

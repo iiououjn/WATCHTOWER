@@ -126,7 +126,7 @@ def parse_checks(reply) -> list[dict]:
 
 def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[dict]) -> WorkPackage:
     """Floor 4: run the QA checks against the app inside the sandbox. No model involved."""
-    result = run(["python", "-c", QA_SCRIPT, entry, json.dumps(checks)])
+    result = run(["python", "-I", "-c", QA_SCRIPT, entry, json.dumps(checks)])
     output = (result.stdout or "") + (result.stderr or "")
     found = _RESULT.findall(output)
     try:

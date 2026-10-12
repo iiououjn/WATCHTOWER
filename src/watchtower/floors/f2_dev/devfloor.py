@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
+from fnmatch import fnmatch
 from pathlib import PurePosixPath
 from typing import Callable, Sequence
 
@@ -22,9 +24,9 @@ print("WATCHTOWER_TESTS " + json.dumps({"run": result.testsRun, "skipped": len(r
       "failures": len(result.failures), "errors": len(result.errors)}), flush=True)
 sys.exit(0 if result.wasSuccessful() else 1)
 """
-TEST_COMMAND = ["python", "-c", TEST_RUNNER]
+TEST_COMMAND = ["python", "-I", "-c", TEST_RUNNER]  # -I: app files cannot shadow json/unittest
 _SUMMARY = re.compile(r"^WATCHTOWER_TESTS (\{.*\})$", re.MULTILINE)
-_SAFE_ENTRY = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_/]*\.py")
+_SAFE_ENTRY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*\.py")  # importable by tests
 
 
 def test_summary(stdout: str) -> dict | None:
@@ -72,6 +74,38 @@ def _compact_checks(checks: Sequence[dict]) -> str:
                 "expect_text": str(c.get("expect_text", ""))[:80]} for c in checks]
     text = json.dumps(trimmed)
     return text if len(text) <= QA_CHARS else text[:QA_CHARS] + " ...(more checks)"
+
+
+def _is_test_file(path: str) -> bool:
+    """Exactly what the runner discovers: test*.py anywhere (_ensure_packages makes every folder a package)."""
+    return fnmatch(PurePosixPath(path).name, "test*.py")
+
+
+def app_is_tested(ws: Workspace) -> bool:
+    """At least one test file imports a module of the app itself (not only unittest or another test file):
+    a test that never touches the app proves nothing."""
+    py = [f for f in ws.files() if f.endswith(".py")]
+    tests = [f for f in py if _is_test_file(f)]
+    app = {PurePosixPath(f).with_suffix("").as_posix().replace("/", ".") for f in py
+           if f not in tests and PurePosixPath(f).stem not in ("__init__", "conftest")
+           and not {"tests", "test"} & set(PurePosixPath(f).parts[:-1])}  # helpers in tests/ are not the app
+    app |= {m.split(".")[0] for m in app}  # 'import store' counts for store/db.py
+    for name in tests:
+        try:
+            tree = ast.parse(ws.read(name))
+        except (SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                    else [node.module or ""] if isinstance(node, ast.ImportFrom)
+                    else [node.args[0].value] if (isinstance(node, ast.Call) and node.args  # import_module("app")
+                                                  and isinstance(node.args[0], ast.Constant)
+                                                  and isinstance(node.args[0].value, str)
+                                                  and getattr(node.func, "attr", getattr(node.func, "id", ""))
+                                                  in ("import_module", "__import__")) else [])
+            if any(m in app for m in mods):
+                return True
+    return False
 
 
 def _plan_path(raw) -> str | None:
@@ -130,8 +164,12 @@ class DevFloor:
                 seen.add(path.lower())
                 files.append({"path": path, "purpose": _UNSAFE.sub("", str(f.get("purpose", ""))).strip()[:80]})
         entry = _plan_path(out.get("entry")) or "app.py"
-        safe = _SAFE_ENTRY.fullmatch(entry) and ".." not in entry.split("/")
-        entry, files = (entry if safe else "app.py"), files[:15]
+        if not _SAFE_ENTRY.fullmatch(entry):
+            fixed = re.sub(r"(^|/)(?=\d)", r"\1app_", entry)  # '2048.py' → 'app_2048.py': tests can import it
+            if _SAFE_ENTRY.fullmatch(fixed):
+                files = [{**f, "path": fixed} if f["path"] == entry else f for f in files]
+            entry = fixed if _SAFE_ENTRY.fullmatch(fixed) else "app.py"
+        files = files[:15]
         files = [f for f in files if f["path"] == entry or f["path"].lower() != entry.lower()]
         if entry not in {f["path"] for f in files}:  # a 3B architect often names an entry it never plans
             files = files[:14] + [{"path": entry, "purpose": "the app's entry point: starts the HTTP server"}]
@@ -206,14 +244,16 @@ class DevFloor:
                 notes = self._write(reply.get("files"))
             self._ensure_packages()
             problems = import_problems(self._ws) if self._stdlib_only else []
-            has_tests = any(PurePosixPath(f).name.startswith("test") for f in self._ws.files() if f.endswith(".py"))
+            has_tests = any(_is_test_file(f) for f in self._ws.files())
             result = self._run(TEST_COMMAND)
             output = ((result.stdout or "") + (result.stderr or ""))[-2000:]
             summary = test_summary(result.stdout)
             real = (summary or {}).get("run", 0) - (summary or {}).get("skipped", 0)
             ran_tests = real >= 1
-            passed = (result.exit_code == 0 and has_tests and ran_tests and not problems and not result.timed_out
-                      and summary is not None and not summary.get("failures") and not summary.get("errors"))
+            imports_app = app_is_tested(self._ws)
+            passed = (result.exit_code == 0 and has_tests and real >= 2 and imports_app and not problems
+                      and not result.timed_out and summary is not None and not summary.get("failures")
+                      and not summary.get("errors"))
             checks.append({"check": "tests", "round": round_no, "pass": passed, "output": output[-300:]})
             if passed:
                 verdict = self._hr_review(spec, plan) if self._hr is not None and hr_asks < MAX_HR_ASKS else None
@@ -231,6 +271,11 @@ class DevFloor:
             elif not ran_tests:
                 notes.append("unittest found 0 tests: name test files test_*.py, put test classes in "
                              "unittest.TestCase subclasses, and name methods test_*.")
+            elif real < 2:
+                notes.append(f"unittest ran only {real} test: write at least 2 real tests of the app's behaviour.")
+            if has_tests and not imports_app:
+                notes.append("Your tests import nothing from the app: import the app's own functions or handler "
+                             "(e.g. from app import ...) and test what they do.")
             notes.append("Test output:\n" + untrusted("sandbox", (output or "(no output)")[-1200:]))
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"
                    f"Tests: {'PASS' if passed else 'FAIL'}\n{output[-800:]}")

@@ -79,7 +79,7 @@ Every agent runs through local [Ollama](https://ollama.com) models by default (n
 | Tier | Model | Used for |
 |---|---|---|
 | `small` | `llama3.2:3b` | Quick tasks — CPO questions, Glass relevance checks, gate reviews |
-| `work` | `qwen2.5-coder:3b` | Heavy lifting — architecture, coding, QA check generation |
+| `work` | `qwen2.5-coder:7b` | Heavy lifting — architecture, coding, QA check generation (set `WATCHTOWER_WORK_MODEL=qwen2.5-coder:3b` for a cooler, weaker coder) |
 | `review` | `llama3.2:3b` | Audit, security review, CEO/CTO recommendations |
 
 > All models run locally via Ollama. Override the work model with `WATCHTOWER_WORK_MODEL=<model>`. No data ever leaves your machine unless you explicitly enable cloud providers through LiteLLM.
@@ -107,7 +107,7 @@ uv sync          # or: pip install -e .
 
 ```bash
 ollama pull llama3.2:3b
-ollama pull qwen2.5-coder:3b
+ollama pull qwen2.5-coder:7b   # ~4.7 GB; the 3b works too, but rarely passes its own tests
 ```
 
 ### Check everything is wired up
@@ -230,7 +230,7 @@ Every floor handoff passes through a **Floor 5 gate** (deterministic rules + mod
 | Variable | Default | Description |
 |---|---|---|
 | `WATCHTOWER_HOME` | `~/.watchtower` | Data directory (DB, workspaces, guardrails) |
-| `WATCHTOWER_WORK_MODEL` | `qwen2.5-coder:3b` | Override the `work` tier Ollama model |
+| `WATCHTOWER_WORK_MODEL` | `qwen2.5-coder:7b` | Override the `work` tier Ollama model |
 | `WATCHTOWER_SANDBOX_IMAGE` | `python:latest` | Docker image for sandbox execution |
 | `WATCHTOWER_MIN_FREE_RAM_PCT` | `20` | Minimum free RAM % before pausing |
 | `WATCHTOWER_OFFLINE` | _(unset)_ | Set to `1` to disable web search |

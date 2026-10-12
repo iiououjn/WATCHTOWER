@@ -15,7 +15,7 @@ def runner(result):
 def test_http_200_passes():
     run, calls = runner(SandboxResult(0, "SMOKE_STATUS 200\nserving\n", "", False))
     pkg = smoke_test(run, "app.py")
-    assert calls == [["python", "-c", SMOKE_SCRIPT, "app.py"]]
+    assert calls == [["python", "-I", "-c", SMOKE_SCRIPT, "app.py"]]
     assert pkg.floor == "f3" and pkg.checks_run == [{"check": "http", "pass": True, "status": "200"}]
     assert pkg.validate() == []
 
@@ -39,7 +39,7 @@ def test_script_waits_then_kills_the_app():
 def test_expected_home_text_is_a_soft_check():
     run, calls = runner(SandboxResult(0, "SMOKE_STATUS 200\nSMOKE_TEXT no\n", "", False))
     pkg = smoke_test(run, "app.py", expect="Todo list")
-    assert calls == [["python", "-c", SMOKE_SCRIPT, "app.py", "Todo list"]]
+    assert calls == [["python", "-I", "-c", SMOKE_SCRIPT, "app.py", "Todo list"]]
     assert pkg.checks_run[-1]["pass"] is True and any("Todo list" in q for q in pkg.open_questions)
     run, _ = runner(SandboxResult(0, "SMOKE_STATUS 200\nSMOKE_TEXT yes\n", "", False))
     assert smoke_test(run, "app.py", expect="Todo list").open_questions == []
@@ -65,7 +65,7 @@ def probe_out(results, log="served"):
 def test_probe_checks_every_get_route_except_home():
     run, calls = runner(probe_out([{"path": "/items", "status": 200}, {"path": "/about", "status": 302}]))
     pkg = route_probe(run, "app.py", ROUTES)
-    assert json.loads(calls[0][4]) == ["/items", "/about"] and pkg.checks_run[-1]["pass"]
+    assert json.loads(calls[0][5]) == ["/items", "/about"] and pkg.checks_run[-1]["pass"]
 
 
 def test_probe_fails_on_500_404_or_no_answer_and_names_the_route():
@@ -157,3 +157,15 @@ def test_real_traceback_survives_access_log_noise(tmp_path):
 def test_no_other_routes_still_shows_the_mvp_result():
     run, _ = runner(SandboxResult(0, "SMOKE_STATUS 200\n", "", False))
     assert "MVP" in build_check(run, "app.py", "", ROUTES[:1]).summary.splitlines()[0]
+
+
+def test_every_sandbox_script_runs_isolated_from_the_app_folder():
+    from watchtower.floors.f2_dev.devfloor import TEST_COMMAND
+    from watchtower.floors.f4_qa_deploy.qafloor import run_qa
+    seen = []
+    record = lambda cmd: seen.append(cmd) or SandboxResult(0, "", "", False)  # noqa: E731
+    smoke_test(record, "app.py")
+    route_probe(record, "app.py", ROUTES)
+    run_qa(record, "app.py", [{"name": "h", "method": "GET", "path": "/", "form": {}, "expect_status": 200,
+                               "expect_text": ""}])
+    assert all(cmd[:3] == ["python", "-I", "-c"] for cmd in seen + [TEST_COMMAND]) and len(seen) == 3
