@@ -76,34 +76,50 @@ def _compact_checks(checks: Sequence[dict]) -> str:
     return text if len(text) <= QA_CHARS else text[:QA_CHARS] + " ...(more checks)"
 
 
-_BLOCK = re.compile(r"^(FAIL|ERROR): (\w+) \([^)\n]*\)\n-{20,}\n(.*?)(?=^={20,}$|^-{20,}$|\Z)", re.M | re.S)
-_EXC = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception|Exit)\b")
-MAX_FAILURES = 5
+_BLOCK = re.compile(r"^(FAIL|ERROR): (\w+) \(([^)\n]*)\)(?: \([^\n]*\))?\n-{20,}\n(.*?)(?=^={20,}$|^-{20,}$|\Z)",
+                    re.M | re.S)
+_EXC = re.compile(r"^[A-Za-z_][\w.]*(: |$)")  # an unindented 'Name: message' line ends a traceback
+MAX_FAILURES, NOTE_CHARS = 5, 1800
 
 
 def failures(output: str) -> list[dict]:
-    """unittest's own FAIL/ERROR report as a compact list: test name, the assertion line, a few diff lines,
-    and whether the two sides differ only in whitespace. Unparseable output → []."""
+    """unittest's own FAIL/ERROR report as a compact list, assertion failures first: test name, full id, the
+    final exception line (the real cause, not a loader frame or a chained inner error), for assertions a few
+    diff lines, and whether the two sides differ only in whitespace. Unparseable output → []."""
     out = []
-    for kind, test, body in _BLOCK.findall(output or ""):
-        lines = body.rstrip().splitlines()
-        at = next((i for i, ln in enumerate(lines) if _EXC.match(ln)), None)
-        if at is None:
+    for kind, test, where, body in _BLOCK.findall(output or ""):
+        lines = [ln for ln in body.rstrip().splitlines()]
+        exc = [i for i, ln in enumerate(lines) if _EXC.match(ln) and not ln.startswith("Traceback")]
+        last = exc[-1] if exc else max((i for i, ln in enumerate(lines) if ln.strip()), default=None)
+        if last is None:
             continue
-        rest = lines[at + 1:]
+        first_assert = next((i for i in exc if lines[i].startswith("AssertionError")), None)
+        rest = lines[first_assert + 1:] if first_assert is not None else []
         minus = "".join(ln[2:] for ln in rest if ln.startswith("- "))
         plus = "".join(ln[2:] for ln in rest if ln.startswith("+ "))
         space_only = bool(minus or plus) and minus != plus and re.sub(r"\s", "", minus) == re.sub(r"\s", "", plus)
-        out.append({"test": test, "kind": kind, "line": lines[at][:200], "diff": "\n".join(rest[:6])[:400],
-                    "whitespace": space_only})
+        line = lines[first_assert] if first_assert is not None else lines[last]
+        out.append({"test": test, "id": where[:150], "kind": kind, "line": line.strip()[:200],
+                    "diff": "\n".join(rest[:6])[:400], "whitespace": space_only})
+    out.sort(key=lambda f: f["kind"] != "FAIL")  # assertion failures first: errors must not crowd them out
     return out[:MAX_FAILURES]
 
 
+def _failure_rows(found: list[dict]) -> str:
+    """The failures as text, bounded: rows shrink (diffs first) instead of disappearing."""
+    for diff_cap in (400, 150, 0):
+        rows = "\n".join(f"- {f['test']} ({f['kind']}): {f['line']}"
+                         + (f"\n{f['diff'][:diff_cap]}" if f["diff"] and diff_cap else "") for f in found)
+        if len(rows) <= NOTE_CHARS:
+            return rows
+    return rows[:NOTE_CHARS]
+
+
 def _failure_note(found: list[dict]) -> str:
-    rows = [f"- {f['test']} ({f['kind']}): {f['line']}" + (f"\n{f['diff']}" if f["diff"] else "") for f in found]
     hints = [f"{f['test']}: the two sides differ only in spaces or indentation — make them identical, or compare "
              "without exact whitespace" for f in found if f["whitespace"]]
-    return ("Failing tests (unittest's own report):\n" + untrusted("sandbox", "\n".join(rows))
+    # untrusted_code: the coder's own test output, HTML kept readable (only <untrusted tags are escaped)
+    return ("Failing tests (unittest's own report):\n" + untrusted_code("sandbox", _failure_rows(found))
             + ("\n" + "\n".join(hints) if hints else ""))
 
 
@@ -263,7 +279,7 @@ class DevFloor:
         qa = ("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n"
               + untrusted("f4", _compact_checks(qa_checks)) + "\n") if qa_checks else ""
         checks, output, passed, hr_asks, hr_question = [], "", False, 0, None
-        last_failing, diagnosed = None, False  # stuck = the same tests fail two rounds in a row
+        last_failing, diagnosed, diagnosis, carry = None, False, "", []  # stuck = same tests fail twice in a row
         for round_no in range(self._max_rounds):
             parts = dict(spec=_spec_text(spec), plan=untrusted("f2.architect", json.dumps(plan)), qa=qa,
                          feedback=("\n" + "\n".join(notes)) if notes else "")
@@ -281,7 +297,7 @@ class DevFloor:
                     checks.append({"check": "tests", "round": round_no, "pass": False,
                                    "output": "coder reply was not valid JSON"})
                     notes = ["Your last reply was not valid JSON. Reply with one JSON object; escape every double "
-                             "quote and newline inside file contents (\\\" and \\n)."]
+                             "quote and newline inside file contents (\\\" and \\n)."] + carry  # keep what HR said
                     continue
                 notes = self._write(reply.get("files"))
             self._ensure_packages()
@@ -298,6 +314,7 @@ class DevFloor:
                       and not summary.get("errors"))
             checks.append({"check": "tests", "round": round_no, "pass": passed, "output": output[-300:]})
             if passed:
+                last_failing, carry = None, []  # tests passed in between: a later failure is not "stuck"
                 verdict = self._hr_review(spec, plan) if self._hr is not None and hr_asks < MAX_HR_ASKS else None
                 if verdict is None or verdict[0]:
                     break
@@ -319,16 +336,18 @@ class DevFloor:
                 notes.append("Your tests import nothing from the app: import the app's own functions or handler "
                              "(e.g. from app import ...) and test what they do.")
             found = failures(result.stderr or "")
-            notes.append(_failure_note(found) if found
-                         else "Test output:\n" + untrusted("sandbox", (output or "(no output)")[-1200:]))
-            failing = sorted({f["test"] for f in found})
+            failing = sorted({f"{f['id']}:{f['test']}" for f in found})
+            carry = []
             if failing and failing == last_failing:
-                notes.append(STUCK_NOTE.format(names=", ".join(failing)))
+                carry.append(STUCK_NOTE.format(names=", ".join(sorted({f["test"] for f in found}))))
                 if self._hr is not None and not diagnosed:
                     diagnosed = True
-                    diagnosis = self._diagnose_tests(result.stderr or "")
-                    if diagnosis:
-                        notes.append("Floor 2 HR diagnosis:\n" + untrusted("f2.hr", diagnosis))
+                    diagnosis = self._diagnose_tests(_failure_rows(found))
+                if diagnosis:  # paid for once, shown every round while the same tests stay stuck
+                    carry.append("Floor 2 HR diagnosis:\n" + untrusted("f2.hr", diagnosis))
+            carry.append(_failure_note(found) if found  # last: prompt trimming drops the oldest notes first
+                         else "Test output:\n" + untrusted("sandbox", (output or "(no output)")[-1200:]))
+            notes += carry
             last_failing = failing
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"
                    f"Tests: {'PASS' if passed else 'FAIL'}\n{output[-800:]}")
@@ -339,7 +358,7 @@ class DevFloor:
     def _diagnose_tests(self, report: str) -> str:
         """Floor 2 HR, only when the coder is stuck: plain words on why the same tests keep failing. Advisory."""
         try:
-            out = self._ask(self._hr, TEST_DIAGNOSE_PROMPT.format(report=untrusted("sandbox", report[-2500:])))
+            out = self._ask(self._hr, TEST_DIAGNOSE_PROMPT.format(report=untrusted_code("sandbox", report)))
         except ADVISORY_ERRORS:
             return ""
         return " ".join(str(out.get("diagnosis") or "").split())[:400]

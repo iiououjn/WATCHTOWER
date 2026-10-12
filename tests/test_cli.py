@@ -531,4 +531,4 @@ def test_research_does_not_need_docker(monkeypatch):
     monkeypatch.setattr(cli, "docker_status", lambda s, a: (_ for _ in ()).throw(AssertionError("not asked")))
     use_completion(monkeypatch, lambda **kw: fake_response('{"title": "t", "goal": "g", "acceptance": ["a"]}', 1, 1))
     result = runner.invoke(cli.app, ["research", "lighthouses", "--yes", "--offline"])
-    assert "Docker" not in result.output
+    assert not isinstance(result.exception, AssertionError) and "Docker" not in result.output

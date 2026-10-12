@@ -338,6 +338,7 @@ def _tower_job(goal: str, app: bool, yes: bool, offline: bool, research: bool, m
     settings, conn = _open()
     _check_guardrails(settings)
     if app:  # an app job needs the sandbox: say so now, before any model work is spent
+        typer.echo("Checking Docker…", err=True)
         ok, detail = docker_status(settings, AuditLog(conn))
         if not ok:
             typer.echo(f"Error: {detail}", err=True)

@@ -590,3 +590,55 @@ def test_hr_garbage_while_stuck_costs_nothing(tmp_path):
         return {"files": [APP, TEST]}
     d = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([FAILED]), max_rounds=3, hr=HR)
     assert not d.build(SPEC, PLAN3, []).checks_run[-1]["pass"] and calls.count("f2.hr") == 1
+
+
+from pathlib import Path as _Path  # noqa: E402
+
+PY314 = (_Path(__file__).parent / "fixtures" / "unittest_report_py314.txt").read_text()
+
+
+def test_real_314_report_variants_all_surface_with_their_real_cause():
+    found = {f["test"]: f for f in failures(PY314)}
+    assert set(found) == {"test_chain", "test_custom", "test_b", "test_sub"}
+    assert found["test_chain"]["line"] == "ValueError: v"
+    assert found["test_custom"]["line"] == "test_a.Boom: x"
+    assert found["test_b"]["line"].startswith("ImportError: cannot import name 'nope' from 'app'")
+    assert found["test_sub"]["line"] == "AssertionError: 0 != 5"
+    assert list(found) [0] == "test_sub"  # assertion failures first: errors must not crowd them out
+
+
+def test_failure_note_is_bounded_and_keeps_html_readable(tmp_path):
+    from watchtower.floors.f2_dev.devfloor import _failure_note
+    many = [{"test": f"test_{i}", "id": f"m.T.test_{i}", "kind": "FAIL",
+             "line": "AssertionError: '" + "<li>x</li>" * 30 + "'", "diff": "- <ul>" * 60, "whitespace": False}
+            for i in range(5)]
+    note = _failure_note(many)
+    assert len(note) <= 2200 and "&lt;" not in note and "<li>" in note and "test_4" in note
+
+
+def test_stuck_round_keeps_the_failure_rows_and_the_diagnosis_survives_a_garbled_reply(tmp_path):
+    replies = [{"files": [APP, TEST]}, {"files": [APP, TEST]}, "garbled", {"files": [APP, TEST]}]
+    calls = []
+
+    def ask(role, prompt):
+        calls.append((role.id, prompt))
+        if role.id == "f2.hr":
+            return {"diagnosis": "reset the shared list in setUp"}
+        r = replies.pop(0) if len(replies) > 1 else replies[0]
+        if r == "garbled":
+            raise BadModelOutput("x")
+        return r
+    d = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([FAILED]), max_rounds=4, hr=HR)
+    d.build(SPEC, PLAN3, [])
+    coder = [p for r, p in calls if r == "f2.coder"]
+    assert "reset the shared list in setUp" in coder[3] and "test_list_todos" in coder[3]
+    hr = [p for r, p in calls if r == "f2.hr"]
+    assert len(hr) == 1 and "test_list_todos" in hr[0] and "x" * 200 not in hr[0]
+
+
+def test_failing_set_resets_after_a_passing_round(tmp_path):
+    seq = [FAILED, OK, FAILED]
+    script = Script({"f2.coder": [{"files": [APP, TEST]}], "f2.hr": [{"pass": False, "reason": "add more"}]})
+    d = DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=Runner(seq), max_rounds=4, hr=HR)
+    d.build(SPEC, PLAN3, [])
+    assert not any("same tests failed again" in p for p in script.prompts["f2.coder"])
