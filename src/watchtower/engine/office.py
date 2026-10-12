@@ -66,3 +66,37 @@ class QAOffice:
         except BadModelOutput:
             drop = set()
         return [c for c in checks if c["name"] not in drop]
+
+
+EXPECT_PROMPT = (
+    "Spec:\nTitle: {title}\nGoal: {goal}\n\nThe app's routes:\n{routes}\n\nWhat short exact text (a few words) "
+    'must the home page (GET /) show? Reply as JSON: {{"expect_text": string}}'
+)
+DIAGNOSE_PROMPT = (
+    "Floor 3 started the app and it failed. Its output:\n{log}\n\nExplain the cause and the fix in one or two "
+    'plain sentences for the coder. Reply as JSON: {{"diagnosis": string}}'
+)
+
+
+class F3Office:
+    """Floor 3 office: the Build Lead says what the home page must show; Build HR turns a crash log into a
+    plain fix instruction for the coder. Both are advisory: garbage from them is skipped."""
+
+    def __init__(self, lead: Role, hr: Role, ask: Callable[[Role, str], dict]):
+        self._lead, self._hr, self._ask = lead, hr, ask
+
+    def expect(self, spec: dict, routes: list[dict]) -> str:
+        try:
+            out = self._ask(self._lead, EXPECT_PROMPT.format(title=spec["title"], goal=spec["goal"],
+                                                             routes=json.dumps(routes, indent=1)))
+        except BadModelOutput:
+            return ""
+        text = str(out.get("expect_text") or "").strip()
+        return text if 0 < len(text) <= 60 and text.isprintable() else ""
+
+    def diagnose(self, log: str) -> str:
+        try:
+            out = self._ask(self._hr, DIAGNOSE_PROMPT.format(log=untrusted("sandbox", log[-1500:])))
+        except BadModelOutput:
+            return ""
+        return " ".join(str(out.get("diagnosis") or "").split())[:500]

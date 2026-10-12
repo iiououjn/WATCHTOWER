@@ -64,6 +64,9 @@ APP_REPLIES = {
     "f4.qa": [{"checks": [{"name": "home", "path": "/", "expect_text": "Todo"}]}],
     "f4.lead": [{"areas": ["home page"]}],
     "f4.hr": [{"pass": True, "drop": []}],
+    "f2.hr": [{"pass": True, "reason": "ok"}],
+    "f3.lead": [{"expect_text": "Todo"}],
+    "f3.hr": [{"diagnosis": "check the traceback"}],
 }
 
 

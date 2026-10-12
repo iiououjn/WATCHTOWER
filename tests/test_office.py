@@ -70,3 +70,17 @@ def test_lead_or_hr_garbage_degrades_gracefully():
 def test_no_contract_means_no_test_first_checks():
     qa, s = office({})
     assert qa.plan_checks(SPEC, []) == [] and s.prompts["f4.lead"] == []
+
+
+def test_f3_office_expectation_and_diagnosis_degrade_gracefully():
+    from watchtower.engine.office import F3Office
+    lead = Role("f3.lead", "Build Lead", "f3", "small", (), "l")
+    hr = Role("f3.hr", "Build HR", "f3", "small", (), "h")
+    s = Script({"f3.lead": [{"expect_text": "Todo list"}], "f3.hr": [{"diagnosis": "import json in app.py"}]})
+    f3 = F3Office(lead, hr, s)
+    assert f3.expect(SPEC, ROUTES) == "Todo list" and f3.diagnose("NameError: json") == "import json in app.py"
+    assert '<untrusted source="sandbox">' in s.prompts["f3.hr"][0]
+    bad = F3Office(lead, hr, Script({"f3.lead": ["bad"], "f3.hr": ["bad"]}))
+    assert bad.expect(SPEC, ROUTES) == "" and bad.diagnose("x") == ""
+    assert F3Office(lead, hr, Script({"f3.lead": [{"expect_text": "x" * 500}], "f3.hr": [{}]})).expect(
+        SPEC, ROUTES) == ""

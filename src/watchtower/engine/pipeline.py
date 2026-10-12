@@ -15,7 +15,7 @@ from watchtower.engine.gate import Gate
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput
-from watchtower.engine.office import QAOffice
+from watchtower.engine.office import F3Office, QAOffice
 from watchtower.engine.qafloor import QAFloor, run_qa
 from watchtower.engine.releases import Releases
 from watchtower.engine.workflow import Step
@@ -94,13 +94,15 @@ class TowerPipeline:
         ask = lambda role, prompt: self._call(role, data, prompt)  # noqa: E731
         ws = Workspace(self._sandbox.workspace(job_id))
         run = lambda cmd: self._sandbox.run(job_id, cmd, timeout=90)  # noqa: E731
-        dev = DevFloor(r["f2.architect"], r["f2.coder"], ask=ask, workspace=ws, run=run)
+        dev = DevFloor(r["f2.architect"], r["f2.coder"], ask=ask, workspace=ws, run=run, hr=r["f2.hr"])
+        f3_office = F3Office(r["f3.lead"], r["f3.hr"], ask)
         gate = Gate(ask, r["f5.dev_gate"])
         qa = QAFloor(r["f4.qa"], ask)
         qa_office = QAOffice(r["f4.lead"], r["f4.qa"], r["f4.hr"], ask)
         research = (data.get("f1") or {}).get("summary", "")
         plan, feedback = dev.plan(spec, research, []), []
         checks = self._plan_qa(data, plan, qa_office)
+        expect = f3_office.expect(spec, plan["routes"])
         for attempt in range(MAX_SEND_BACKS + 1):
             package, f3, f4 = dev.build(spec, plan, feedback, checks), None, None
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
@@ -111,7 +113,7 @@ class TowerPipeline:
                 package = WorkPackage("f2", package.summary, ws.files(), [], package.checks_run +
                                       [{"check": "entry", "pass": False}], feedback)
             elif package.checks_run and package.checks_run[-1].get("pass"):
-                f3 = smoke_test(run, plan["entry"])
+                f3 = smoke_test(run, plan["entry"], expect)
                 self._post(data, "f3", "done" if f3.checks_run[-1]["pass"] else "issue", f3.summary.splitlines()[0])
                 if f3.checks_run[-1]["pass"]:
                     f4 = run_qa(run, plan["entry"], checks or qa.write_checks(spec, ws.snapshot()))
@@ -141,11 +143,16 @@ class TowerPipeline:
             feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]
             if f3 is not None and not f3.checks_run[-1]["pass"]:  # show the coder the app's real error
                 feedback = feedback + ["Floor 3 started the app and it failed:\n" + untrusted("sandbox", f3.summary)]
+                diagnosis = f3_office.diagnose(f3.summary)
+                if diagnosis:
+                    feedback.append("Floor 3 HR diagnosis:\n" + untrusted("f3.hr", diagnosis))
+                    self._post(data, "f3", "issue", "diagnosis: " + diagnosis)
             elif f4 is not None and not f4.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 4 QA checks failed:\n" + untrusted("sandbox", f4.summary)]
             if verdict.route in ("design", "research"):
                 plan = dev.plan(spec, research, feedback)
                 checks = self._plan_qa(data, plan, qa_office)
+                expect = f3_office.expect(spec, plan["routes"])
         raise NeedsOwner(f"gate rejected the app {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")
 
     def _call(self, role: Role, data: dict, prompt: str) -> dict:

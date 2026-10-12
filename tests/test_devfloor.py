@@ -184,3 +184,47 @@ def test_bad_model_paths_never_crash_the_job(tmp_path):
     s = Script({"f2.architect": [{}], "f2.coder": [{"files": [{"path": "a\x00.py", "content": "x"}, APP, TEST]}]})
     pkg = dev(tmp_path, s, Runner([verdict()]), rounds=1).build(SPEC, {"files": [], "entry": "app.py"}, [])
     assert pkg.checks_run[-1]["pass"] is True
+
+
+HR = Role("f2.hr", "Dev HR", "f2", "small", (), "h")
+
+
+def hr_dev(tmp_path, script, runner, rounds=4):
+    return DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=runner, max_rounds=rounds, hr=HR)
+
+
+def test_hr_approves_after_tests_pass(tmp_path):
+    s = Script({"f2.architect": [{}], "f2.coder": [{"files": [APP, TEST]}], "f2.hr": [{"pass": True}]})
+    pkg = hr_dev(tmp_path, s, Runner([OK])).build(SPEC, {"files": [], "entry": "app.py"}, [])
+    assert len(s.prompts["f2.hr"]) == 1 and pkg.checks_run[-1]["pass"] and not pkg.open_questions
+    assert "lists todos" in s.prompts["f2.hr"][0] and '<untrusted source="workspace">' in s.prompts["f2.hr"][0]
+
+
+def test_hr_rejection_sends_the_coder_back_once(tmp_path):
+    s = Script({"f2.architect": [{}], "f2.coder": [{"files": [APP, TEST]}],
+                "f2.hr": [{"pass": False, "reason": "no list function"}, {"pass": True}]})
+    pkg = hr_dev(tmp_path, s, Runner([OK])).build(SPEC, {"files": [], "entry": "app.py"}, [])
+    assert len(s.prompts["f2.coder"]) == 2 and "no list function" in s.prompts["f2.coder"][1]
+    assert '<untrusted source="f2.hr">' in s.prompts["f2.coder"][1]
+    assert pkg.checks_run[-1]["pass"] and not pkg.open_questions
+
+
+def test_hr_can_not_block_forever(tmp_path):
+    s = Script({"f2.architect": [{}], "f2.coder": [{"files": [APP, TEST]}],
+                "f2.hr": [{"pass": False, "reason": "style"}]})
+    pkg = hr_dev(tmp_path, s, Runner([OK])).build(SPEC, {"files": [], "entry": "app.py"}, [])
+    assert len(s.prompts["f2.hr"]) == 2 and len(s.prompts["f2.coder"]) == 2
+    assert pkg.checks_run[-1]["check"] == "tests" and pkg.checks_run[-1]["pass"]
+    assert any("F2 HR" in q and "style" in q for q in pkg.open_questions)
+
+
+def test_hr_garbage_is_skipped(tmp_path):
+    from watchtower.engine.model_socket import BadModelOutput
+
+    def ask(role, prompt):
+        if role.id == "f2.hr":
+            raise BadModelOutput("x")
+        return {"files": [APP, TEST]}
+    pkg = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([OK]), hr=HR).build(
+        SPEC, {"files": [], "entry": "app.py"}, [])
+    assert pkg.checks_run[-1]["pass"] and not pkg.open_questions

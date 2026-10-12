@@ -5,7 +5,8 @@ import re
 from pathlib import PurePosixPath
 from typing import Callable, Sequence
 
-from watchtower.engine.floor import WorkPackage, untrusted
+from watchtower.engine.floor import WorkPackage, truthy, untrusted
+from watchtower.engine.model_socket import BadModelOutput
 from watchtower.engine.qafloor import parse_routes
 from watchtower.engine.sandbox import SandboxResult
 from watchtower.engine.stdlib_check import import_problems
@@ -47,6 +48,14 @@ CODE_PROMPT = (
 )
 
 
+HR_PROMPT = (
+    "Spec:\n{spec}\n\nPlan and routes contract:\n{plan}\n\nCode:\n{code}\n\nThe unit tests pass. Does the code "
+    "meet the spec and follow the plan and routes contract? Reply as JSON: "
+    '{{"pass": boolean, "reason": string}}'
+)
+MAX_HR_ASKS = 2
+
+
 def _spec_text(spec: dict) -> str:
     return json.dumps({k: spec.get(k) for k in ("title", "goal", "acceptance", "out_of_scope")}, indent=1)
 
@@ -56,8 +65,8 @@ class DevFloor:
     sandbox test results (tool-using agent), until tests pass or the round budget runs out."""
 
     def __init__(self, architect: Role, coder: Role, ask: Callable[[Role, str], dict], workspace: Workspace,
-                 run: Callable[[list[str]], SandboxResult], max_rounds: int = 4):
-        self._architect, self._coder = architect, coder
+                 run: Callable[[list[str]], SandboxResult], max_rounds: int = 4, hr: Role | None = None):
+        self._architect, self._coder, self._hr = architect, coder, hr
         self._ask = ask
         self._ws = workspace
         self._run = run
@@ -77,7 +86,7 @@ class DevFloor:
         notes = [f"Reviewer feedback to address:\n{untrusted('gate', f)}" for f in feedback]
         qa = ("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n"
               + untrusted("f4", json.dumps(list(qa_checks), indent=1)) + "\n") if qa_checks else ""
-        checks, output, passed = [], "", False
+        checks, output, passed, hr_asks, hr_question = [], "", False, 0, None
         for round_no in range(self._max_rounds):
             reply = self._ask(self._coder, CODE_PROMPT.format(
                 spec=_spec_text(spec), plan=json.dumps(plan, indent=1), files=untrusted("workspace", self._ws.snapshot()),
@@ -95,7 +104,15 @@ class DevFloor:
                       and summary is not None and not summary.get("failures") and not summary.get("errors"))
             checks.append({"check": "tests", "round": round_no, "pass": passed, "output": output[-300:]})
             if passed:
-                break
+                verdict = self._hr_review(spec, plan) if self._hr is not None and hr_asks < MAX_HR_ASKS else None
+                if verdict is None or verdict[0]:
+                    break
+                hr_asks += 1
+                if hr_asks >= MAX_HR_ASKS or round_no == self._max_rounds - 1:
+                    hr_question = f"F2 HR not satisfied: {verdict[1][:200]}"
+                    break
+                notes.append("Floor 2 HR reviewed your code and asked for changes:\n" + untrusted("f2.hr", verdict[1]))
+                continue
             notes += problems
             if not has_tests:
                 notes.append("There are no unittest files yet: add test_*.py with real tests.")
@@ -106,7 +123,17 @@ class DevFloor:
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"
                    f"Tests: {'PASS' if passed else 'FAIL'}\n{output[-800:]}")
         questions = [] if passed else [f"tests still failing after {len(checks)} round(s)"]
+        questions += [hr_question] if hr_question else []
         return WorkPackage("f2", summary, self._ws.files(), [], checks, questions)
+
+    def _hr_review(self, spec: dict, plan: dict) -> tuple[bool, str] | None:
+        """Floor 2 HR: a second model family reads the passing code against the spec. Garbage → skipped."""
+        try:
+            out = self._ask(self._hr, HR_PROMPT.format(spec=_spec_text(spec), plan=json.dumps(plan, indent=1),
+                                                        code=untrusted("workspace", self._ws.snapshot())))
+        except BadModelOutput:
+            return None
+        return truthy(out.get("pass")), str(out.get("reason") or "no reason given").strip()
 
     def _ensure_packages(self) -> None:
         """unittest discovery only enters folders that are packages: add empty __init__.py where missing."""

@@ -454,3 +454,13 @@ def test_qa_checks_are_written_before_coding_and_are_the_ones_run(app_tower):
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"][0]
     assert '<untrusted source="f4">' in coder
     runner.close()
+
+
+def test_build_hr_diagnosis_of_a_crash_reaches_the_coder(app_tower):
+    runner, model, sandbox, job = app_tower({"f3.hr": [{"diagnosis": "add import json at the top"}]},
+                                            http="500\nNameError: name 'json' is not defined")
+    runner.start(job.id, extra={"auto_approve": True})
+    assert "f3.lead" in model.calls and "f2.hr" in model.calls
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert any("add import json at the top" in p for p in coder[1:])
+    runner.close()
