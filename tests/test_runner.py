@@ -676,3 +676,29 @@ def test_every_floor_handoff_is_gated_once_per_attempt(app_tower, conn):
     assert gates == [("f2", 0, True), ("f3", 0, True), ("f4", 0, False), ("dev", 0, False),
                      ("f2", 1, True), ("f3", 1, True), ("f4", 1, True), ("f5", 1, True), ("dev", 1, True)]
     runner.close()
+
+
+def test_cto_changes_lead_to_one_re_plan(app_tower, conn):
+    runner, model, sandbox, job = app_tower({"cto": [{"approve": False, "changes": ["add a delete route"]}]})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    arch = [p for c, p in zip(model.calls, model.prompts) if c == "f2.architect"]
+    assert len(arch) == 2 and "add a delete route" in arch[1] and model.calls.count("cto") == 1
+    runner.close()
+
+
+def test_ceo_reject_stops_auto_sign_off(app_tower, conn):
+    from watchtower.engine.governor.approvals import Approvals
+    runner, model, sandbox, job = app_tower({"ceo": [{"approve": False, "note": "no delete feature"}]})
+    out = runner.start(job.id, extra={"auto_approve": True})
+    pending = Approvals(conn).pending_for(job.id)
+    assert out.status == "paused" and pending.kind == "signoff"
+    assert "CEO recommends: REJECT — no delete feature" in pending.summary
+    Approvals(conn).decide(pending.id, True)
+    assert runner.resume(job.id).status == "done"
+    runner.close()
+
+
+def test_ceo_recommendation_is_shown_at_sign_off(app_tower, conn):
+    runner, model, sandbox, job, approvals = _to_signoff(app_tower, conn)
+    assert "CEO recommends: approve — meets the spec" in approvals.pending_for(job.id).summary
+    runner.close()

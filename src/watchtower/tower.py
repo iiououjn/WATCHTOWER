@@ -25,6 +25,8 @@ from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.beacon.glass import INJECTION, normalize
 from watchtower.floors.f4_qa_deploy.releases import Releases, manifest_of, manifest_problems
+from watchtower.csuite.ceo import CEO
+from watchtower.csuite.cto import CTO
 from watchtower.engine.workflow import Step
 from watchtower.guardrails import Guardrails, load_guardrails
 from watchtower.engine.workspace import Workspace
@@ -115,7 +117,8 @@ class TowerPipeline:
         qa_office = QAOffice(r["f4.lead"], r["f4.qa"], r["f4.hr"], ask)
         oversight = OversightOffice(r["f5.lead"], r["f5.auditor"], ask)
         research, lessons = (data.get("f1") or {}).get("summary", ""), self._lessons(data)
-        plan, feedback = dev.plan(spec, research, [], lessons), []
+        cto = CTO(r["cto"], ask)
+        plan, feedback = self._approved_plan(data, dev, cto, research, lessons, []), []
         focus = oversight.focus(spec)
         checks = self._plan_qa(data, plan, qa_office)
         expect = f3_office.expect(spec, plan["routes"])
@@ -159,9 +162,11 @@ class TowerPipeline:
                        else f"gate sent back to {verdict.route}: {'; '.join(verdict.reasons)[:200]}")
             if verdict.passed:
                 self._retro(data, oversight, passed=True)
+                evidence = _evidence(package.checks_run, self._g.security_fail_on)
+                ceo_ok, ceo_note = CEO(r["ceo"], ask).recommend(spec, evidence, audit)
                 return {"dev": package.to_dict(), "files": ws.files(), "workspace": str(ws.root),
                         "entry": plan["entry"], "manifest": manifest_of(ws.root, ws.files()),
-                        "evidence": _evidence(package.checks_run, self._g.security_fail_on),
+                        "evidence": evidence, "ceo": {"approve": ceo_ok, "note": ceo_note},
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
                                    "Note: written by a local AI and tested only inside the sandbox — untested on "
                                    "your Mac. Read the code before running it.\n"
@@ -180,21 +185,26 @@ class TowerPipeline:
             elif sec is not None and not sec.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 5 security scan found problems; fix them:\n" + untrusted("security", sec.summary)]
             if verdict.route in ("design", "research"):
-                plan = dev.plan(spec, research, feedback, lessons)
+                plan = self._approved_plan(data, dev, cto, research, lessons, feedback)
                 checks = self._plan_qa(data, plan, qa_office)
                 expect = f3_office.expect(spec, plan["routes"])
         self._retro(data, oversight, passed=False)
         raise NeedsOwner(f"gate rejected the app {self._g.max_send_backs + 1} times: {'; '.join(feedback)[:300]}")
 
     def _signoff_request(self, data: dict) -> dict:
-        """Lifecycle: final audit → owner sign-off → done. Nothing is released until the owner signs off."""
-        if data.get("auto_approve"):
+        """Lifecycle: final audit → CEO recommendation → owner sign-off → done. Nothing is released until the
+        owner signs off; --yes signs off automatically unless the CEO recommends rejecting."""
+        ceo = data.get("ceo") or {}
+        if data.get("auto_approve") and ceo.get("approve") is not False:
             return {"signoff_id": None}
         answer = data["answer"].replace(  # deploying needs a release, and a release needs this sign-off first
             f"Safer — deploy it isolated, with no internet: watchtower deploy {data['job_id']}",
             f"After you approve: watchtower deploy {data['job_id']}  (isolated, no internet)")
+        verdict = {True: "approve", False: "REJECT"}.get(ceo.get("approve"), "no clear view")
+        note = f" — {ceo['note']}" if ceo.get("note") else ""
         return {"signoff_id": self._approvals.request(data["job_id"], "signoff",
-                                                     f"{answer}\n\nEvidence:\n{data['evidence']}")}
+                                                     f"{answer}\n\nEvidence:\n{data['evidence']}\n\n"
+                                                     f"CEO recommends: {verdict}{note}")}
 
     def _signoff(self, data: dict) -> dict:
         if data.get("signoff_id") is not None:
@@ -271,6 +281,16 @@ class TowerPipeline:
             except ADVISORY_ERRORS:  # a memo never pauses a job
                 answer = "no answer"
         self._board.note(job_id, sender.floor, "memo", f"{NAMES[sender.floor]} asked {NAMES[to]}: {question[:50]} → {answer}")
+
+    def _approved_plan(self, data: dict, dev: DevFloor, cto: CTO, research: str, lessons: str,
+                       feedback: list[str]) -> dict:
+        """Architect plans; the CTO approves or asks for changes once (one re-plan, never a loop)."""
+        plan = dev.plan(data["spec"], research, feedback, lessons)
+        approved, changes = cto.review(data["spec"], plan, self._g.rules)
+        if not approved and changes:
+            self._post(data, "f2", "issue", "CTO asked for: " + "; ".join(changes))
+            plan = dev.plan(data["spec"], research, list(feedback) + [f"CTO: {c}" for c in changes], lessons)
+        return plan
 
     def _handoff(self, data: dict, floor: str, attempt: int, passed: bool, reasons: list[str]) -> None:
         """F5 gate at a floor handoff: deterministic (the floor's own reality checks), recorded for all to see."""

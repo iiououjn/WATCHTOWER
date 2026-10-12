@@ -68,6 +68,8 @@ APP_REPLIES = {
     "f3.lead": [{"expect_text": "Todo"}],
     "f3.hr": [{"diagnosis": "check the traceback"}],
     "f5.lead": [{"focus": ["todos can be added"], "lessons": ["keep tests simple"]}],
+    "cto": [{"approve": True, "changes": []}],
+    "ceo": [{"approve": True, "note": "meets the spec"}],
     "f5.auditor": [{"findings": [{"focus": "todos can be added", "ok": True, "note": "add_todo exists"}]}],
 }
 
