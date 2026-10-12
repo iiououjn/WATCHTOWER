@@ -22,7 +22,7 @@ from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput
 from watchtower.floors.f3_build.office import F3Office
 from watchtower.floors.f5_oversight.office import OversightOffice
-from watchtower.floors.f4_qa_deploy.office import QAOffice
+from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
 from watchtower.floors.f5_oversight.oversight import is_failing as _failing, security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
 from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, run_qa
@@ -135,7 +135,8 @@ class TowerPipeline:
         plan, feedback = self._approved_plan(data, dev, cto, research, lessons, [], docs), []
         units_due = True  # F2 workers write units on the first build and after each re-plan, never on a fix
         focus = oversight.focus(spec)
-        checks = self._plan_qa(data, plan, qa_office)
+        qa_round = QARound(qa_office, qa, spec)
+        qa_round.reset(self._plan_qa(data, plan, qa_office))
         expect = f3_office.expect(spec, plan["routes"])
         for attempt in range(self._g.max_send_backs + 1):
             written: list[int] = []  # F2 workers write the missing planned files first (MVP unit first)
@@ -143,13 +144,13 @@ class TowerPipeline:
             def on_unit(i: int, n: int, paths: list[str]) -> None:
                 written.append(i)
                 self._post(data, "f2", "doing", f"coder unit {i}/{n} written: {', '.join(paths)}")
-            unit_notes = dev.write_units(spec, plan, checks, on_unit=on_unit) if units_due else []
+            unit_notes = dev.write_units(spec, plan, qa_round.coder_checks, on_unit=on_unit) if units_due else []
             units_due = False
             present = {p.lower() for p in ws.files()}
             missing = [f["path"] for f in plan["files"] if f["path"].lower() not in present]
             if written and missing:
                 unit_notes.append(f"planned files still missing: {', '.join(missing[:8])}; write them")
-            package = dev.build(spec, plan, unit_notes + list(feedback), checks,  # unit notes first: never cut
+            package = dev.build(spec, plan, unit_notes + list(feedback), qa_round.coder_checks,  # unit notes first: never cut
                                 test_first=bool(written) and not feedback and not missing)
             f3, f4, sec, audit = None, None, None, ""
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
@@ -167,7 +168,7 @@ class TowerPipeline:
                 self._handoff(data, "f3", attempt, f3.checks_run[-1]["pass"], f3.open_questions)
                 self._post(data, "f3", "done" if f3.checks_run[-1]["pass"] else "issue", f3.summary.splitlines()[0])
                 if f3.checks_run[-1]["pass"]:
-                    f4 = run_qa(run, plan["entry"], checks or qa.write_checks(spec, ws.snapshot()))
+                    f4 = run_qa(run, plan["entry"], qa_round.ensure(plan["routes"], ws.snapshot()))
                     self._handoff(data, "f4", attempt, f4.checks_run[-1]["pass"], f4.open_questions)
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
                                f4.summary.splitlines()[0], known=f4.summary[:1500])
@@ -219,7 +220,7 @@ class TowerPipeline:
                 feedback += _reference("5", peek("f5", _finding_query(sec.checks_run[-1], self._g.security_fail_on), 1, 480))
             if verdict.route in ("design", "research"):
                 plan, units_due = self._approved_plan(data, dev, cto, research, lessons, feedback, docs), True
-                checks = self._plan_qa(data, plan, qa_office)
+                qa_round.reset(self._plan_qa(data, plan, qa_office))
                 expect = f3_office.expect(spec, plan["routes"])
         self._retro(data, oversight, passed=False)
         raise NeedsOwner(f"gate rejected the app {self._g.max_send_backs + 1} times: {'; '.join(feedback)[:300]}")

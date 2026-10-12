@@ -4,7 +4,8 @@ import json
 from typing import Callable
 
 from watchtower.engine.advisory import ADVISORY_ERRORS
-from watchtower.floors.f4_qa_deploy.qafloor import MAX_CHECKS, parse_checks
+from watchtower.engine.model_socket import BadModelOutput
+from watchtower.floors.f4_qa_deploy.qafloor import MAX_CHECKS, has_page_text, parse_checks
 from watchtower.floors.framework import strs, untrusted
 from watchtower.roles import Role
 
@@ -53,16 +54,54 @@ class QAOffice:
                                                                    area=untrusted("f4.lead", area)))
             except ADVISORY_ERRORS:
                 continue
-            checks += parse_checks(out)[:3]
+            checks += parse_checks(out)[:3]  # test-first: the coder will make this text appear, keep it as written
         paths = {r["path"] for r in routes}
         checks = [c for c in checks if c["path"].split("?")[0] in paths
                   and (c["method"] == "POST" or c["expect_text"])][:MAX_CHECKS]
+        return self.review(spec, routes, checks)
+
+    def review(self, spec: dict, routes: list[dict], checks: list[dict]) -> list[dict]:
+        """QA HR drops checks that are wrong, trivial or not about the criteria (advisory: garbage keeps all)."""
         if not checks:
             return []
         try:
             verdict = self._ask(self._hr, REVIEW_PROMPT.format(
-                acceptance=acceptance, routes=contract, checks=untrusted("f4.qa", json.dumps(checks, indent=1))))
+                acceptance=_bullets(spec["acceptance"]), routes=untrusted("f2.architect", json.dumps(routes)),
+                checks=untrusted("f4.qa", json.dumps(checks, indent=1))))
             drop = set(strs(verdict.get("drop")))
         except ADVISORY_ERRORS:
             drop = set()
-        return [c for c in checks if c["name"] not in drop]
+        kept = [c for c in checks if c["name"] not in drop]
+        # HR may prune, never empty the suite or strip every page-text check: status-only checks test nothing
+        title = spec["title"]
+        return kept if has_page_text(kept, title) or not has_page_text(checks, title) else checks
+
+
+
+class QARound:
+    """Floor 4's checks for one plan. Test-first checks (from the routes contract, given to the coder) are
+    kept as written. If there are none worth running, QA writes checks from the current code every attempt,
+    unreviewed — exactly as before this office existed — so nothing here can make F4 weaker. A bad check
+    that keeps failing runs out the send-backs and the owner decides: the safe way to fail."""
+
+    def __init__(self, office: QAOffice, writer, spec: dict):
+        self._office, self._writer, self._spec = office, writer, spec
+        self.checks: list[dict] = []
+        self._fallback = True
+
+    def reset(self, checks: list[dict]) -> None:
+        good = has_page_text(checks, self._spec["title"])  # a suite that tests no real text is not a suite
+        self.checks, self._fallback = ([dict(c) for c in checks], False) if good else ([], True)
+
+    @property
+    def coder_checks(self) -> list[dict]:
+        return [] if self._fallback else self.checks  # fallback checks are rewritten next attempt: never stale
+
+    def ensure(self, routes: list[dict], code: str) -> list[dict]:
+        if self._fallback:
+            try:
+                self.checks = self._writer.write_checks(self._spec, code)
+            except BadModelOutput:
+                if not self.checks:  # nothing from an earlier attempt to reuse: pause, as before
+                    raise
+        return self.checks

@@ -974,3 +974,17 @@ def test_tower_default_criteria_do_not_force_a_form():
     from watchtower.csuite.cpo import enough_criteria
     out = enough_criteria(lambda prompt: {}, {"title": "Clock", "goal": "shows the time", "acceptance": ["x"]})
     assert any("if the app has a form" in c.lower() for c in out)
+
+
+def test_fallback_qa_checks_are_written_from_the_code_each_attempt_unreviewed(app_tower):
+    arch = {**APP_REPLIES["f2.architect"][0], "routes": []}  # no contract: QA writes checks after the code
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, qa_ok=[False, True])
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert model.calls.count("f4.qa") == 2 and "f4.hr" not in model.calls
+    runner.close()
+
+
+def test_a_failing_qa_check_is_never_weakened_so_a_failing_app_cannot_pass(app_tower):
+    runner, model, sandbox, job = app_tower(qa_ok=False)
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "paused"
+    runner.close()
