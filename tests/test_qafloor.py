@@ -183,7 +183,7 @@ def test_qa_script_ignores_an_app_that_prints_a_fake_pass(tmp_path):
     ("No items yet. Add your first item above to get started", "No items yet. Add your first item above to get started"),
     ("one two three four five six seven eight nine ten eleven twelve thirteen", "")])
 def test_expected_text_must_be_page_text_not_a_description(text, kept):
-    check = parse_checks({"checks": [{"name": "c", "method": "GET", "path": "/", "expect_text": text}]})[0]
+    check = parse_checks({"checks": [{"name": "c", "method": "GET", "path": "/", "expect_text": text}]}, known="")[0]
     assert check["expect_text"] == kept
 
 
@@ -204,7 +204,7 @@ def test_zero_checks_never_pass():
 
 
 def test_qa_writer_is_asked_again_when_no_check_tests_page_text():
-    replies = [{"checks": [{"path": "/", "expect_text": "The page should list items"}]},
+    replies = [{"checks": [{"path": "/", "expect_text": "The homepage with a list of all the items"}]},
                {"checks": [{"path": "/", "expect_text": "Todo"}]}]
     prompts = []
     qa = QAFloor(Role("f4.qa", "QA", "f4", "work", (), "q"), lambda role, p: prompts.append(p) or replies.pop(0))

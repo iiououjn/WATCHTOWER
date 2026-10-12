@@ -4,7 +4,8 @@ import json
 from typing import Callable
 
 from watchtower.engine.advisory import ADVISORY_ERRORS
-from watchtower.floors.f4_qa_deploy.qafloor import MAX_CHECKS, parse_checks
+from watchtower.engine.model_socket import BadModelOutput
+from watchtower.floors.f4_qa_deploy.qafloor import MAX_CHECKS, has_page_text, parse_checks
 from watchtower.floors.framework import strs, untrusted
 from watchtower.roles import Role
 
@@ -53,7 +54,7 @@ class QAOffice:
                                                                    area=untrusted("f4.lead", area)))
             except ADVISORY_ERRORS:
                 continue
-            checks += parse_checks(out, known=spec["title"] + "\n" + "\n".join(r["shows"] for r in routes))[:3]
+            checks += parse_checks(out)[:3]  # test-first: the coder will make this text appear, keep it as written
         paths = {r["path"] for r in routes}
         checks = [c for c in checks if c["path"].split("?")[0] in paths
                   and (c["method"] == "POST" or c["expect_text"])][:MAX_CHECKS]
@@ -72,15 +73,16 @@ class QAOffice:
             drop = set()
         kept = [c for c in checks if c["name"] not in drop]
         # HR may prune, never empty the suite or strip every page-text check: status-only checks test nothing
-        return kept if any(c["expect_text"] for c in kept) or not any(c["expect_text"] for c in checks) else checks
+        title = spec["title"]
+        return kept if has_page_text(kept, title) or not has_page_text(checks, title) else checks
 
 
 
 class QARound:
-    """Floor 4's checks for one plan. Test-first checks (from the routes contract) are kept as written; if
-    there are none — or none tests real page text — QA writes checks from the current code every attempt
-    (so they never go stale) and QA HR reviews them. Nothing here ever weakens a check: a bad check that
-    keeps failing runs out the send-backs and the owner decides, which is the safe way to fail."""
+    """Floor 4's checks for one plan. Test-first checks (from the routes contract, given to the coder) are
+    kept as written. If there are none worth running, QA writes checks from the current code every attempt,
+    unreviewed — exactly as before this office existed — so nothing here can make F4 weaker. A bad check
+    that keeps failing runs out the send-backs and the owner decides: the safe way to fail."""
 
     def __init__(self, office: QAOffice, writer, spec: dict):
         self._office, self._writer, self._spec = office, writer, spec
@@ -88,10 +90,18 @@ class QARound:
         self._fallback = True
 
     def reset(self, checks: list[dict]) -> None:
-        good = any(c["expect_text"] for c in checks)  # a status-only suite passes almost any app: not a suite
+        good = has_page_text(checks, self._spec["title"])  # a suite that tests no real text is not a suite
         self.checks, self._fallback = ([dict(c) for c in checks], False) if good else ([], True)
+
+    @property
+    def coder_checks(self) -> list[dict]:
+        return [] if self._fallback else self.checks  # fallback checks are rewritten next attempt: never stale
 
     def ensure(self, routes: list[dict], code: str) -> list[dict]:
         if self._fallback:
-            self.checks = self._office.review(self._spec, routes, self._writer.write_checks(self._spec, code))
+            try:
+                self.checks = self._writer.write_checks(self._spec, code)
+            except BadModelOutput:
+                if not self.checks:  # nothing from an earlier attempt to reuse: pause, as before
+                    raise
         return self.checks

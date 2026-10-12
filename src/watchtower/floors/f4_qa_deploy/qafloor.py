@@ -134,13 +134,21 @@ def parse_routes(raw) -> list[dict]:
     return [r for r in map(_route, raw if isinstance(raw, list) else []) if r][:MAX_ROUTES]
 
 
-def parse_checks(reply, known: str = "") -> list[dict]:
-    """Keep only checks that are safe to run: local relative paths, small forms, sane values; expected text
-    must be page text (see _page_text); names made unique (checks are dropped and relaxed by name)."""
+def has_page_text(checks: list[dict], title: str = "") -> bool:
+    """A suite worth running: at least one check expects real words that are not just the app's title."""
+    return any(re.search(r"\w{2,}", c["expect_text"]) and c["expect_text"].strip().lower() != title.strip().lower()
+               for c in checks)
+
+
+def parse_checks(reply, known: str | None = None) -> list[dict]:
+    """Keep only checks that are safe to run: local relative paths, small forms, sane values; names made
+    unique. With `known` (checks written from existing code), description-like expected text is dropped
+    unless the code really contains it; test-first checks (no code yet) keep their text as written."""
     raw = reply.get("checks") if isinstance(reply, dict) else None
     checks, seen = [c for c in map(_check, raw if isinstance(raw, list) else []) if c][:MAX_CHECKS], {}
     for c in checks:
-        c["expect_text"] = _page_text(c["expect_text"], known)
+        if known is not None:
+            c["expect_text"] = _page_text(c["expect_text"], known)
         seen[c["name"]] = seen.get(c["name"], 0) + 1
         if seen[c["name"]] > 1:
             c["name"] = f"{c['name']} #{seen[c['name']]}"
@@ -191,8 +199,8 @@ class QAFloor:
             code=untrusted_code("workspace", code))
         known = f"{spec['title']}\n{code}"
         checks = parse_checks(self._ask(self._role, prompt), known)
-        if not any(c["expect_text"] for c in checks):  # status-only checks pass almost any app: ask once more
+        if not has_page_text(checks, spec["title"]):  # status-only checks pass almost any app: ask once more
             checks = parse_checks(self._ask(self._role, prompt + TEXT_NOTE), known)
-        if not any(c["expect_text"] for c in checks):
+        if not has_page_text(checks, spec["title"]):
             raise BadModelOutput("QA wrote no check of real page text; resume to retry")
         return checks

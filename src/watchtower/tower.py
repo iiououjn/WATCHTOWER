@@ -144,13 +144,13 @@ class TowerPipeline:
             def on_unit(i: int, n: int, paths: list[str]) -> None:
                 written.append(i)
                 self._post(data, "f2", "doing", f"coder unit {i}/{n} written: {', '.join(paths)}")
-            unit_notes = dev.write_units(spec, plan, qa_round.checks, on_unit=on_unit) if units_due else []
+            unit_notes = dev.write_units(spec, plan, qa_round.coder_checks, on_unit=on_unit) if units_due else []
             units_due = False
             present = {p.lower() for p in ws.files()}
             missing = [f["path"] for f in plan["files"] if f["path"].lower() not in present]
             if written and missing:
                 unit_notes.append(f"planned files still missing: {', '.join(missing[:8])}; write them")
-            package = dev.build(spec, plan, unit_notes + list(feedback), qa_round.checks,  # unit notes first: never cut
+            package = dev.build(spec, plan, unit_notes + list(feedback), qa_round.coder_checks,  # unit notes first: never cut
                                 test_first=bool(written) and not feedback and not missing)
             f3, f4, sec, audit = None, None, None, ""
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))

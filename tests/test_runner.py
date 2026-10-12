@@ -976,31 +976,15 @@ def test_tower_default_criteria_do_not_force_a_form():
     assert any("if the app has a form" in c.lower() for c in out)
 
 
-def test_fallback_qa_checks_are_reviewed_and_rewritten_each_attempt(app_tower):
+def test_fallback_qa_checks_are_written_from_the_code_each_attempt_unreviewed(app_tower):
     arch = {**APP_REPLIES["f2.architect"][0], "routes": []}  # no contract: QA writes checks after the code
-    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f4.qa": [
-        {"checks": [{"name": "home", "path": "/", "expect_text": "Todo"},
-                    {"name": "bogus", "path": "/", "expect_text": "Todo"}]}],
-        "f4.hr": [{"pass": False, "drop": ["bogus"], "reason": "not in spec"}]}, qa_ok=[False, True])
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, qa_ok=[False, True])
     assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
-    assert model.calls.count("f4.qa") == 2 and "f4.hr" in model.calls  # rewritten from the code each attempt
-    import json
-    qa_runs = [json.loads(c[4]) for c in sandbox.calls if "WATCHTOWER_QA" in c[2]]
-    assert all([c["name"] for c in run] == ["home"] for run in qa_runs)
+    assert model.calls.count("f4.qa") == 2 and "f4.hr" not in model.calls
     runner.close()
 
 
 def test_a_failing_qa_check_is_never_weakened_so_a_failing_app_cannot_pass(app_tower):
     runner, model, sandbox, job = app_tower(qa_ok=False)
     assert runner.start(job.id, extra={"auto_approve": True}).status == "paused"
-    runner.close()
-
-
-def test_qa_hr_dropping_every_fallback_check_cannot_pass_f4_vacuously(app_tower):
-    arch = {**APP_REPLIES["f2.architect"][0], "routes": []}
-    runner, model, sandbox, job = app_tower({"f2.architect": [arch],
-                                             "f4.hr": [{"pass": False, "drop": ["home"], "reason": "x"}]})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
-    import json
-    assert all(json.loads(c[4]) for c in sandbox.calls if "WATCHTOWER_QA" in c[2])  # never an empty QA run
     runner.close()

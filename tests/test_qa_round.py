@@ -36,36 +36,68 @@ def test_hr_cannot_drop_every_text_check():
     assert {c["name"] for c in qa.review(SPEC, [], [HOME, TITLE, status_only])} == {"home", "title", "post"}
 
 
-def test_a_suite_without_page_text_counts_as_empty_and_the_guarded_writer_runs():
-    status_only = {**ADD, "name": "post", "expect_text": ""}
+class Writer:
+    def __init__(self, outs):
+        self.outs, self.codes = list(outs), []
 
-    class Writer:
-        calls = 0
+    def write_checks(self, spec, code):
+        self.codes.append(code)
+        out = self.outs.pop(0) if len(self.outs) > 1 else self.outs[0]
+        if isinstance(out, Exception):
+            raise out
+        return out
 
-        def write_checks(self, spec, code):
-            Writer.calls += 1
-            return [HOME]
+
+def test_fallback_checks_run_unreviewed_like_main(tmp_path=None):
+    qa, calls = office([{"pass": False, "drop": ["add", "list"]}])
+    listed = {**HOME, "name": "list", "expect_text": "milk"}
+    rnd = QARound(qa, Writer([[HOME, ADD, listed]]), SPEC)
+    rnd.reset([])
+    assert [c["name"] for c in rnd.ensure([], "code")] == ["home", "add", "list"] and calls == []
+
+
+def test_a_suite_without_meaningful_page_text_counts_as_empty():
     qa, _ = office([{"pass": True, "drop": []}])
-    rnd = QARound(qa, Writer(), SPEC)
-    rnd.reset([status_only])
-    assert rnd.checks == [] and rnd.ensure([], "code") == [HOME] and Writer.calls == 1
+    for weak in ({**ADD, "name": "post", "expect_text": ""}, {**HOME, "expect_text": "<"},
+                 {**HOME, "expect_text": "Todo"}):  # status-only, a symbol, the spec title alone
+        rnd = QARound(qa, Writer([[TITLE]]), SPEC)
+        rnd.reset([weak])
+        assert rnd.coder_checks == [] and rnd.ensure([], "code") == [TITLE]
 
 
 def test_fallback_checks_are_rewritten_from_the_current_code_each_attempt():
-    class Writer:
-        def __init__(self):
-            self.codes = []
-
-        def write_checks(self, spec, code):
-            self.codes.append(code)
-            return [HOME]
     qa, _ = office([{"pass": True, "drop": []}])
-    w = Writer()
+    w = Writer([[HOME]])
     rnd = QARound(qa, w, SPEC)
     rnd.reset([])
     rnd.ensure([], "v1")
     rnd.ensure([], "v2")
-    assert w.codes == ["v1", "v2"]
-    rnd.reset([HOME])  # test-first checks are kept as they are
+    assert w.codes == ["v1", "v2"] and rnd.coder_checks == []  # the coder is never handed stale fallback checks
+    rnd.reset([HOME])
     rnd.ensure([], "v3")
-    assert w.codes == ["v1", "v2"]
+    assert w.codes == ["v1", "v2"] and rnd.coder_checks == [HOME]
+
+
+def test_a_writer_failure_later_reuses_the_last_checks():
+    from watchtower.engine.model_socket import BadModelOutput
+    qa, _ = office([{"pass": True, "drop": []}])
+    rnd = QARound(qa, Writer([[TITLE], BadModelOutput("x")]), SPEC)
+    rnd.reset([])
+    assert rnd.ensure([], "v1") == [TITLE] and rnd.ensure([], "v2") == [TITLE]
+    fresh = QARound(qa, Writer([BadModelOutput("x")]), SPEC)
+    fresh.reset([])
+    try:
+        fresh.ensure([], "v1")
+        raise AssertionError("must raise when there is nothing to reuse")
+    except BadModelOutput:
+        pass
+
+
+def test_test_first_checks_are_never_stripped():
+    out = {"checks": [{"name": "empty", "path": "/", "expect_text": "The list is empty"},
+                      {"name": "nf", "path": "/x", "expect_text": "The page you requested was not found"}]}
+    qa, _ = office([{"areas": ["home"]}, out, {"pass": True, "drop": []}])
+    routes = [{"method": "GET", "path": "/", "fields": [], "shows": ""},
+              {"method": "GET", "path": "/x", "fields": [], "shows": ""}]
+    texts = [c["expect_text"] for c in qa.plan_checks(SPEC, routes)]
+    assert "The list is empty" in texts and "The page you requested was not found" in texts
