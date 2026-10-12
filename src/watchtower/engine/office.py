@@ -40,7 +40,7 @@ class QAOffice:
     def plan_checks(self, spec: dict, routes: list[dict]) -> list[dict]:
         if not routes:
             return []
-        acceptance, contract = _bullets(spec["acceptance"]), json.dumps(routes, indent=1)
+        acceptance, contract = _bullets(spec["acceptance"]), untrusted("f2.architect", json.dumps(routes))
         try:
             areas = strs(self._ask(self._lead, AREAS_PROMPT.format(acceptance=acceptance, routes=contract))
                          .get("areas"), cap=3)
@@ -88,7 +88,7 @@ class F3Office:
     def expect(self, spec: dict, routes: list[dict]) -> str:
         try:
             out = self._ask(self._lead, EXPECT_PROMPT.format(title=spec["title"], goal=spec["goal"],
-                                                             routes=json.dumps(routes, indent=1)))
+                                                             routes=untrusted("f2.architect", json.dumps(routes))))
         except BadModelOutput:
             return ""
         text = str(out.get("expect_text") or "").strip()

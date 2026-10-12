@@ -68,3 +68,9 @@ def test_qa_writes_checks_with_a_different_family_than_the_coder():
 @pytest.mark.parametrize("role_id", ["f1.lead", "f2.architect", "f2.coder", "f4.lead", "f3.lead"])
 def test_memo_senders_know_how_to_send_memos(role_id):
     assert '"memo"' in load_roles(tiers=DEFAULT_TIERS)[role_id].prompt
+
+
+@pytest.mark.parametrize("role_id,own", [("f1.lead", "f1"), ("f2.architect", "f2"), ("f2.coder", "f2"),
+                                         ("f3.lead", "f3"), ("f4.lead", "f4")])
+def test_memo_senders_are_not_offered_their_own_floor(role_id, own):
+    assert f'"{own}" (' not in load_roles(tiers=DEFAULT_TIERS)[role_id].prompt

@@ -45,3 +45,35 @@ def test_unknown_floor_or_kind_is_rejected(conn):
         board(conn).note("job1", "f9", "done", "x")
     with pytest.raises(ValueError):
         board(conn).note("job1", "f1", "gossip", "x")
+
+
+def test_brief_stays_fresh_after_hundreds_of_other_bus_events(conn):
+    bus = Bus(AuditLog(conn))
+    b = Board(bus)
+    for i in range(600):
+        bus.publish("agent.wake", {"agent": "x"}, "job1")
+    b.note("job1", "f1", "done", "late research note")
+    assert "late research note" in b.brief("job1", "f2") and len(b.notes("job1")) == 1
+
+
+def test_latest_issue_replaces_earlier_done_and_plans_keep_latest(conn):
+    b = board(conn)
+    b.note("job1", "f3", "done", "app answered 200")
+    b.note("job1", "f3", "issue", "app crashed: NameError")
+    b.note("job1", "f4", "plan", "QA will check: old")
+    b.note("job1", "f4", "plan", "QA will check: new")
+    brief = b.brief("job1", "f2")
+    assert "crashed" in brief and "answered 200" not in brief
+    assert "new" in brief and "old" not in brief
+
+
+def test_memo_answers_and_whats_next_survive_long_notes(conn):
+    b = board(conn)
+    for floor in ("f1", "f3", "f4", "f5"):
+        b.note("job1", floor, "done", floor + " " + "y" * 290)
+    b.note("job1", "f2", "doing", "z" * 290)
+    b.note("job1", "f2", "doing", "w" * 290)
+    b.note("job1", "f4", "plan", "p" * 290)
+    b.note("job1", "f2", "memo", "F2 asked F1: storage? → sqlite3")
+    brief = b.brief("job1", "f2")
+    assert len(brief) <= 600 and "sqlite3" in brief and "Coming next" in brief

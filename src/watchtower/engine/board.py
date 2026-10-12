@@ -33,23 +33,46 @@ class Board:
         self._bus.publish("board.note", {"floor": floor, "kind": kind, "text": clean}, job_id)
 
     def notes(self, job_id: str) -> list[dict]:
-        return [e.detail for e in self._bus.events(job_id=job_id) if e.action == "board.note"]
+        """Every board note of the job, however many other bus events it has."""
+        out, after = [], 0
+        while True:
+            page = self._bus.events(after, job_id=job_id, limit=1000, topic="board.note")
+            out += [e.detail for e in page]
+            if len(page) < 1000:
+                return out
+            after = page[-1].seq
 
     def brief(self, job_id: str, floor: str, max_chars: int = 600) -> str:
         notes = self.notes(job_id)
         if not notes:
             return ""
-        latest = {}
+        status: dict[str, dict] = {}
+        plans: dict[str, str] = {}
         for n in notes:
-            if n["kind"] in ("done", "doing") and n["floor"] != floor:
-                latest[n["floor"]] = n["text"]
-        mine = [n["text"] for n in notes if n["floor"] == floor and n["kind"] in ("done", "doing", "issue")][-2:]
-        plans = [f"{NAMES[n['floor']]}: {n['text']}" for n in notes if n["kind"] == "plan"][-2:]
-        memos = [n["text"] for n in notes if n["kind"] == "memo"][-2:]
-        lines = ["Other floors: " + "; ".join(f"{NAMES[f]}: {t}" for f, t in latest.items())] if latest else []
-        lines += ["Your floor so far: " + "; ".join(mine)] if mine else []
-        lines += ["Planned: " + "; ".join(plans)] if plans else []
-        lines += ["Memo answers: " + "; ".join(memos)] if memos else []
-        lines.append(f"Coming next: {NEXT.get(floor, '')}")
-        text = "\n".join(lines)
-        return text if len(text) <= max_chars else text[: max_chars - 3] + "..."
+            if n["kind"] in ("done", "doing", "issue") and n["floor"] != floor:
+                status[n["floor"]] = n  # the latest word from each floor wins, problems included
+            elif n["kind"] == "plan":
+                plans[n["floor"]] = n["text"]  # only the current plan
+        mine = [_cut(n["text"], 120) for n in notes
+                if n["floor"] == floor and n["kind"] in ("done", "doing", "issue")][-2:]
+        memos = [_cut(n["text"], 160) for n in notes if n["kind"] == "memo"][-2:]
+        others = "; ".join(f"{NAMES[f]}{' (problem)' if n['kind'] == 'issue' else ''}: {_cut(n['text'], 110)}"
+                           for f, n in status.items())
+        sections = {  # display order; filled by priority so memo answers and what comes next always fit
+            "others": f"Other floors: {others}" if others else "",
+            "mine": "Your floor so far: " + "; ".join(mine) if mine else "",
+            "plans": "Planned: " + "; ".join(f"{NAMES[f]}: {_cut(t, 110)}" for f, t in plans.items()) if plans else "",
+            "memos": "Memo answers: " + "; ".join(memos) if memos else "",
+            "next": f"Coming next: {NEXT.get(floor, '')}",
+        }
+        room, chosen = max_chars, {}
+        for key in ("memos", "next", "mine", "others", "plans"):
+            text = sections[key]
+            if text and room > 20:
+                chosen[key] = _cut(text, room - 1)
+                room -= len(chosen[key]) + 1
+        return "\n".join(chosen[k] for k in sections if k in chosen)
+
+
+def _cut(text: str, n: int) -> str:
+    return text if len(text) <= n else text[: max(0, n - 3)] + "..."

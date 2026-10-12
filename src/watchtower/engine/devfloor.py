@@ -5,7 +5,7 @@ import re
 from pathlib import PurePosixPath
 from typing import Callable, Sequence
 
-from watchtower.engine.floor import WorkPackage, truthy, untrusted
+from watchtower.engine.floor import WorkPackage, untrusted, untrusted_code
 from watchtower.engine.model_socket import BadModelOutput
 from watchtower.engine.qafloor import parse_routes
 from watchtower.engine.sandbox import SandboxResult
@@ -54,6 +54,17 @@ HR_PROMPT = (
     '{{"pass": boolean, "reason": string}}'
 )
 MAX_HR_ASKS = 2
+FEEDBACK_ITEM, FEEDBACK_TOTAL, QA_CHARS = 600, 2000, 1500  # keep the coder prompt inside num_ctx
+PROMPT_CHARS = 10_500  # ~3.3k tokens + system + tower brief + 2048 output < num_ctx 6144
+_UNSAFE = re.compile(r"[<>{}\x00-\x1f\x7f]")
+
+
+def _compact_checks(checks: Sequence[dict]) -> str:
+    """QA checks for the coder: compact JSON, long values trimmed, total capped."""
+    trimmed = [{**c, "form": {k: str(v)[:60] for k, v in c.get("form", {}).items()},
+                "expect_text": str(c.get("expect_text", ""))[:80]} for c in checks]
+    text = json.dumps(trimmed)
+    return text if len(text) <= QA_CHARS else text[:QA_CHARS] + " ...(more checks)"
 
 
 def _spec_text(spec: dict) -> str:
@@ -76,21 +87,30 @@ class DevFloor:
         note = ("\nThe reviewer rejected the last design:\n- " + "\n- ".join(feedback)) if feedback else ""
         out = self._ask(self._architect, PLAN_PROMPT.format(
             spec=_spec_text(spec), research=untrusted("f1", research) if research else "(none)", feedback=note))
-        files = [{"path": str(f.get("path", "")).strip(), "purpose": str(f.get("purpose", "")).strip()}
+        files = [{"path": str(f.get("path", "")).strip(), "purpose": _UNSAFE.sub("", str(f.get("purpose", ""))).strip()[:80]}
                  for f in out.get("files") or [] if isinstance(f, dict) and str(f.get("path", "")).strip()]
         entry = str(out.get("entry") or "app.py").strip()
         safe = _SAFE_ENTRY.fullmatch(entry) and ".." not in entry.split("/")
         return {"files": files[:15], "entry": entry if safe else "app.py", "routes": parse_routes(out.get("routes"))}
 
     def build(self, spec: dict, plan: dict, feedback: Sequence[str], qa_checks: Sequence[dict] = ()) -> WorkPackage:
-        notes = [f"Reviewer feedback to address:\n{untrusted('gate', f)}" for f in feedback]
+        kept, used = [], 0
+        for f in feedback:
+            item = str(f)[:FEEDBACK_ITEM]
+            if used + len(item) > FEEDBACK_TOTAL:
+                break
+            kept.append(item)
+            used += len(item)
+        notes = [f"Reviewer feedback to address:\n{untrusted('gate', f)}" for f in kept]
         qa = ("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n"
-              + untrusted("f4", json.dumps(list(qa_checks), indent=1)) + "\n") if qa_checks else ""
+              + untrusted("f4", _compact_checks(qa_checks)) + "\n") if qa_checks else ""
         checks, output, passed, hr_asks, hr_question = [], "", False, 0, None
         for round_no in range(self._max_rounds):
+            parts = dict(spec=_spec_text(spec), plan=untrusted("f2.architect", json.dumps(plan)), qa=qa,
+                         feedback=("\n" + "\n".join(notes)) if notes else "")
+            room = max(1500, min(6000, PROMPT_CHARS - len(CODE_PROMPT.format(files="", **parts))))
             reply = self._ask(self._coder, CODE_PROMPT.format(
-                spec=_spec_text(spec), plan=json.dumps(plan, indent=1), files=untrusted("workspace", self._ws.snapshot()),
-                qa=qa, feedback=("\n" + "\n".join(notes)) if notes else ""))
+                files=untrusted_code("workspace", self._ws.snapshot(room)), **parts))
             notes = self._write(reply.get("files"))
             self._ensure_packages()
             problems = import_problems(self._ws)
@@ -119,7 +139,7 @@ class DevFloor:
             elif not ran_tests:
                 notes.append("unittest found 0 tests: name test files test_*.py, put test classes in "
                              "unittest.TestCase subclasses, and name methods test_*.")
-            notes.append("Test output:\n" + untrusted("sandbox", output or "(no output)"))
+            notes.append("Test output:\n" + untrusted("sandbox", (output or "(no output)")[-1200:]))
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"
                    f"Tests: {'PASS' if passed else 'FAIL'}\n{output[-800:]}")
         questions = [] if passed else [f"tests still failing after {len(checks)} round(s)"]
@@ -129,11 +149,14 @@ class DevFloor:
     def _hr_review(self, spec: dict, plan: dict) -> tuple[bool, str] | None:
         """Floor 2 HR: a second model family reads the passing code against the spec. Garbage → skipped."""
         try:
-            out = self._ask(self._hr, HR_PROMPT.format(spec=_spec_text(spec), plan=json.dumps(plan, indent=1),
-                                                        code=untrusted("workspace", self._ws.snapshot())))
+            out = self._ask(self._hr, HR_PROMPT.format(spec=_spec_text(spec),
+                                                        plan=untrusted("f2.architect", json.dumps(plan)),
+                                                        code=untrusted_code("workspace", self._ws.snapshot(4500))))
         except BadModelOutput:
             return None
-        return truthy(out.get("pass")), str(out.get("reason") or "no reason given").strip()
+        if not isinstance(out.get("pass"), bool):  # no clear verdict from a sloppy model: skip, never veto
+            return None
+        return out["pass"], str(out.get("reason") or "no reason given").strip()
 
     def _ensure_packages(self) -> None:
         """unittest discovery only enters folders that are packages: add empty __init__.py where missing."""

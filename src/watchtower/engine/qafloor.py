@@ -92,6 +92,7 @@ def _check(raw) -> dict | None:
 
 _FIELD = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,30}")
 MAX_ROUTES = 8
+_SAFE_TEXT = re.compile(r"[^<>{}\x00-\x1f\x7f]*")
 
 
 def _route(raw) -> dict | None:
@@ -106,7 +107,7 @@ def _route(raw) -> dict | None:
                                                                   for f in fields):
         return None
     shows = raw.get("shows") or ""
-    if not isinstance(shows, str) or len(shows) > 100:
+    if not isinstance(shows, str) or len(shows) > 100 or not _SAFE_TEXT.fullmatch(shows):
         return None
     return {"method": method, "path": path, "fields": list(fields), "shows": shows}
 

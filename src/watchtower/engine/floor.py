@@ -30,6 +30,16 @@ def untrusted(source: str, text: str) -> str:
     return f'<untrusted source="{safe_source}">\n{text.replace("<", "&lt;")}\n</untrusted>'
 
 
+_TAG = re.compile(r"<(/?untrusted)", re.IGNORECASE)
+
+
+def untrusted_code(source: str, text: str) -> str:
+    """Like untrusted(), for code an agent must edit: only tag-like '<untrusted' / '</untrusted' are escaped,
+    so '<h1>' stays '<h1>' (escaping every '<' made the coder copy '&lt;' back into its own files)."""
+    safe_source = re.sub(r"[^A-Za-z0-9:/._%#?=&@+~-]", "", source)[:200]
+    return f'<untrusted source="{safe_source}">\n{_TAG.sub(r"&lt;\1", text)}\n</untrusted>'
+
+
 SOURCE_ATTR = re.compile(r'<untrusted source="([^"]*)">')
 REALITY_FLOORS = {"f2", "f3", "f4", "dev"}
 SECOND_LEVEL = {"co", "com", "org", "net", "gov", "ac", "edu"}

@@ -14,9 +14,10 @@ from watchtower.engine.floor import Floor, WorkPackage, strs, untrusted
 from watchtower.engine.gate import Gate
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.knowledge import Knowledge
-from watchtower.engine.model_socket import BadModelOutput
+from watchtower.engine.model_socket import BadModelOutput, LowMemory, ModelUnavailable
 from watchtower.engine.office import F3Office, QAOffice
 from watchtower.engine.qafloor import QAFloor, run_qa
+from watchtower.engine.scheduler import SchedulerBusy
 from watchtower.engine.releases import Releases
 from watchtower.engine.workflow import Step
 from watchtower.engine.workspace import Workspace
@@ -166,21 +167,25 @@ class TowerPipeline:
 
     def _route_memo(self, sender: Role, data: dict, memo: dict) -> None:
         job_id, to = data["job_id"], str(memo.get("to") or "").strip().lower()
-        question = " ".join(str(memo.get("question") or "").split())[:300]
+        question = " ".join(str(memo.get("question") or "").split())[:120]
         lead = self._roles.get(FLOOR_LEADS.get(to, ""))
         if lead is None or to == sender.floor or not question:
             return
-        sent = [n for n in self._board.notes(job_id) if n["kind"] == "memo" and n["floor"] == sender.floor]
-        if len(sent) >= MAX_MEMOS:
+        notes = self._board.notes(job_id)
+        if sum(n["kind"] == "memo" and n["floor"] == sender.floor for n in notes) >= MAX_MEMOS:
             return
-        known = self._known.get((job_id, to)) or self._board.brief(job_id, to) or "(nothing yet)"
-        try:  # answered through the raw door: an answer can never send another memo
-            out = self._ask(lead, data, MEMO_PROMPT.format(sender=NAMES[sender.floor],
-                                                           question=untrusted(sender.floor, question),
-                                                           known=untrusted(to, known[:1500])))
-            answer = " ".join(str(out.get("answer") or "").split())[:200] or "no answer"
-        except BadModelOutput:
-            answer = "no answer"
+        own = [n["text"] for n in notes if n["floor"] == to and n["kind"] != "memo"][-5:]
+        known = "\n".join(filter(None, [self._known.get((job_id, to), "")[:1200]] + own))
+        if not known:  # never let a floor invent what it has not done
+            answer = "nothing yet: that floor has not worked on this job"
+        else:
+            try:  # answered through the raw door: an answer can never send another memo
+                out = self._ask(lead, data, MEMO_PROMPT.format(sender=NAMES[sender.floor],
+                                                               question=untrusted(sender.floor, question),
+                                                               known=untrusted(to, known[:1500])))
+                answer = " ".join(str(out.get("answer") or "").split())[:150] or "no answer"
+            except (BadModelOutput, LowMemory, ModelUnavailable, SchedulerBusy):  # a memo never pauses a job
+                answer = "no answer"
         self._board.note(job_id, sender.floor, "memo", f"{NAMES[sender.floor]} asked {NAMES[to]}: {question} → {answer}")
 
     def _plan_qa(self, data: dict, plan: dict, qa_office: QAOffice) -> list[dict]:

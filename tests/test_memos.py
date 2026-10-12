@@ -49,26 +49,28 @@ def test_every_floor_agent_gets_the_tower_board_brief(tower):
 
 def test_memo_is_answered_by_the_target_floor_lead_and_shared(tower):
     runner, model, job, board = tower({
-        "f2.architect": [{**PLAN, "memo": {"to": "f1", "question": "which storage did research pick?"}}],
-        "f1.lead": [{"answer": "sqlite3 file storage"}]})
+        "f2.coder": [{**APP_REPLIES["f2.coder"][0], "memo": {"to": "f4", "question": "what will QA test?"}},
+                     APP_REPLIES["f2.coder"][0]],
+        "f4.lead": [{"areas": ["home page"]}, {"answer": "the home page shows Todo"}],
+        "f5.dev_gate": [{"pass": False, "reasons": ["again"], "send_back_to": "code"}, {"pass": True, "reasons": []}]})
     runner.start(job.id, extra={"auto_approve": True})
-    lead = prompts_of(model, "f1.lead")
-    assert len(lead) == 1 and "which storage did research pick?" in lead[0]
-    assert '<untrusted source="f2">' in lead[0]
-    assert any("sqlite3 file storage" in p for p in prompts_of(model, "f2.coder"))
+    lead = [p for p in prompts_of(model, "f4.lead") if "asks your floor" in p]
+    assert len(lead) == 1 and "what will QA test?" in lead[0] and '<untrusted source="f2">' in lead[0]
+    assert "home" in lead[0]  # the QA floor's own plan is what it answers from
+    assert any("the home page shows Todo" in p for p in prompts_of(model, "f2.coder")[1:])
     assert [n for n in board.notes(job.id) if n["kind"] == "memo"][0]["floor"] == "f2"
     runner.close()
 
 
 def test_memos_are_capped_per_floor_and_answers_cannot_send_memos(tower):
-    memo = {"to": "f1", "question": "anything new?"}
+    memo = {"to": "f4", "question": "anything new?"}
     runner, model, job, board = tower({
         "f2.coder": [{**APP_REPLIES["f2.coder"][0], "memo": memo}],
         "f5.dev_gate": [{"pass": False, "reasons": ["again"], "send_back_to": "code"}] * 3
                        + [{"pass": True, "reasons": []}],
-        "f1.lead": [{"answer": "no", "memo": {"to": "f2", "question": "loop?"}}]})
+        "f4.lead": [{"areas": ["home page"]}, {"answer": "no", "memo": {"to": "f2", "question": "loop?"}}]})
     runner.start(job.id, extra={"auto_approve": True})
-    assert model.calls.count("f1.lead") == 3
+    assert sum("asks your floor" in p for p in prompts_of(model, "f4.lead")) == 3
     assert model.calls.count("f2.architect") == 1  # the answer's memo was never routed
     runner.close()
 
@@ -92,7 +94,34 @@ def test_roles_that_may_not_send_memos_are_ignored(tower):
 
 def test_unanswerable_memo_does_not_pause_the_job(tower):
     runner, model, job, board = tower({
-        "f2.architect": [{**PLAN, "memo": {"to": "f1", "question": "storage?"}}], "f1.lead": ["not json"]})
+        "f2.coder": [{**APP_REPLIES["f2.coder"][0], "memo": {"to": "f4", "question": "storage?"}}],
+        "f4.lead": [{"areas": ["home page"]}, "not json"]})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert "no answer" in [n for n in board.notes(job.id) if n["kind"] == "memo"][0]["text"]
+    runner.close()
+
+
+def test_memo_to_a_floor_with_nothing_yet_gets_no_invented_answer(tower):
+    runner, model, job, board = tower({
+        "f2.architect": [{**PLAN, "memo": {"to": "f1", "question": "which storage did research pick?"}}]})
+    runner.start(job.id, extra={"auto_approve": True})
+    assert "f1.lead" not in model.calls
+    memo = [n for n in board.notes(job.id) if n["kind"] == "memo"][0]["text"]
+    assert "nothing yet" in memo
+    runner.close()
+
+
+def test_memo_answer_failure_from_low_memory_never_pauses_the_job(tower):
+    from watchtower.engine.model_socket import LowMemory
+    runner, model, job, board = tower({
+        "f2.coder": [{**APP_REPLIES["f2.coder"][0], "memo": {"to": "f4", "question": "what will you test?"}}]})
+    real = runner._tower._ask
+
+    def ask(role, data, prompt):
+        if "asks your floor" in prompt:
+            raise LowMemory("not enough RAM")
+        return real(role, data, prompt)
+    runner._tower._ask = ask
     assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
     assert "no answer" in [n for n in board.notes(job.id) if n["kind"] == "memo"][0]["text"]
     runner.close()

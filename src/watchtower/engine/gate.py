@@ -41,7 +41,8 @@ class Gate:
             out_of_scope=_bullets(spec.get("out_of_scope", [])),
             floor=package.floor, summary=untrusted(package.floor, package.summary),
             sources=", ".join(package.sources) or "(none)",
-            questions="; ".join(package.open_questions) or "(none)",
+            questions=untrusted("open-questions", "; ".join(package.open_questions)) if package.open_questions
+            else "(none)",
         )
         if routes:
             prompt += (f'\nIf it fails, also set "send_back_to" to one of: {", ".join(routes)}. '
