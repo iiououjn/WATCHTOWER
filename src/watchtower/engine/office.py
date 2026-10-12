@@ -4,7 +4,7 @@ import json
 from typing import Callable
 
 from watchtower.engine.floor import strs, untrusted
-from watchtower.engine.model_socket import BadModelOutput
+from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.engine.qafloor import MAX_CHECKS, parse_checks
 from watchtower.roles import Role
 
@@ -44,14 +44,14 @@ class QAOffice:
         try:
             areas = strs(self._ask(self._lead, AREAS_PROMPT.format(acceptance=acceptance, routes=contract))
                          .get("areas"), cap=3)
-        except BadModelOutput:
+        except ADVISORY_ERRORS:
             areas = []
         checks: list[dict] = []
         for area in areas or list(spec["acceptance"])[:3]:
             try:
                 out = self._ask(self._worker, CHECKS_PROMPT.format(acceptance=acceptance, routes=contract,
                                                                    area=untrusted("f4.lead", area)))
-            except BadModelOutput:
+            except ADVISORY_ERRORS:
                 continue
             checks += parse_checks(out)[:3]
         paths = {r["path"] for r in routes}
@@ -63,7 +63,7 @@ class QAOffice:
             verdict = self._ask(self._hr, REVIEW_PROMPT.format(
                 acceptance=acceptance, routes=contract, checks=untrusted("f4.qa", json.dumps(checks, indent=1))))
             drop = set(strs(verdict.get("drop")))
-        except BadModelOutput:
+        except ADVISORY_ERRORS:
             drop = set()
         return [c for c in checks if c["name"] not in drop]
 
@@ -89,7 +89,7 @@ class F3Office:
         try:
             out = self._ask(self._lead, EXPECT_PROMPT.format(title=spec["title"], goal=spec["goal"],
                                                              routes=untrusted("f2.architect", json.dumps(routes))))
-        except BadModelOutput:
+        except ADVISORY_ERRORS:
             return ""
         text = str(out.get("expect_text") or "").strip()
         return text if 0 < len(text) <= 60 and text.isprintable() else ""
@@ -97,6 +97,6 @@ class F3Office:
     def diagnose(self, log: str) -> str:
         try:
             out = self._ask(self._hr, DIAGNOSE_PROMPT.format(log=untrusted("sandbox", log[-1500:])))
-        except BadModelOutput:
+        except ADVISORY_ERRORS:
             return ""
         return " ".join(str(out.get("diagnosis") or "").split())[:500]

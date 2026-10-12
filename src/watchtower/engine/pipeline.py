@@ -14,10 +14,10 @@ from watchtower.engine.floor import Floor, WorkPackage, strs, untrusted
 from watchtower.engine.gate import Gate
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.knowledge import Knowledge
-from watchtower.engine.model_socket import BadModelOutput, LowMemory, ModelUnavailable
+from watchtower.engine.model_socket import BadModelOutput
 from watchtower.engine.office import F3Office, QAOffice
 from watchtower.engine.qafloor import QAFloor, run_qa
-from watchtower.engine.scheduler import SchedulerBusy
+from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.engine.releases import Releases
 from watchtower.engine.workflow import Step
 from watchtower.engine.workspace import Workspace
@@ -184,9 +184,9 @@ class TowerPipeline:
                                                                question=untrusted(sender.floor, question),
                                                                known=untrusted(to, known[:1500])))
                 answer = " ".join(str(out.get("answer") or "").split())[:150] or "no answer"
-            except (BadModelOutput, LowMemory, ModelUnavailable, SchedulerBusy):  # a memo never pauses a job
+            except ADVISORY_ERRORS:  # a memo never pauses a job
                 answer = "no answer"
-        self._board.note(job_id, sender.floor, "memo", f"{NAMES[sender.floor]} asked {NAMES[to]}: {question} → {answer}")
+        self._board.note(job_id, sender.floor, "memo", f"{NAMES[sender.floor]} asked {NAMES[to]}: {question[:50]} → {answer}")
 
     def _plan_qa(self, data: dict, plan: dict, qa_office: QAOffice) -> list[dict]:
         """Post the architect's plan, then let the QA office write its checks from the routes contract."""

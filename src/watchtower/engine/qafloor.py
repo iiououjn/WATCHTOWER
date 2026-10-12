@@ -4,7 +4,7 @@ import json
 import re
 from typing import Callable
 
-from watchtower.engine.floor import WorkPackage, untrusted
+from watchtower.engine.floor import WorkPackage, untrusted_code
 from watchtower.engine.model_socket import BadModelOutput
 from watchtower.engine.sandbox import SandboxResult
 from watchtower.roles import Role
@@ -162,7 +162,7 @@ class QAFloor:
     def write_checks(self, spec: dict, code: str) -> list[dict]:
         out = self._ask(self._role, QA_PROMPT.format(
             title=spec["title"], goal=spec["goal"], acceptance="\n".join(f"- {a}" for a in spec["acceptance"]),
-            code=untrusted("workspace", code)))
+            code=untrusted_code("workspace", code)))
         checks = parse_checks(out)
         if not checks:
             raise BadModelOutput("QA wrote no usable checks; resume to retry")

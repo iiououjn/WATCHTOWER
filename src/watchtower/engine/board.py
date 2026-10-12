@@ -55,7 +55,9 @@ class Board:
                 plans[n["floor"]] = n["text"]  # only the current plan
         mine = [_cut(n["text"], 120) for n in notes
                 if n["floor"] == floor and n["kind"] in ("done", "doing", "issue")][-2:]
-        memos = [_cut(n["text"], 160) for n in notes if n["kind"] == "memo"][-2:]
+        all_memos = [n for n in notes if n["kind"] == "memo"]
+        own = [n for n in all_memos if n["floor"] == floor]  # a floor's own answers come first
+        memos = [_cut(n["text"], 240) for n in (own[-2:] if own else all_memos[-1:])]
         others = "; ".join(f"{NAMES[f]}{' (problem)' if n['kind'] == 'issue' else ''}: {_cut(n['text'], 110)}"
                            for f, n in status.items())
         sections = {  # display order; filled by priority so memo answers and what comes next always fit
@@ -66,7 +68,7 @@ class Board:
             "next": f"Coming next: {NEXT.get(floor, '')}",
         }
         room, chosen = max_chars, {}
-        for key in ("memos", "next", "mine", "others", "plans"):
+        for key in ("memos", "next", "others", "mine", "plans"):
             text = sections[key]
             if text and room > 20:
                 chosen[key] = _cut(text, room - 1)

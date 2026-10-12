@@ -6,7 +6,7 @@ from pathlib import PurePosixPath
 from typing import Callable, Sequence
 
 from watchtower.engine.floor import WorkPackage, untrusted, untrusted_code
-from watchtower.engine.model_socket import BadModelOutput
+from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.engine.qafloor import parse_routes
 from watchtower.engine.sandbox import SandboxResult
 from watchtower.engine.stdlib_check import import_problems
@@ -55,7 +55,7 @@ HR_PROMPT = (
 )
 MAX_HR_ASKS = 2
 FEEDBACK_ITEM, FEEDBACK_TOTAL, QA_CHARS = 600, 2000, 1500  # keep the coder prompt inside num_ctx
-PROMPT_CHARS = 10_500  # ~3.3k tokens + system + tower brief + 2048 output < num_ctx 6144
+PROMPT_CHARS = 9_000  # + system (~1.2k) + tower brief (~0.8k) ≈ 3.4k tokens; + 2048 output < num_ctx 6144
 _UNSAFE = re.compile(r"[<>{}\x00-\x1f\x7f]")
 
 
@@ -84,11 +84,13 @@ class DevFloor:
         self._max_rounds = max_rounds
 
     def plan(self, spec: dict, research: str, feedback: Sequence[str]) -> dict:
-        note = ("\nThe reviewer rejected the last design:\n- " + "\n- ".join(feedback)) if feedback else ""
+        note = ("\nThe reviewer rejected the last design:\n" + "\n".join(untrusted("gate", str(f)[:FEEDBACK_ITEM])
+                                                                    for f in feedback[:5])) if feedback else ""
         out = self._ask(self._architect, PLAN_PROMPT.format(
             spec=_spec_text(spec), research=untrusted("f1", research) if research else "(none)", feedback=note))
-        files = [{"path": str(f.get("path", "")).strip(), "purpose": _UNSAFE.sub("", str(f.get("purpose", ""))).strip()[:80]}
-                 for f in out.get("files") or [] if isinstance(f, dict) and str(f.get("path", "")).strip()]
+        files = [{"path": str(f.get("path", "")).strip()[:100], "purpose": _UNSAFE.sub("", str(f.get("purpose", ""))).strip()[:80]}
+                 for f in out.get("files") or [] if isinstance(f, dict)
+                 and 0 < len(str(f.get("path", "")).strip()) <= 100]
         entry = str(out.get("entry") or "app.py").strip()
         safe = _SAFE_ENTRY.fullmatch(entry) and ".." not in entry.split("/")
         return {"files": files[:15], "entry": entry if safe else "app.py", "routes": parse_routes(out.get("routes"))}
@@ -108,6 +110,9 @@ class DevFloor:
         for round_no in range(self._max_rounds):
             parts = dict(spec=_spec_text(spec), plan=untrusted("f2.architect", json.dumps(plan)), qa=qa,
                          feedback=("\n" + "\n".join(notes)) if notes else "")
+            while notes and len(CODE_PROMPT.format(files="", **parts)) > PROMPT_CHARS - 1500:
+                notes = notes[1:]  # oldest notes go first: the snapshot must stay readable
+                parts["feedback"] = ("\n" + "\n".join(notes)) if notes else ""
             room = max(1500, min(6000, PROMPT_CHARS - len(CODE_PROMPT.format(files="", **parts))))
             reply = self._ask(self._coder, CODE_PROMPT.format(
                 files=untrusted_code("workspace", self._ws.snapshot(room)), **parts))
@@ -152,11 +157,11 @@ class DevFloor:
             out = self._ask(self._hr, HR_PROMPT.format(spec=_spec_text(spec),
                                                         plan=untrusted("f2.architect", json.dumps(plan)),
                                                         code=untrusted_code("workspace", self._ws.snapshot(4500))))
-        except BadModelOutput:
+        except ADVISORY_ERRORS:
             return None
         if not isinstance(out.get("pass"), bool):  # no clear verdict from a sloppy model: skip, never veto
             return None
-        return out["pass"], str(out.get("reason") or "no reason given").strip()
+        return out["pass"], str(out.get("reason") or "no reason given").strip()[:300]
 
     def _ensure_packages(self) -> None:
         """unittest discovery only enters folders that are packages: add empty __init__.py where missing."""

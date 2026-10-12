@@ -92,3 +92,13 @@ def test_routes_free_text_is_restricted_and_wrapped():
     qa.plan_checks(SPEC, ROUTES)
     for role in ("f4.lead", "f4.qa"):
         assert '<untrusted source="f2.architect">' in s.prompts[role][0]
+
+
+def test_qa_office_on_low_memory_degrades_instead_of_pausing():
+    from watchtower.engine.model_socket import LowMemory
+
+    def ask(role, prompt):
+        if role.id == "f4.hr":
+            raise LowMemory("no RAM")
+        return {"areas": ["a"]} if role.id == "f4.lead" else {"checks": [ADD]}
+    assert [c["name"] for c in QAOffice(LEAD, WORKER, HR, ask).plan_checks(SPEC, ROUTES)] == ["add"]

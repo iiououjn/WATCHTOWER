@@ -77,3 +77,23 @@ def test_memo_answers_and_whats_next_survive_long_notes(conn):
     b.note("job1", "f2", "memo", "F2 asked F1: storage? → sqlite3")
     brief = b.brief("job1", "f2")
     assert len(brief) <= 600 and "sqlite3" in brief and "Coming next" in brief
+
+
+def test_long_memo_questions_never_cut_the_answer(conn):
+    b = board(conn)
+    b.note("job1", "f2", "memo", "F2 Dev asked F1 Research: " + "q" * 50 + " → " + "A" * 149 + "Z")
+    b.note("job1", "f3", "done", "app answered 200")
+    brief = b.brief("job1", "f2")
+    assert "A" * 149 + "Z" in brief and "F3 Build" in brief
+
+
+def test_a_floor_keeps_its_own_memo_answer_and_sees_other_floors(conn):
+    b = board(conn)
+    b.note("job1", "f2", "memo", "F2 Dev asked F4 QA: what? → mine")
+    b.note("job1", "f4", "memo", "F4 QA asked F1 Research: x → " + "o" * 150)
+    b.note("job1", "f4", "memo", "F4 QA asked F3 Build: y → " + "p" * 150)
+    for t in ("a" * 120, "b" * 120):
+        b.note("job1", "f5", "issue", t)
+    b.note("job1", "f3", "issue", "app crashed")
+    brief = b.brief("job1", "f2")
+    assert "→ mine" in brief and "crashed" in brief

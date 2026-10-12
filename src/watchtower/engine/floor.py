@@ -115,7 +115,8 @@ class Floor:
     def run(self, goal: str, feedback: Sequence[str] = ()) -> WorkPackage:
         gate_note = ""
         if feedback:
-            gate_note = "\nThe gate rejected the previous attempt; fix these:\n- " + "\n- ".join(feedback)
+            gate_note = ("\nThe gate rejected the previous attempt; fix these:\n"
+                         + "\n".join(untrusted("gate", str(f)[:600]) for f in feedback[:5]))
         plan = self._ask(self._lead, LEAD_PROMPT.format(goal=goal, context=self._context(goal) or "(none)",
                                                          feedback=gate_note, n=self._max_tasks))
         tasks = strs(plan.get("tasks"))[: self._max_tasks]
