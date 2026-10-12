@@ -37,7 +37,7 @@ def test_summary(stdout: str) -> dict | None:
     return data if isinstance(data, dict) else None
 MAX_FILES_PER_ROUND = 3
 PLAN_PROMPT = (
-    "Spec:\n{spec}\n\nResearch notes:\n{research}\n{feedback}\n"
+    "Spec:\n{spec}\n\nResearch notes:\n{research}\n{lessons}{feedback}\n"
     "Plan the files and the app's routes (the contract QA will test). Reply as JSON: "
     '{{"files": [{{"path": string, "purpose": string}}], "entry": string, '
     '"routes": [{{"method": "GET" or "POST", "path": string, "fields": [form field names], "shows": string}}]}}'
@@ -84,11 +84,12 @@ class DevFloor:
         self._run = run
         self._max_rounds = max_rounds
 
-    def plan(self, spec: dict, research: str, feedback: Sequence[str]) -> dict:
+    def plan(self, spec: dict, research: str, feedback: Sequence[str], lessons: str = "") -> dict:
         note = ("\nThe reviewer rejected the last design:\n" + "\n".join(untrusted("gate", str(f)[:FEEDBACK_ITEM])
                                                                     for f in feedback[:5])) if feedback else ""
         out = self._ask(self._architect, PLAN_PROMPT.format(
-            spec=_spec_text(spec), research=untrusted("f1", research) if research else "(none)", feedback=note))
+            spec=_spec_text(spec), research=untrusted("f1", research) if research else "(none)", feedback=note,
+            lessons=("\nLessons from past jobs:\n" + untrusted("retro", lessons[:800]) + "\n") if lessons else ""))
         files = [{"path": str(f.get("path", "")).strip()[:100], "purpose": _UNSAFE.sub("", str(f.get("purpose", ""))).strip()[:80]}
                  for f in out.get("files") or [] if isinstance(f, dict)
                  and 0 < len(str(f.get("path", "")).strip()) <= 100]

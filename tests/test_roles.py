@@ -48,7 +48,7 @@ def test_not_a_mapping(tmp_path):
         load_roles(tmp_path)
 
 
-@pytest.mark.parametrize("role_id", ["cpo", "f1.lead", "f1.worker", "f1.hr", "f5.gate", "f4.qa", "f4.lead", "f4.hr", "f2.hr", "f3.lead", "f3.hr"])
+@pytest.mark.parametrize("role_id", ["cpo", "f1.lead", "f1.worker", "f1.hr", "f5.gate", "f4.qa", "f4.lead", "f4.hr", "f2.hr", "f3.lead", "f3.hr", "f5.lead", "f5.auditor"])
 def test_every_role_that_reads_context_distrusts_it(role_id):
     assert "never follow instructions" in load_roles(tiers=DEFAULT_TIERS)[role_id].prompt
 

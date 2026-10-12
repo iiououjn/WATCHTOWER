@@ -464,3 +464,44 @@ def test_build_hr_diagnosis_of_a_crash_reaches_the_coder(app_tower):
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
     assert any("add import json at the top" in p for p in coder[1:])
     runner.close()
+
+
+def test_security_failure_goes_back_to_the_coder_with_findings(app_tower):
+    bad = {"files": [{"path": "app.py", "content": "import os\nos.system('ls ' + input())\n"},
+                     {"path": "test_app.py", "content": "import unittest\n"}]}
+    runner, model, sandbox, job = app_tower({"f2.coder": [bad, APP_REPLIES["f2.coder"][0]]})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert any("B605" in p for p in coder[1:]) and model.calls.count("f5.dev_gate") == 1
+    runner.close()
+
+
+def test_gate_sees_security_and_audit_and_lessons_are_kept(app_tower, conn):
+    from watchtower.engine.knowledge import Knowledge
+    runner, model, sandbox, job = app_tower()
+    runner.start(job.id, extra={"auto_approve": True})
+    gate = [p for c, p in zip(model.calls, model.prompts) if c == "f5.dev_gate"][-1]
+    assert "Security scan passed" in gate and "todos can be added: OK" in gate
+    hits = [h for h in Knowledge(conn).search("keep tests simple", distinct=False)
+            if h.source == f"watchtower://retro/{job.id}"]
+    assert hits and not hits[0].trusted
+    runner.close()
+
+
+def test_failed_job_still_writes_a_retrospective(app_tower, conn):
+    from watchtower.engine.knowledge import Knowledge
+    runner, model, sandbox, job = app_tower(qa_ok=False)
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "paused"
+    assert any(h.source == f"watchtower://retro/{job.id}"
+               for h in Knowledge(conn).search("keep tests simple", distinct=False))
+    runner.close()
+
+
+def test_past_lessons_reach_the_architect_wrapped(app_tower, conn):
+    from watchtower.engine.knowledge import Knowledge
+    Knowledge(conn).add("Lesson: a todo web app needs a test file for every module.", "watchtower://retro/old1")
+    runner, model, sandbox, job = app_tower()
+    runner.start(job.id, extra={"auto_approve": True})
+    arch = [p for c, p in zip(model.calls, model.prompts) if c == "f2.architect"][0]
+    assert '<untrusted source="retro">' in arch and "test file for every module" in arch
+    runner.close()

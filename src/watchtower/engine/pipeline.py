@@ -15,7 +15,8 @@ from watchtower.engine.gate import Gate
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput
-from watchtower.engine.office import F3Office, QAOffice
+from watchtower.engine.office import F3Office, OversightOffice, QAOffice
+from watchtower.engine.oversight import security_package, security_scan
 from watchtower.engine.qafloor import QAFloor, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.engine.releases import Releases
@@ -100,12 +101,14 @@ class TowerPipeline:
         gate = Gate(ask, r["f5.dev_gate"])
         qa = QAFloor(r["f4.qa"], ask)
         qa_office = QAOffice(r["f4.lead"], r["f4.qa"], r["f4.hr"], ask)
-        research = (data.get("f1") or {}).get("summary", "")
-        plan, feedback = dev.plan(spec, research, []), []
+        oversight = OversightOffice(r["f5.lead"], r["f5.auditor"], ask)
+        research, lessons = (data.get("f1") or {}).get("summary", ""), self._lessons(data)
+        plan, feedback = dev.plan(spec, research, [], lessons), []
+        focus = oversight.focus(spec)
         checks = self._plan_qa(data, plan, qa_office)
         expect = f3_office.expect(spec, plan["routes"])
         for attempt in range(MAX_SEND_BACKS + 1):
-            package, f3, f4 = dev.build(spec, plan, feedback, checks), None, None
+            package, f3, f4, sec, audit = dev.build(spec, plan, feedback, checks), None, None, None, ""
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
             self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "
                        f"after {len(package.checks_run)} round(s) (attempt {attempt + 1})")
@@ -120,8 +123,15 @@ class TowerPipeline:
                     f4 = run_qa(run, plan["entry"], checks or qa.write_checks(spec, ws.snapshot()))
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
                                f4.summary.splitlines()[0], known=f4.summary[:1500])
-                later = [p for p in (f3, f4) if p is not None]
-                package = WorkPackage("dev", "\n\n".join([package.summary] + [p.summary for p in later])
+                if f4 is not None and f4.checks_run[-1]["pass"]:  # Floor 5 office: security scan, then spec audit
+                    sec = security_package(security_scan(ws.root, ws.files()))
+                    self._post(data, "f5", "doing" if sec.checks_run[-1]["pass"] else "issue",
+                               sec.summary.splitlines()[0], known=sec.summary[:1500])
+                    if sec.checks_run[-1]["pass"]:
+                        audit = oversight.audit(spec, focus, ws.snapshot(3000), f4.summary)
+                later = [p for p in (f3, f4, sec) if p is not None]
+                package = WorkPackage("dev", "\n\n".join([package.summary] + [p.summary for p in later]
+                                                         + ([f"Oversight audit:\n{audit}"] if audit else []))
                                       + f"\n\nCode:\n{ws.snapshot(3000)}", ws.files(), [],
                                       package.checks_run + [c for p in later for c in p.checks_run],
                                       package.open_questions + [q for p in later for q in p.open_questions])
@@ -131,6 +141,7 @@ class TowerPipeline:
             self._post(data, "f5", "done" if verdict.passed else "issue", "gate passed the app" if verdict.passed
                        else f"gate sent back to {verdict.route}: {'; '.join(verdict.reasons)[:200]}")
             if verdict.passed:
+                self._retro(data, oversight)
                 if self._releases is not None:
                     self._releases.record(job_id, plan["entry"], ws.root, ws.files())
                 self._bus.publish("app.released", {"entry": plan["entry"], "files": len(ws.files())}, job_id)
@@ -150,11 +161,32 @@ class TowerPipeline:
                     self._post(data, "f3", "issue", "diagnosis: " + diagnosis)
             elif f4 is not None and not f4.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 4 QA checks failed:\n" + untrusted("sandbox", f4.summary)]
+            elif sec is not None and not sec.checks_run[-1]["pass"]:
+                feedback = feedback + ["Floor 5 security scan found problems; fix them:\n" + untrusted("security", sec.summary)]
             if verdict.route in ("design", "research"):
-                plan = dev.plan(spec, research, feedback)
+                plan = dev.plan(spec, research, feedback, lessons)
                 checks = self._plan_qa(data, plan, qa_office)
                 expect = f3_office.expect(spec, plan["routes"])
+        self._retro(data, oversight)
         raise NeedsOwner(f"gate rejected the app {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")
+
+    def _lessons(self, data: dict) -> str:
+        """Past retrospectives that match this job (stored untrusted; shown to the architect wrapped)."""
+        hits = {}
+        for query in (data["prompt"], f"{data['spec']['title']} {data['spec']['goal']}"):
+            for h in self._knowledge.search(query, limit=8, distinct=True):
+                if h.source.startswith("watchtower://retro/") and h.source != f"watchtower://retro/{data['job_id']}":
+                    hits.setdefault(h.source, h.text[:400])
+        return "\n".join(list(hits.values())[:2])
+
+    def _retro(self, data: dict, oversight: OversightOffice) -> None:
+        notes = [f"{n['floor']} {n['kind']}: {n['text']}" for n in self._board.notes(data["job_id"])][-12:]
+        lessons = oversight.retro(data["spec"], notes)
+        if lessons:
+            self._knowledge.add(f"Lessons from job {data['job_id']} ({data['spec']['title']}):\n"
+                                + "\n".join(f"- {x}" for x in lessons), f"watchtower://retro/{data['job_id']}",
+                                title=f"Retrospective: {data['spec']['title']}", trusted=False)
+            self._post(data, "f5", "done", "lessons: " + "; ".join(lessons))
 
     def _call(self, role: Role, data: dict, prompt: str) -> dict:
         """The one door every floor agent goes through: it hears the tower board and may send a memo."""
