@@ -763,3 +763,15 @@ def test_f2_unit_workers_write_before_the_test_loop(app_tower, conn):
     notes = [n["text"] for n in Board(Bus(AuditLog(conn))).notes(job.id) if n["floor"] == "f2"]
     assert any("unit 1/1" in t for t in notes)
     runner.close()
+
+
+def test_f3_probes_the_full_app_after_the_mvp(app_tower):
+    arch = {**APP_REPLIES["f2.architect"][0], "routes": APP_REPLIES["f2.architect"][0]["routes"]
+            + [{"method": "GET", "path": "/items", "shows": "items"}]}
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, probe=[500, 200])
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    probes = [c for c in sandbox.calls if "WATCHTOWER_PROBE" in c[2]]
+    assert len(probes) == 2  # failed once, the coder fixed it, then passed
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert any("GET /items" in p for p in coder)
+    runner.close()

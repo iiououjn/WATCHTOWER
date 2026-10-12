@@ -8,7 +8,7 @@ from typing import Callable
 from watchtower.beacon import glass as glass_mod
 from watchtower.beacon.beacon import Beacon
 from watchtower.floors.board import FLOORS, NAMES, Board
-from watchtower.floors.f3_build.buildfloor import smoke_test
+from watchtower.floors.f3_build.buildfloor import build_check
 from watchtower.engine.bus import Bus
 from watchtower.floors.f2_dev.devfloor import DevFloor
 from watchtower.floors.f1_research.office import Floor
@@ -143,7 +143,7 @@ class TowerPipeline:
                 package = WorkPackage("f2", package.summary, ws.files(), [], package.checks_run +
                                       [{"check": "entry", "pass": False}], feedback)
             elif package.checks_run and package.checks_run[-1].get("pass"):
-                f3 = smoke_test(run, plan["entry"], expect)
+                f3 = build_check(run, plan["entry"], expect, plan["routes"])  # MVP first, then the full app
                 self._handoff(data, "f3", attempt, f3.checks_run[-1]["pass"], f3.open_questions)
                 self._post(data, "f3", "done" if f3.checks_run[-1]["pass"] else "issue", f3.summary.splitlines()[0])
                 if f3.checks_run[-1]["pass"]:
