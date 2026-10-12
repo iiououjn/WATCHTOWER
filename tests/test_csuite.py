@@ -44,3 +44,9 @@ def test_ceo_string_verdicts_are_understood():
     for word, expected in [("false", False), ("No", False), ("reject", False), ("true", True), ("yes", True),
                            ("maybe", None)]:
         assert CEO(role, ask_with({"approve": word}, [])).recommend(SPEC, "", "")[0] is expected
+
+
+def test_cto_word_false_is_a_request_for_changes():
+    role = Role("cto", "CTO", "csuite", "small", (), "c")
+    assert CTO(role, ask_with({"approve": "false", "changes": ["use http.server"]}, [])).review(SPEC, PLAN, ()) \
+        == (False, ["use http.server"])

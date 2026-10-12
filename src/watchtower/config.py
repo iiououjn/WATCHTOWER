@@ -45,7 +45,7 @@ def load_settings() -> Settings:
     if work:
         if not _MODEL.fullmatch(work):
             raise ValueError(f"WATCHTOWER_WORK_MODEL {work!r} is not an Ollama model name")
-        tiers["work"] = f"ollama/{work}"
+        tiers["work"] = f"ollama/{work.removeprefix('ollama/')}"
     return Settings(
         home=home,
         tiers=tiers,

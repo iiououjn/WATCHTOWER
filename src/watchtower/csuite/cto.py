@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Callable
 
+from watchtower.csuite.ceo import _verdict
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.floors.framework import strs, untrusted
 from watchtower.roles import Role
@@ -29,6 +30,6 @@ class CTO:
                 plan=untrusted("f2.architect", json.dumps(plan))))
         except ADVISORY_ERRORS:
             return True, []
-        if out.get("approve") is not False:
+        if _verdict(out.get("approve")) is not False:  # garbage or no verdict approves; "false"/"no" does not
             return True, []
         return False, [" ".join(c.split())[:200] for c in strs(out.get("changes"), cap=3)]

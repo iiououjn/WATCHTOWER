@@ -752,3 +752,4 @@ def test_gate_prompt_fits_with_maximum_owner_rules(app_tower, settings):
     assert len(gate) <= 11_000 and "Guardrails" in gate
     assert gate.index("Guardrails") < gate.index("Reply as JSON")  # the JSON instruction comes after the rules
     runner.close()
+

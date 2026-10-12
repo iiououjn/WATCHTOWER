@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -72,8 +73,10 @@ def load_guardrails(home: Path | None) -> Guardrails:
     """The packaged guardrails, overridden key by key by the owner's copy in the tower home, if any."""
     base = _parse(yaml.safe_load(PACKAGED.read_text()), None)
     owner = home / "guardrails.yaml" if home is not None else None
-    if owner is None or not owner.is_file():
+    if owner is None or not os.path.lexists(owner):
         return base
+    if not owner.is_file():  # a dangling link or a folder must not silently drop the owner's stricter rules
+        raise GuardrailsError(f"guardrails: {owner} exists but is not a readable file")
     try:
         if owner.stat().st_size > MAX_FILE_BYTES:
             raise GuardrailsError(f"guardrails: {owner} is larger than {MAX_FILE_BYTES // 1000} KB")

@@ -1,9 +1,10 @@
 # THE WATCHTOWER guardrails — enforced by Floor 5 at every gate.
 # Copy this file to ~/.watchtower/guardrails.yaml to change it; unset keys keep these defaults.
+# Write each key once: if a key appears twice, the last one wins.
 
 stdlib_only: true                 # apps may import only the Python standard library. false turns off only
                                   # the import check: the sandbox has no network and cannot install packages
-security_fail_on: [HIGH, MEDIUM]  # lowest severity that fails the build; HIGH (incl. secrets) always fails
+security_fail_on: [HIGH, MEDIUM]  # lowest severity that fails the build (confident findings); HIGH always fails
 min_source_domains: 2             # research claims need sources from this many independent sites
 max_send_backs: 3                 # gate send-backs per floor before the owner decides
 

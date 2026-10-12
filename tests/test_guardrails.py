@@ -67,3 +67,26 @@ def test_work_model_accepts_namespaced_ollama_names(monkeypatch, tmp_path):
     monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
     monkeypatch.setenv("WATCHTOWER_WORK_MODEL", "hf.co/user/model:Q4_K_M")
     assert load_settings().tiers["work"] == "ollama/hf.co/user/model:Q4_K_M"
+
+
+def test_owner_path_that_is_not_a_file_is_an_error(tmp_path):
+    (tmp_path / "guardrails.yaml").symlink_to(tmp_path / "moved-away.yaml")
+    with pytest.raises(GuardrailsError):
+        load_guardrails(tmp_path)
+    (tmp_path / "guardrails.yaml").unlink()
+    (tmp_path / "guardrails.yaml").mkdir()
+    with pytest.raises(GuardrailsError):
+        load_guardrails(tmp_path)
+
+
+def test_docs_describe_security_fail_on_as_a_minimum():
+    from pathlib import Path
+    readme = (Path(__file__).parent.parent / "README.md").read_text()
+    assert "Bandit severities that fail the build" not in readme and "lowest severity" in readme
+
+
+def test_work_model_with_ollama_prefix_is_not_doubled(monkeypatch, tmp_path):
+    from watchtower.config import load_settings
+    monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
+    monkeypatch.setenv("WATCHTOWER_WORK_MODEL", "ollama/qwen2.5-coder:7b")
+    assert load_settings().tiers["work"] == "ollama/qwen2.5-coder:7b"
