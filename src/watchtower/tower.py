@@ -24,6 +24,7 @@ from watchtower.floors.f3_build.office import F3Office
 from watchtower.floors.f5_oversight.office import OversightOffice
 from watchtower.floors.f4_qa_deploy.office import QAOffice
 from watchtower.floors.f5_oversight.oversight import is_failing as _failing, security_package, security_scan
+from watchtower.floors.f5_oversight.probe import xss_probe
 from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.beacon.glass import INJECTION, normalize
@@ -171,7 +172,8 @@ class TowerPipeline:
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
                                f4.summary.splitlines()[0], known=f4.summary[:1500])
                 if f4 is not None and f4.checks_run[-1]["pass"]:  # Floor 5 office: security scan, then spec audit
-                    sec = security_package(security_scan(ws.root, ws.files()), self._g.security_fail_on)
+                    sec = security_package(security_scan(ws.root, ws.files())  # + F5's HTML-injection worker
+                                           + xss_probe(run, plan["entry"], plan["routes"]), self._g.security_fail_on)
                     self._handoff(data, "f5", attempt, sec.checks_run[-1]["pass"], sec.open_questions)
                     self._post(data, "f5", "doing" if sec.checks_run[-1]["pass"] else "issue",
                                sec.summary.splitlines()[0], known=sec.summary[:1500])

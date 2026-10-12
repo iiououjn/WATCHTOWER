@@ -956,3 +956,15 @@ def test_re_ask_criteria_are_capped_and_deduped(app_tower, conn):
     assert len(acceptance) <= 6 and all(len(a) <= 204 for a in acceptance)
     assert sum("add a todo" in a.lower() for a in acceptance) == 1
     runner.close()
+
+
+def test_f5_xss_probe_sends_raw_html_back_to_the_coder(app_tower):
+    arch = {**APP_REPLIES["f2.architect"][0], "routes": APP_REPLIES["f2.architect"][0]["routes"]
+            + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "the list"}]}
+    hit = [{"post": "/add", "fields": ["item"], "page": "GET /"}]
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, xss=[hit, []])
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert any("raw HTML shown on GET /" in p and "html.escape" in p for p in coder)
+    assert len([c for c in sandbox.calls if "WATCHTOWER_XSS" in c[2]]) == 2
+    runner.close()
