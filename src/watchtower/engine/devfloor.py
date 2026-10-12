@@ -95,7 +95,10 @@ class DevFloor:
                  and 0 < len(str(f.get("path", "")).strip()) <= 100]
         entry = str(out.get("entry") or "app.py").strip()
         safe = _SAFE_ENTRY.fullmatch(entry) and ".." not in entry.split("/")
-        return {"files": files[:15], "entry": entry if safe else "app.py", "routes": parse_routes(out.get("routes"))}
+        entry, files = (entry if safe else "app.py"), files[:15]
+        if entry not in {f["path"] for f in files}:  # a 3B architect often names an entry it never plans
+            files = files[:14] + [{"path": entry, "purpose": "the app's entry point: starts the HTTP server"}]
+        return {"files": files, "entry": entry, "routes": parse_routes(out.get("routes"))}
 
     def build(self, spec: dict, plan: dict, feedback: Sequence[str], qa_checks: Sequence[dict] = ()) -> WorkPackage:
         kept, used = [], 0

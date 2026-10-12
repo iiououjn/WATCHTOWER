@@ -273,7 +273,7 @@ def test_a_rambling_hr_reason_cannot_blow_the_coder_prompt(tmp_path):
 
 def test_long_plan_paths_are_dropped(tmp_path):
     s = Script({"f2.architect": [{"files": [{"path": "a" * 101 + ".py"}, {"path": "ok.py"}]}], "f2.coder": [{}]})
-    assert [f["path"] for f in dev(tmp_path, s, Runner([OK])).plan(SPEC, "", [])["files"]] == ["ok.py"]
+    assert [f["path"] for f in dev(tmp_path, s, Runner([OK])).plan(SPEC, "", [])["files"]] == ["ok.py", "app.py"]
 
 
 def test_gate_reasons_reach_the_architect_wrapped(tmp_path):
@@ -320,3 +320,10 @@ def test_coder_that_never_returns_json_fails_the_build_after_its_rounds(tmp_path
     pkg = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([OK]), max_rounds=3).build(
         SPEC, {"files": [], "entry": "app.py"}, [])
     assert len(pkg.checks_run) == 3 and not pkg.checks_run[-1]["pass"] and pkg.open_questions
+
+
+def test_entry_file_is_always_in_the_file_plan(tmp_path):
+    s = Script({"f2.architect": [{"files": [{"path": "todo.py", "purpose": "logic"}], "entry": "app.py"}],
+                "f2.coder": [{}]})
+    files = dev(tmp_path, s, Runner([OK])).plan(SPEC, "", [])["files"]
+    assert [f["path"] for f in files] == ["todo.py", "app.py"] and "entry" in files[1]["purpose"]
