@@ -9,7 +9,7 @@ from typing import Callable
 
 from watchtower.beacon import glass as glass_mod
 from watchtower.beacon.beacon import Beacon
-from watchtower.beacon.lookout import Lookout, error_line
+from watchtower.beacon.lookout import Lookout, crash_query
 from watchtower.floors.board import FLOORS, NAMES, Board
 from watchtower.floors.f3_build.buildfloor import build_check
 from watchtower.engine.bus import Bus
@@ -123,8 +123,8 @@ class TowerPipeline:
         cto = CTO(r["cto"], ask)
         online = data.get("research") and not data.get("offline")  # floors 2–5 search only with --research
         look = Lookout(self._beacon_factory if online else None, self._knowledge)
-        peek = lambda floor, query: look.ask(  # noqa: E731
-            floor, query, job_id, lambda prompt: self._ask(r[f"glass.{floor}"], data, prompt))
+        peek = lambda floor, query, hits=2: look.ask(  # noqa: E731
+            floor, query, job_id, lambda prompt: self._ask(r[f"glass.{floor}"], data, prompt), hits)
         docs = peek("f2", "python standard library http.server " + spec["title"])
         plan, feedback = self._approved_plan(data, dev, cto, research, lessons, [], docs), []
         units_due = True  # F2 workers write units on the first build and after each re-plan, never on a fix
@@ -199,17 +199,17 @@ class TowerPipeline:
             feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]
             if f3 is not None and not f3.checks_run[-1]["pass"]:  # show the coder the app's real error
                 feedback = feedback + ["Floor 3 started the app and it failed:\n" + untrusted("sandbox", f3.summary)]
-                crash = error_line(f3.summary)
-                diagnosis = f3_office.diagnose(f3.summary, peek("f3", crash + " python") if crash else "")
+                crash = crash_query(f3.summary)
+                diagnosis = f3_office.diagnose(f3.summary, peek("f3", crash) if crash else "")
                 if diagnosis:
                     feedback.append("Floor 3 HR diagnosis:\n" + untrusted("f3.hr", diagnosis))
                     self._post(data, "f3", "issue", "diagnosis: " + diagnosis)
             elif f4 is not None and not f4.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 4 QA checks failed:\n" + untrusted("sandbox", f4.summary)]
-                feedback += _reference("4", peek("f4", _status_query(f4.checks_run[-1])))
+                feedback += _reference("4", peek("f4", _status_query(f4.checks_run[-1]), 1))  # one fits 600 chars
             elif sec is not None and not sec.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 5 security scan found problems; fix them:\n" + untrusted("security", sec.summary)]
-                feedback += _reference("5", peek("f5", _finding_query(sec.checks_run[-1], self._g.security_fail_on)))
+                feedback += _reference("5", peek("f5", _finding_query(sec.checks_run[-1], self._g.security_fail_on), 1))
             if verdict.route in ("design", "research"):
                 plan, units_due = self._approved_plan(data, dev, cto, research, lessons, feedback, docs), True
                 checks = self._plan_qa(data, plan, qa_office)
@@ -407,8 +407,8 @@ class TowerPipeline:
         hits = [h for h in self._knowledge.search(task, limit=12, distinct=False)  # over-fetch: lessons are dropped
                 if glass.domain_allowed(h.source) and not h.source.startswith("watchtower://")]  # lessons: architect only
         hits = sorted(hits[:3], key=lambda h: -glass.credibility(h.source))  # step 3: credible sources first
-        return "\n".join(untrusted(h.source, ("(credible source) " if glass.credibility(h.source) == 2 else "")
-                                  + h.text[:CONTEXT_CHARS]) for h in hits)
+        return "\n".join(("[credible] " if glass.credibility(h.source) == 2 else "")  # outside the data: unforgeable
+                         + untrusted(h.source, h.text[:CONTEXT_CHARS]) for h in hits)
 
 
 def _reference(glass: str, text: str) -> list[str]:

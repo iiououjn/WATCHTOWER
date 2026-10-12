@@ -58,7 +58,7 @@ class JobRunner:
         if beacon_factory is None and settings.online:
             def beacon_factory(ask, floor="f1"):  # each floor sees the web only through its own glass
                 return Beacon(Search(), Fetcher(), Glass(load_glass_rules(floor), ask), Knowledge(conn),
-                              AuditLog(conn), max_pages=3 if floor == "f1" else 2)
+                              AuditLog(conn), max_pages=3 if floor == "f1" else 2, consistency=floor == "f1")
         self._tower = TowerPipeline(self._ask_role, load_roles(tiers=settings.tiers), Approvals(conn), bus,
                                     Knowledge(conn), beacon_factory=beacon_factory,
                                     sandbox=sandbox or Sandbox(settings, AuditLog(conn)), releases=Releases(conn),

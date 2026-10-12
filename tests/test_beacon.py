@@ -149,3 +149,22 @@ def test_agreement_or_garbage_leaves_no_note(conn, answer):
     beacon = Beacon(search, FakeFetcher({"https://a.example/x": page("https://a.example/x")}),
                     Glass(GlassRules("f1", (), ()), ask), Knowledge(conn), AuditLog(conn))
     assert len(beacon.research("fresnel lens lighthouse optics", "j")) == 1 and beacon.conflicts == []
+
+
+def test_consistency_check_can_be_switched_off_for_lookups(conn):
+    Knowledge(conn).add(TEXT.replace("long", "short"), "https://other.example/older")
+    ask, calls = _ask(True)
+    search = Search(provider=lambda q, n: [{"title": "t", "href": "https://a.example/x", "body": ""}])
+    beacon = Beacon(search, FakeFetcher({"https://a.example/x": page("https://a.example/x")}),
+                    Glass(GlassRules("f1", (), ()), ask), Knowledge(conn), AuditLog(conn), consistency=False)
+    beacon.research("fresnel lens lighthouse optics", "j")
+    assert not any("contradict" in c for c in calls) and beacon.conflicts == []
+
+
+def test_runner_builds_lookup_beacons_without_consistency(conn, settings):
+    from dataclasses import replace
+    from watchtower.engine.runner import JobRunner
+    runner = JobRunner(replace(settings, online=True), conn, None, None, None)
+    factory = runner._tower._beacon_factory
+    assert factory(lambda p: {}, "f1")._consistency is True and factory(lambda p: {}, "f2")._consistency is False
+    runner.close()

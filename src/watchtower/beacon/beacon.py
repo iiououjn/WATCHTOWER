@@ -14,7 +14,8 @@ class Beacon:
     Every step is audited; nothing that fails the glass is stored."""
 
     def __init__(self, search: Search, fetcher, glass: Glass, knowledge: Knowledge, audit: AuditLog,
-                 max_pages: int = 3):
+                 max_pages: int = 3, consistency: bool = True):
+        self._consistency = consistency  # glass step 5 is for research claims (F1), not reference lookups
         self._search = search
         self._fetcher = fetcher
         self._glass = glass
@@ -50,7 +51,7 @@ class Beacon:
                 self._audit.append("beacon", "glass_reject", {"url": page.final_url, "reasons": verdict.reasons},
                                    job_id)
                 continue
-            if not checked:  # at most one consistency check per task, only against another site's page
+            if self._consistency and not checked:  # at most one check per task, against another site's page
                 host = registrable_domain(page.final_url)
                 other = next((h for h in self._knowledge.search(task, limit=5, distinct=False)
                               if h.source.startswith("http") and registrable_domain(h.source) != host), None)
