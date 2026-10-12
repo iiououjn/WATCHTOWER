@@ -61,3 +61,17 @@ def test_snapshot_is_truncated(ws):
     ws.write("b.py", "b" * 5000)
     snap = ws.snapshot(max_chars=3000)
     assert "### a.py" in snap and len(snap) <= 3200 and "(truncated)" in snap
+
+
+def test_delete_is_validated(ws):
+    ws.write("old_test.py", "x")
+    ws.delete("old_test.py")
+    assert ws.files() == []
+    with pytest.raises(WorkspaceError):
+        ws.delete("../x.py")
+
+
+@pytest.mark.parametrize("bad", ["a\x00.py", "x" * 300 + ".py"])
+def test_os_level_bad_names_are_workspace_errors(ws, bad):
+    with pytest.raises(WorkspaceError):
+        ws.write(bad, "x")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from typing import Callable
 
 from watchtower.engine.beacon import glass as glass_mod
@@ -81,7 +82,11 @@ class TowerPipeline:
         plan, feedback = dev.plan(spec, research, []), []
         for attempt in range(MAX_SEND_BACKS + 1):
             package, f3 = dev.build(spec, plan, feedback), None
-            if package.checks_run and package.checks_run[-1].get("pass"):
+            if package.checks_run and package.checks_run[-1].get("pass") and plan["entry"] not in ws.files():
+                feedback = [f"the planned entry file {plan['entry']} does not exist; create it"]
+                package = WorkPackage("f2", package.summary, ws.files(), [], package.checks_run +
+                                      [{"check": "entry", "pass": False}], feedback)
+            elif package.checks_run and package.checks_run[-1].get("pass"):
                 f3 = smoke_test(run, plan["entry"])
                 package = WorkPackage("dev", f"{package.summary}\n\n{f3.summary}\n\nCode:\n{ws.snapshot(3000)}",
                                       ws.files(), [], package.checks_run + f3.checks_run,
@@ -92,7 +97,10 @@ class TowerPipeline:
             if verdict.passed:
                 return {"dev": package.to_dict(), "files": ws.files(), "workspace": str(ws.root),
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
-                                   f"Run it: cd \"{ws.root}\" && python {plan['entry']}  (then open http://127.0.0.1:8000)")}
+                                   "Note: written by a local AI and tested only inside the sandbox — untested on "
+                                   "your Mac. Read the code before running it.\n"
+                                   f"Run it: cd {shlex.quote(str(ws.root))} && python {shlex.quote(plan['entry'])}"
+                                   "  (then open http://127.0.0.1:8000)")}
             feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]
             if f3 is not None and not f3.checks_run[-1]["pass"]:  # show the coder the app's real error
                 feedback = feedback + ["Floor 3 started the app and it failed:\n" + untrusted("sandbox", f3.summary)]

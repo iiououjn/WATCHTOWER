@@ -71,7 +71,7 @@ def _report(outcome: RunOutcome, conn) -> None:
             typer.echo(_clean(pending.summary))
             typer.echo(f"\nApprove with: watchtower approve {outcome.job_id}   (or add --reject)", err=True)
         else:
-            typer.echo(f"Job {outcome.job_id} paused: {outcome.reason}", err=True)
+            typer.echo(_clean(f"Job {outcome.job_id} paused: {outcome.reason}"), err=True)
             typer.echo(f"Resume with: watchtower resume {outcome.job_id}", err=True)
     else:
         typer.echo(f"Job {outcome.job_id} failed: {outcome.reason}", err=True)

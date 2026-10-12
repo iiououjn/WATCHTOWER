@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import PurePosixPath
 from typing import Callable, Sequence
 
@@ -10,7 +11,27 @@ from watchtower.engine.stdlib_check import import_problems
 from watchtower.engine.workspace import Workspace, WorkspaceError
 from watchtower.roles import Role
 
-TEST_COMMAND = ["python", "-m", "unittest", "-q"]
+TEST_RUNNER = """\
+import json, sys, unittest
+suite = unittest.defaultTestLoader.discover(".", pattern="test*.py")
+result = unittest.TextTestRunner(stream=sys.stderr, verbosity=1).run(suite)
+print("WATCHTOWER_TESTS " + json.dumps({"run": result.testsRun, "skipped": len(result.skipped),
+      "failures": len(result.failures), "errors": len(result.errors)}), flush=True)
+sys.exit(0 if result.wasSuccessful() else 1)
+"""
+TEST_COMMAND = ["python", "-c", TEST_RUNNER]
+_SUMMARY = re.compile(r"^WATCHTOWER_TESTS (\{.*\})$", re.MULTILINE)
+_SAFE_ENTRY = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_/]*\.py")
+
+
+def test_summary(stdout: str) -> dict | None:
+    """The runner's own summary line; printed text like 'Ran 2 tests OK' or an early exit never counts."""
+    match = _SUMMARY.search(stdout or "")
+    try:
+        data = json.loads(match.group(1)) if match else None
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
 MAX_FILES_PER_ROUND = 3
 PLAN_PROMPT = (
     "Spec:\n{spec}\n\nResearch notes:\n{research}\n{feedback}\n"
@@ -18,8 +39,8 @@ PLAN_PROMPT = (
 )
 CODE_PROMPT = (
     "Spec:\n{spec}\n\nFile plan:\n{plan}\n\nCurrent files:\n{files}\n{feedback}\n"
-    "Write or fix up to 3 files so the unittest tests pass and the spec is met. "
-    'Reply as JSON: {{"files": [{{"path": string, "content": string}}]}}'
+    "Write or fix up to 3 files so the unittest tests pass and the spec is met. To remove a stale file, "
+    'send {{"path": string, "delete": true}}. Reply as JSON: {{"files": [{{"path": string, "content": string}}]}}'
 )
 
 
@@ -46,14 +67,15 @@ class DevFloor:
         files = [{"path": str(f.get("path", "")).strip(), "purpose": str(f.get("purpose", "")).strip()}
                  for f in out.get("files") or [] if isinstance(f, dict) and str(f.get("path", "")).strip()]
         entry = str(out.get("entry") or "app.py").strip()
-        return {"files": files[:15], "entry": entry if entry.endswith(".py") else "app.py"}
+        safe = _SAFE_ENTRY.fullmatch(entry) and ".." not in entry.split("/")
+        return {"files": files[:15], "entry": entry if safe else "app.py"}
 
     def build(self, spec: dict, plan: dict, feedback: Sequence[str]) -> WorkPackage:
-        notes = [f"Reviewer feedback to address: {f}" for f in feedback]
+        notes = [f"Reviewer feedback to address:\n{untrusted('gate', f)}" for f in feedback]
         checks, output, passed = [], "", False
         for round_no in range(self._max_rounds):
             reply = self._ask(self._coder, CODE_PROMPT.format(
-                spec=_spec_text(spec), plan=json.dumps(plan, indent=1), files=self._ws.snapshot(),
+                spec=_spec_text(spec), plan=json.dumps(plan, indent=1), files=untrusted("workspace", self._ws.snapshot()),
                 feedback=("\n" + "\n".join(notes)) if notes else ""))
             notes = self._write(reply.get("files"))
             self._ensure_packages()
@@ -61,8 +83,11 @@ class DevFloor:
             has_tests = any(PurePosixPath(f).name.startswith("test") for f in self._ws.files() if f.endswith(".py"))
             result = self._run(TEST_COMMAND)
             output = ((result.stdout or "") + (result.stderr or ""))[-2000:]
-            ran_tests = "Ran 0 tests" not in output and "NO TESTS RAN" not in output
-            passed = result.exit_code == 0 and has_tests and ran_tests and not problems and not result.timed_out
+            summary = test_summary(result.stdout)
+            real = (summary or {}).get("run", 0) - (summary or {}).get("skipped", 0)
+            ran_tests = real >= 1
+            passed = (result.exit_code == 0 and has_tests and ran_tests and not problems and not result.timed_out
+                      and summary is not None and not summary.get("failures") and not summary.get("errors"))
             checks.append({"check": "tests", "round": round_no, "pass": passed, "output": output[-300:]})
             if passed:
                 break
@@ -83,7 +108,10 @@ class DevFloor:
         folders = {PurePosixPath(f).parent for f in self._ws.files() if f.endswith(".py")}
         for folder in sorted(folders):
             if str(folder) != "." and f"{folder}/__init__.py" not in self._ws.files():
-                self._ws.write(f"{folder}/__init__.py", "")
+                try:
+                    self._ws.write(f"{folder}/__init__.py", "")
+                except WorkspaceError:
+                    pass
 
     def _write(self, files) -> list[str]:
         notes = []
@@ -91,7 +119,10 @@ class DevFloor:
             if not isinstance(f, dict):
                 continue
             try:
-                self._ws.write(str(f.get("path", "")), str(f.get("content", "")))
+                if f.get("delete") is True:
+                    self._ws.delete(str(f.get("path", "")))
+                else:
+                    self._ws.write(str(f.get("path", "")), str(f.get("content", "")))
             except WorkspaceError as e:
                 notes.append(f"File rejected: {e}")
         return notes

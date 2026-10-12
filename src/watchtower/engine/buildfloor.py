@@ -8,8 +8,9 @@ from watchtower.engine.sandbox import SandboxResult
 
 SMOKE_SCRIPT = """\
 import os, subprocess, sys, time, urllib.request
+log = open("/tmp/app.log", "wb")
 p = subprocess.Popen([sys.executable, sys.argv[1]], env={**os.environ, "PORT": "8000"},
-                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
 status = None
 for _ in range(40):
     if p.poll() is not None:
@@ -22,8 +23,12 @@ for _ in range(40):
         if status:
             break
         time.sleep(0.25)
-p.kill()
-out = p.stdout.read().decode(errors="replace")[-1500:]
+try:
+    os.killpg(p.pid, 9)
+except Exception:
+    p.kill()
+log.close()
+out = open("/tmp/app.log", "rb").read().decode(errors="replace")[-1500:]
 print("SMOKE_STATUS", status)
 print(out)
 """

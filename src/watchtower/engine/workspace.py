@@ -36,6 +36,19 @@ class Workspace:
         return str(rel), target
 
     def write(self, path: str, content: str) -> str:
+        try:
+            return self._write(path, content)
+        except (OSError, ValueError) as e:  # NUL bytes, over-long names, odd filesystem states
+            if isinstance(e, WorkspaceError):
+                raise
+            raise WorkspaceError(f"cannot write {path!r}: {type(e).__name__}") from e
+
+    def delete(self, path: str) -> None:
+        rel, target = self._target(path)
+        if target.is_file() and not target.is_symlink():
+            target.unlink()
+
+    def _write(self, path: str, content: str) -> str:
         rel, target = self._target(path)
         if len(content.encode()) > MAX_FILE_BYTES:
             raise WorkspaceError(f"{rel} is larger than 100 KB")

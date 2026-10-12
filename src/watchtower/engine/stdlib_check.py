@@ -20,6 +20,9 @@ def import_problems(ws: Workspace) -> list[str]:
         except SyntaxError as e:
             problems.append(f"{name} has a syntax error on line {e.lineno}: {e.msg}")
             continue
+        except (RecursionError, MemoryError, ValueError, OSError) as e:
+            problems.append(f"{name} could not be parsed ({type(e).__name__}); simplify it")
+            continue
         modules = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):

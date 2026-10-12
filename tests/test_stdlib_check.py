@@ -1,3 +1,5 @@
+import pytest
+
 from watchtower.engine.stdlib_check import import_problems
 from watchtower.engine.workspace import Workspace
 
@@ -29,3 +31,19 @@ def test_syntax_errors_reported(tmp_path):
 def test_relative_imports_ok(tmp_path):
     ws = ws_with(tmp_path, {"pkg/a.py": "from . import b\nfrom .b import x\n", "pkg/b.py": "x = 1\n"})
     assert import_problems(ws) == []
+
+
+def test_parens_too_deep_is_reported(tmp_path):
+    ws = ws_with(tmp_path, {"app.py": "x = " + "(" * 2000 + "1" + ")" * 2000 + "\n"})
+    assert import_problems(ws)[0].startswith("app.py ")
+
+
+def test_parser_recursion_is_reported_not_crash(tmp_path, monkeypatch):
+    from watchtower.engine import stdlib_check
+
+    def boom(source):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    ws = ws_with(tmp_path, {"app.py": "x = 1\n"})
+    monkeypatch.setattr(stdlib_check.ast, "parse", boom)
+    assert import_problems(ws) == ["app.py could not be parsed (RecursionError); simplify it"]

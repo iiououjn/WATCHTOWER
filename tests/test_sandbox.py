@@ -42,8 +42,8 @@ def test_runs_command_with_hardening_flags(settings, audit):
     for flag in ["--network", "none", "--read-only", "--cap-drop", "ALL", "--pids-limit", "128",
                  "--memory", "512m", "--user", "1000:1000", "--pull", "never", "no-new-privileges"]:
         assert flag in argv
-    assert f"{settings.home / 'workspaces' / 'job1'}:/work:rw" in argv
-    assert argv[-8:] == ["python:3.12-slim", "timeout", "-s", "KILL", "60", "python", "-c", "print('hello')"]
+    assert f"{settings.home / 'workspaces' / 'job1'}:/src:ro" in argv
+    assert argv[-3:] == ["python", "-c", "print('hello')"]
 
 
 @pytest.mark.parametrize("bad", ["../../Users/rishi", "a/b", "", "job 1", ".."])
@@ -150,3 +150,15 @@ def test_command_arguments_are_not_audited(settings, audit, conn):
     Sandbox(settings, audit, run=FakeDocker()).run("j", ["curl", "-H", "Authorization: sk-secret-9"])
     raw = " ".join(r[0] for r in conn.execute("SELECT detail FROM audit_log"))
     assert "sk-secret-9" not in raw and "curl" in raw
+
+
+def test_workspace_is_mounted_read_only_and_copied_to_capped_scratch(settings, audit):
+    docker = FakeDocker()
+    Sandbox(settings, audit, run=docker).run("j", ["python", "-m", "unittest"])
+    argv = docker.run_argv()
+    assert f"{settings.home / 'workspaces' / 'j'}:/src:ro" in argv
+    assert not any(a.endswith(":/work:rw") for a in argv)
+    assert "/work:rw,size=64m,uid=1000,gid=1000" in argv
+    tail = argv[argv.index("python:3.12-slim") + 1:]
+    assert tail[:4] == ["timeout", "-s", "KILL", "60"] and "cp -a /src/. /work/" in tail[6]
+    assert tail[-3:] == ["python", "-m", "unittest"]

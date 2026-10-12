@@ -79,7 +79,8 @@ class FakeSandbox:
         if self.unavailable:
             raise SandboxUnavailable("Docker is not running; start Docker Desktop, then resume")
         self.calls.append(command)
-        if command[:3] == ["python", "-m", "unittest"]:
+        if command[:2] == ["python", "-c"] and "WATCHTOWER_TESTS" in command[2]:
             ok = self.test_ok if isinstance(self.test_ok, bool) else self.test_ok.pop(0)
-            return SandboxResult(0 if ok else 1, "", "Ran 2 tests\n\nOK\n" if ok else "FAILED (failures=1)\n", False)
+            line = '{"run": 2, "skipped": 0, "failures": %d, "errors": 0}' % (0 if ok else 1)
+            return SandboxResult(0 if ok else 1, "WATCHTOWER_TESTS " + line + "\n", "FAILED\n" if not ok else "", False)
         return SandboxResult(0, f"SMOKE_STATUS {self.http}\n", "", False)
