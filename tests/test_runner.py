@@ -961,10 +961,16 @@ def test_re_ask_criteria_are_capped_and_deduped(app_tower, conn):
 def test_f5_xss_probe_sends_raw_html_back_to_the_coder(app_tower):
     arch = {**APP_REPLIES["f2.architect"][0], "routes": APP_REPLIES["f2.architect"][0]["routes"]
             + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "the list"}]}
-    hit = [{"post": "/add", "fields": ["item"], "page": "GET /"}]
+    hit = [{"post": "/add", "field": "item", "page": "GET /"}]
     runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, xss=[hit, []])
     assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
-    assert any("raw HTML shown on GET /" in p and "html.escape" in p for p in coder)
+    assert any("raw HTML on GET /" in p and "html.escape" in p for p in coder)
     assert len([c for c in sandbox.calls if "WATCHTOWER_XSS" in c[2]]) == 2
     runner.close()
+
+
+def test_tower_default_criteria_do_not_force_a_form():
+    from watchtower.csuite.cpo import enough_criteria
+    out = enough_criteria(lambda prompt: {}, {"title": "Clock", "goal": "shows the time", "acceptance": ["x"]})
+    assert any("if the app has a form" in c.lower() for c in out)

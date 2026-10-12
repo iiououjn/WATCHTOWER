@@ -13,7 +13,7 @@ SPEC_MORE_PROMPT = (
 MIN_CRITERIA, MAX_CRITERIA = 3, 6
 TOWER_DEFAULTS = (  # what QA can always check in a small web app; marked so the owner sees who added them
     "The home page (GET /) shows the app's title: {title} (tower default)",
-    "Something a user adds through the app's form then appears on the page that lists it (tower default)",
+    "If the app has a form, what a user submits then appears on the page that shows it (tower default)",
     "Empty or invalid input is refused with a clear message, never a crash (tower default)",
 )
 

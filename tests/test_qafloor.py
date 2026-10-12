@@ -62,7 +62,7 @@ def test_run_qa_all_pass():
     checks = parse_checks({"checks": [GOOD]})
     run, calls = runner(result(['WATCHTOWER_QA [{"name": "home", "pass": true, "status": 200, "detail": ""}]']))
     pkg = run_qa(run, "app.py", checks)
-    assert calls == [["python", "-c", QA_SCRIPT, "app.py", json.dumps(checks)]]
+    assert calls == [["python", "-I", "-c", QA_SCRIPT, "app.py", json.dumps(checks)]]
     assert pkg.floor == "f4" and pkg.checks_run[-1]["check"] == "qa" and pkg.checks_run[-1]["pass"] is True
     assert pkg.validate() == []
 

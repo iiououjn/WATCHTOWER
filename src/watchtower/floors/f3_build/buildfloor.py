@@ -43,7 +43,7 @@ _TEXT = re.compile(r"SMOKE_TEXT (yes|no)")
 def smoke_test(run: Callable[[list[str]], SandboxResult], entry: str, expect: str = "") -> WorkPackage:
     """Floor 3: start the app inside the sandbox and require HTTP 200 on GET /. The Build Lead's expected
     home-page text is a soft check: a miss becomes an open question for the gate, not a failure."""
-    result = run(["python", "-c", SMOKE_SCRIPT, entry] + ([expect] if expect else []))
+    result = run(["python", "-I", "-c", SMOKE_SCRIPT, entry] + ([expect] if expect else []))
     output = (result.stdout or "") + (result.stderr or "")
     match = _STATUS.search(output)
     status = match.group(1) if match and match.group(1) != "None" else None
@@ -120,7 +120,7 @@ def route_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: l
     if not paths:
         return WorkPackage("f3", "Full app: no other GET routes to probe (MVP: GET / answered)", [entry], [],
                            [{"check": "routes", "pass": True, "results": []}], [])
-    result = run(["python", "-c", PROBE_SCRIPT, entry, json.dumps(paths)])
+    result = run(["python", "-I", "-c", PROBE_SCRIPT, entry, json.dumps(paths)])
     output = (result.stdout or "") + (result.stderr or "")
     found = _PROBE.findall(output)
     try:

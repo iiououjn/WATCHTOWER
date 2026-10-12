@@ -31,25 +31,33 @@ for _ in range(40):
 def fetch(path, data=None):
     try:
         with urllib.request.urlopen(urllib.request.Request(base + path, data=data), timeout=3) as r:
-            return r.read(200000).decode(errors="replace")
+            return r.read(200000).decode(errors="replace"), r.headers.get("Content-Type") or "", True
     except urllib.error.HTTPError as e:
-        return e.read(200000).decode(errors="replace")
+        return e.read(200000).decode(errors="replace"), e.headers.get("Content-Type") or "", True
     except Exception:
-        return ""
-pages = {}
-for post in plan["posts"]:
-    form = urllib.parse.urlencode({f: post["marker"] for f in post["fields"]}).encode()
-    pages["POST " + post["path"]] = fetch(post["path"], form)
+        return "", "", False
+pages, answered = {}, 0
+def keep(name, got):
+    global answered
+    body, ctype, ok = got
+    answered += ok
+    if ok and (not ctype or "html" in ctype.lower()):  # JSON or plain text is not rendered as HTML
+        pages[name] = body.lower()
+for post in plan["posts"]:  # one field at a time: a validated field must not hide a raw text field
+    for field, marker in post["markers"].items():
+        form = urllib.parse.urlencode({f: (marker if f == field else "1") for f in post["markers"]}).encode()
+        keep("POST " + post["path"] + " " + field, fetch(post["path"], form))
 for path in plan["gets"]:
-    pages["GET " + path] = fetch(path)
-hits = [{"post": post["path"], "fields": post["fields"], "page": page}
-        for post in plan["posts"] for page, body in pages.items() if post["marker"] in body]
+    keep("GET " + path, fetch(path))
+hits = [{"post": post["path"], "field": field, "page": page.rsplit(" ", 1)[0] if page.startswith("POST") else page}
+        for post in plan["posts"] for field, marker in post["markers"].items()
+        for page, body in pages.items() if marker.lower() in body]
 try:
     os.killpg(p.pid, 9)
 except Exception:
     p.kill()
 log.close()
-print("WATCHTOWER_XSS " + json.dumps(hits))
+print("WATCHTOWER_XSS " + json.dumps({"answered": answered, "hits": hits}))
 """
 _RESULT = re.compile(r"^WATCHTOWER_XSS (.*)$", re.M)
 _PATH = re.compile(r"/[A-Za-z0-9._~/-]{0,80}")
@@ -67,27 +75,32 @@ def _finding(severity: str, entry: str, text: str) -> dict:
 
 def xss_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: list[dict]) -> list[dict]:
     """Floor 5 worker: HTML injection through the app's own forms. A raw marker on any page = HIGH finding.
-    No form routes → nothing to probe. A missing or doubled result line → UNKNOWN (scan incomplete), never a pass."""
+    No form routes → nothing to probe. A missing, doubled or empty result (no page answered) → MEDIUM: an
+    incomplete probe fails the build (default fail_on), it never passes as clean."""
     posts = [r for r in routes if r.get("method") == "POST" and r.get("fields") and _safe(r.get("path"))][:MAX_POSTS]
     if not posts:
         return []
     gets = list(dict.fromkeys(["/"] + [r["path"] for r in routes
                                        if r.get("method") == "GET" and _safe(r.get("path"))]))[:MAX_GETS]
-    plan = {"posts": [{"path": r["path"], "fields": list(r["fields"]), "marker": f"<i>wtprobe{n}x</i>"}
+    plan = {"posts": [{"path": r["path"], "markers": {f: f"<i>wtprobe{n}x{k}</i>" for k, f in enumerate(r["fields"])}}
                       for n, r in enumerate(posts)], "gets": gets}
-    result = run(["python", "-c", XSS_SCRIPT, entry, json.dumps(plan)])
+    result = run(["python", "-I", "-c", XSS_SCRIPT, entry, json.dumps(plan)])  # -I: app files can't shadow json
     found = _RESULT.findall((result.stdout or "") + (result.stderr or ""))
     try:
-        hits = json.loads(found[0]) if len(found) == 1 and not result.timed_out else None
+        out = json.loads(found[0]) if len(found) == 1 and not result.timed_out else None
     except ValueError:
-        hits = None
-    if not isinstance(hits, list) or not all(isinstance(h, dict) for h in hits):
-        return [_finding("UNKNOWN", entry, "HTML injection probe did not complete")]
+        out = None
+    hits = out.get("hits") if isinstance(out, dict) else None
+    if (not isinstance(hits, list) or not all(isinstance(h, dict) for h in hits)
+            or not isinstance(out.get("answered"), int) or out["answered"] < 1):
+        return [_finding("MEDIUM", entry, "HTML injection probe could not complete: the app did not answer its "
+                                          "form and pages; make every route answer")]
     by_post: dict[str, tuple[list[str], list[str]]] = {}
-    for h in hits:  # one finding per form route, naming every page that showed the raw tag
-        fields, pages = by_post.setdefault(str(h.get("post"))[:90], ([str(f) for f in (h.get("fields") or [])], []))
-        if str(h.get("page")) not in pages:
-            pages.append(str(h.get("page"))[:90])
-    return [_finding("HIGH", entry, f"POST {post} ({', '.join(fields)[:80]}) → raw HTML shown on "
-                                    f"{'; '.join(pages[:3])}; escape user text with html.escape before writing "
-                                    "it into HTML") for post, (fields, pages) in list(by_post.items())[:5]]
+    for h in hits:  # one finding per form route, naming the fields and pages that showed the raw tag
+        fields, pages = by_post.setdefault(str(h.get("post"))[:60], ([], []))
+        for value, bucket in ((str(h.get("field"))[:30], fields), (str(h.get("page"))[:60], pages)):
+            if value not in bucket:
+                bucket.append(value)
+    return [_finding("HIGH", entry, f"use html.escape on user text: POST {post} ({', '.join(fields)[:50]}) shows "
+                                    f"raw HTML on {'; '.join(pages[:2])}") for post, (fields, pages) in
+            list(by_post.items())[:5]]

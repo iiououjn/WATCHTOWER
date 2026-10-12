@@ -23,9 +23,9 @@ print("WATCHTOWER_TESTS " + json.dumps({"run": result.testsRun, "skipped": len(r
       "failures": len(result.failures), "errors": len(result.errors)}), flush=True)
 sys.exit(0 if result.wasSuccessful() else 1)
 """
-TEST_COMMAND = ["python", "-c", TEST_RUNNER]
+TEST_COMMAND = ["python", "-I", "-c", TEST_RUNNER]  # -I: app files cannot shadow json/unittest
 _SUMMARY = re.compile(r"^WATCHTOWER_TESTS (\{.*\})$", re.MULTILINE)
-_SAFE_ENTRY = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_/]*\.py")
+_SAFE_ENTRY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*\.py")  # importable by tests
 
 
 def test_summary(stdout: str) -> dict | None:
@@ -75,12 +75,20 @@ def _compact_checks(checks: Sequence[dict]) -> str:
     return text if len(text) <= QA_CHARS else text[:QA_CHARS] + " ...(more checks)"
 
 
+def _is_test_file(path: str) -> bool:
+    """test_*.py, *_test.py, tests.py, or anything inside a tests/ (or test/) folder — not 'testimonials.py'."""
+    p = PurePosixPath(path)
+    return (p.name.startswith("test_") or p.stem.endswith("_test") or p.stem in ("tests", "test")
+            or any(part in ("tests", "test") for part in p.parts[:-1]))
+
+
 def app_is_tested(ws: Workspace) -> bool:
     """At least one test file imports a module of the app itself (not only unittest or another test file):
     a test that never touches the app proves nothing."""
     py = [f for f in ws.files() if f.endswith(".py")]
-    tests = [f for f in py if PurePosixPath(f).name.startswith("test")]
-    app = {PurePosixPath(f).with_suffix("").as_posix().replace("/", ".") for f in py if f not in tests}
+    tests = [f for f in py if _is_test_file(f)]
+    app = {PurePosixPath(f).with_suffix("").as_posix().replace("/", ".") for f in py
+           if f not in tests and PurePosixPath(f).stem not in ("__init__", "conftest")}
     app |= {m.split(".")[0] for m in app}  # 'import store' counts for store/db.py
     for name in tests:
         try:
@@ -89,7 +97,12 @@ def app_is_tested(ws: Workspace) -> bool:
             continue
         for node in ast.walk(tree):
             mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
-                    else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
+                    else [node.module or ""] if isinstance(node, ast.ImportFrom)
+                    else [node.args[0].value] if (isinstance(node, ast.Call) and node.args  # import_module("app")
+                                                  and isinstance(node.args[0], ast.Constant)
+                                                  and isinstance(node.args[0].value, str)
+                                                  and getattr(node.func, "attr", getattr(node.func, "id", ""))
+                                                  in ("import_module", "__import__")) else [])
             if any(m in app for m in mods):
                 return True
     return False

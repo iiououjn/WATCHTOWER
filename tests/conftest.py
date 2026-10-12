@@ -90,6 +90,8 @@ class FakeSandbox:
         from watchtower.engine.sandbox import SandboxResult, SandboxUnavailable
         if self.unavailable:
             raise SandboxUnavailable("Docker is not running; start Docker Desktop, then resume")
+        if command[:2] == ["python", "-I"]:  # scripts run isolated: python -I -c SCRIPT args (recorded without -I)
+            command = ["python"] + command[2:]
         self.calls.append(command)
         if command[:2] == ["python", "-c"] and "WATCHTOWER_TESTS" in command[2]:
             ok = self.test_ok if isinstance(self.test_ok, bool) else self.test_ok.pop(0)
@@ -102,7 +104,7 @@ class FakeSandbox:
                                  % ("true" if ok else "false", detail), "", False)
         if command[:2] == ["python", "-c"] and "WATCHTOWER_XSS" in command[2]:
             hits = self.xss.pop(0) if len(self.xss) > 1 else self.xss[0]
-            return SandboxResult(0, "WATCHTOWER_XSS " + json.dumps(hits) + "\n", "", False)
+            return SandboxResult(0, "WATCHTOWER_XSS " + json.dumps({"answered": 2, "hits": hits}) + "\n", "", False)
         if command[:2] == ["python", "-c"] and "WATCHTOWER_PROBE" in command[2]:
             status = self.probe if isinstance(self.probe, int) else self.probe.pop(0)
             results = [{"path": p, "status": status} for p in json.loads(command[4])]
