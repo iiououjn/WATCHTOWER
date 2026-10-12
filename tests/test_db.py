@@ -97,4 +97,4 @@ def test_online_by_default_and_offline_env(tmp_path, monkeypatch):
 def test_tower_jobs_get_a_larger_token_budget(tmp_path, monkeypatch):
     monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
     s = load_settings()
-    assert s.tower_max_tokens == 200_000 and s.tower_max_tokens > s.default_max_tokens
+    assert s.tower_max_tokens == 300_000 and s.tower_max_tokens > s.default_max_tokens

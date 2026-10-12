@@ -365,7 +365,7 @@ def test_build_uses_tower_budget(monkeypatch):
     use_roles(monkeypatch)
     runner.invoke(cli.app, ["build", "compare lighthouse lenses", "--yes"])
     assert "tokens: " in (out := runner.invoke(cli.app, ["budget", latest_job_id()]).output)
-    assert "/ 200000" in out
+    assert "/ 300000" in out
 
 
 def test_build_app_end_to_end_with_fakes(monkeypatch, tmp_path):

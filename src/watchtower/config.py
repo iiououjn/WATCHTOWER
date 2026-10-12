@@ -18,7 +18,7 @@ class Settings:
     ollama_url: str = "http://localhost:11434"
     cloud_enabled: bool = False
     default_max_tokens: int = 50_000
-    tower_max_tokens: int = 200_000  # local tokens are free; the time cap still bounds a job
+    tower_max_tokens: int = 300_000  # local tokens are free; the time cap still bounds a job
     default_max_seconds: int = 3600
     default_max_usd: float = 0.0
     min_free_ram_pct: int = 20
