@@ -375,3 +375,83 @@ def test_build_app_end_to_end_with_fakes(monkeypatch, tmp_path):
     result = runner.invoke(cli.app, ["build", "a todo web app", "--app", "--yes"])
     assert result.exit_code == 0, result.output
     assert "App ready" in result.output and "python app.py" in result.output
+
+
+class FakeDeployer:
+    def __init__(self, fail=None):
+        from watchtower.engine.deploy import Deployment
+        self.fail, self.calls = fail, []
+        self.dep = Deployment(1, "app", "job1", "wt-app-app:1", 8100, "active", "t", None)
+
+    def _do(self, *call):
+        from watchtower.engine.deploy import DeployError
+        self.calls.append(call)
+        if self.fail:
+            raise DeployError(self.fail)
+        return self.dep
+
+    def deploy(self, job_id, name="app"):
+        return self._do("deploy", job_id, name)
+
+    def rollback(self, name):
+        return self._do("rollback", name)
+
+    def undeploy(self, name):
+        self._do("undeploy", name)
+
+    def list(self, limit=20):
+        return [self.dep]
+
+
+def done_app_job(monkeypatch, tmp_path):
+    from conftest import APP_REPLIES, FakeSandbox
+    use_roles(monkeypatch, APP_REPLIES)
+    monkeypatch.setattr(cli, "make_sandbox", lambda settings, conn: FakeSandbox(tmp_path / "apps"))
+    assert runner.invoke(cli.app, ["build", "a todo web app", "--app", "--yes"]).exit_code == 0
+    return latest_job_id()
+
+
+def test_deploy_done_app_prints_local_url(monkeypatch, tmp_path):
+    job = done_app_job(monkeypatch, tmp_path)
+    fake = FakeDeployer()
+    monkeypatch.setattr(cli, "make_deployer", lambda settings, conn: fake)
+    result = runner.invoke(cli.app, ["deploy", job, "--name", "todo"])
+    assert result.exit_code == 0, result.output
+    assert fake.calls == [("deploy", job, "todo")] and "http://127.0.0.1:8100" in result.output
+    assert "no internet" in result.output
+
+
+def test_deploy_refuses_unknown_or_non_app_jobs(monkeypatch):
+    fake = FakeDeployer()
+    monkeypatch.setattr(cli, "make_deployer", lambda settings, conn: fake)
+    assert runner.invoke(cli.app, ["deploy", "nope"]).exit_code == 2
+    use_completion(monkeypatch, lambda **kw: fake_response("hi", 1, 1))
+    runner.invoke(cli.app, ["run", "hello"])
+    result = runner.invoke(cli.app, ["deploy", latest_job_id()])
+    assert result.exit_code == 2 and "app" in result.output and fake.calls == []
+
+
+def test_deploy_error_is_cleaned_and_exits_1(monkeypatch, tmp_path):
+    job = done_app_job(monkeypatch, tmp_path)
+    monkeypatch.setattr(cli, "make_deployer", lambda settings, conn: FakeDeployer(fail="boom\x1b[31m red"))
+    result = runner.invoke(cli.app, ["deploy", job])
+    assert result.exit_code == 1 and "boom" in result.output and "\x1b" not in result.output
+
+
+def test_rollback_undeploy_and_deployments(monkeypatch):
+    fake = FakeDeployer()
+    monkeypatch.setattr(cli, "make_deployer", lambda settings, conn: fake)
+    assert runner.invoke(cli.app, ["rollback", "app"]).exit_code == 0
+    assert runner.invoke(cli.app, ["undeploy", "app"]).exit_code == 0
+    listing = runner.invoke(cli.app, ["deployments"])
+    assert listing.exit_code == 0 and "8100" in listing.output and "active" in listing.output
+    assert fake.calls == [("rollback", "app"), ("undeploy", "app")]
+
+
+def test_app_job_audit_records_app_pipeline(monkeypatch, tmp_path):
+    from watchtower.engine.db import connect
+    from watchtower.engine.governor.audit import AuditLog
+    from watchtower.config import load_settings
+    job = done_app_job(monkeypatch, tmp_path)
+    created = [e for e in AuditLog(connect(load_settings().db_path)).entries(job_id=job) if e.action == "job_created"]
+    assert created[0].detail["pipeline"] == "app"
