@@ -337,6 +337,12 @@ def _tower_job(goal: str, app: bool, yes: bool, offline: bool, research: bool, m
         raise typer.Exit(2)
     settings, conn = _open()
     _check_guardrails(settings)
+    if app:  # an app job needs the sandbox: say so now, before any model work is spent
+        typer.echo("Checking Docker…", err=True)
+        ok, detail = docker_status(settings, AuditLog(conn))
+        if not ok:
+            typer.echo(f"Error: {detail}", err=True)
+            raise typer.Exit(2)
     job = JobStore(conn).create(goal, pipeline="app" if app else "tower")
     Budget(conn).open(job.id, settings.tower_max_tokens if max_tokens is None else max_tokens,
                       settings.default_max_seconds, settings.default_max_usd)

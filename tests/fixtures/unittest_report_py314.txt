@@ -1,0 +1,53 @@
+EEFE
+======================================================================
+ERROR: test_chain (test_a.T.test_chain)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/test_a.py", line 11, in test_chain
+    {}["k"]
+    ~~^^^^^
+KeyError: 'k'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/work/test_a.py", line 13, in test_chain
+    raise ValueError("v")
+ValueError: v
+
+======================================================================
+ERROR: test_custom (test_a.T.test_custom)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/test_a.py", line 15, in test_custom
+    raise Boom("x")
+test_a.Boom: x
+
+======================================================================
+ERROR: test_b (unittest.loader._FailedTest.test_b)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_b
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.14/unittest/loader.py", line 433, in _find_test_path
+    module = self._get_module_from_name(name)
+  File "/usr/local/lib/python3.14/unittest/loader.py", line 374, in _get_module_from_name
+    __import__(name)
+    ~~~~~~~~~~^^^^^^
+  File "/work/test_b.py", line 1, in <module>
+    from app import nope
+ImportError: cannot import name 'nope' from 'app' (/work/app.py)
+
+
+======================================================================
+FAIL: test_sub (test_a.T.test_sub) (i=0)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/test_a.py", line 8, in test_sub
+    self.assertEqual(i, 5)
+    ~~~~~~~~~~~~~~~~^^^^^^
+AssertionError: 0 != 5
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.000s
+
+FAILED (failures=1, errors=3)

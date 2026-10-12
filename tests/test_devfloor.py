@@ -510,3 +510,212 @@ def test_entry_must_be_importable(tmp_path):
     script = Script({"f2.architect": [{"entry": "2048.py", "routes": [], "files": [{"path": "2048.py", "purpose": "g"}]}]})
     plan = DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=Runner([OK])).plan(SPEC, "", [])
     assert plan["entry"] == "app_2048.py" and [f["path"] for f in plan["files"]] == ["app_2048.py"]
+
+
+from watchtower.floors.f2_dev.devfloor import failures  # noqa: E402
+
+REAL = """.FF
+======================================================================
+FAIL: test_list_todos (test_todo.TestTodoFunctions.test_list_todos)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/test_todo.py", line 6, in test_list_todos
+    self.assertEqual(list_todos(), '<ul></ul>')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '<ul><li>Buy milk</li></ul>' != '<ul></ul>'
+- <ul><li>Buy milk</li></ul>
++ <ul></ul>
+
+
+======================================================================
+FAIL: test_render_todo_form (test_todo.TestTodoFunctions.test_render_todo_form)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/test_todo.py", line 18, in test_render_todo_form
+    self.assertEqual(render_todo_form(), expected)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '<for[35 chars]     <input' != '<for[35 chars]         <input'
+  <form action="/add" method="post">
+-         <input type="text" name="item">
++             <input type="text" name="item">
+? ++++
+-     </form>
++         </form>
+? ++++
+
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.001s
+
+FAILED (failures=2)
+""" + "x" * 3000  # long noise after: the old 1200-char tail would lose the first failure
+FAILED = SandboxResult(1, 'WATCHTOWER_TESTS {"run": 3, "skipped": 0, "failures": 2, "errors": 0}\n', REAL, False)
+HR = Role("f2.hr", "HR", "f2", "small", (), "h")
+
+
+def test_failures_are_parsed_from_unittests_own_report():
+    found = failures(REAL)
+    assert [f["test"] for f in found] == ["test_list_todos", "test_render_todo_form"]
+    assert found[0]["line"].startswith("AssertionError: '<ul><li>Buy milk") and not found[0]["whitespace"]
+    assert found[1]["whitespace"] is True
+    assert failures("garbage\nFAIL: nothing here") == [] and failures("") == []
+
+
+def test_every_failure_reaches_the_coder_even_with_long_output(tmp_path):
+    script = Script({"f2.coder": [{"files": [APP, TEST]}]})
+    dev(tmp_path, script, Runner([FAILED]), rounds=2).build(SPEC, PLAN3, [])
+    second = script.prompts["f2.coder"][1]
+    assert "test_list_todos" in second and "test_render_todo_form" in second
+    assert "differ only in spaces" in second
+
+
+def test_stuck_coder_gets_a_note_and_one_hr_diagnosis(tmp_path):
+    script = Script({"f2.coder": [{"files": [APP, TEST]}],
+                     "f2.hr": [{"diagnosis": "test_add_todo leaves Buy milk in the shared list; reset it in setUp"}]})
+    d = DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=Runner([FAILED]), max_rounds=4, hr=HR)
+    d.build(SPEC, PLAN3, [])
+    prompts = script.prompts["f2.coder"]
+    assert "same tests failed again" not in prompts[1] and "same tests failed again" in prompts[2]
+    assert "reset it in setUp" in prompts[2] and '<untrusted source="f2.hr">' in prompts[2]
+    assert len(script.prompts["f2.hr"]) == 1  # once per build, however long it stays stuck
+
+
+def test_hr_garbage_while_stuck_costs_nothing(tmp_path):
+    calls = []
+
+    def ask(role, prompt):
+        calls.append(role.id)
+        if role.id == "f2.hr":
+            raise BadModelOutput("x")
+        return {"files": [APP, TEST]}
+    d = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([FAILED]), max_rounds=3, hr=HR)
+    assert not d.build(SPEC, PLAN3, []).checks_run[-1]["pass"] and calls.count("f2.hr") == 1
+
+
+from pathlib import Path as _Path  # noqa: E402
+
+PY314 = (_Path(__file__).parent / "fixtures" / "unittest_report_py314.txt").read_text()
+
+
+def test_real_314_report_variants_all_surface_with_their_real_cause():
+    found = {f["test"]: f for f in failures(PY314)}
+    assert set(found) == {"test_chain", "test_custom", "test_b", "test_sub"}
+    assert found["test_chain"]["line"] == "ValueError: v"
+    assert found["test_custom"]["line"] == "test_a.Boom: x"
+    assert found["test_b"]["line"].startswith("ImportError: cannot import name 'nope' from 'app'")
+    assert found["test_sub"]["line"] == "AssertionError: 0 != 5"
+    assert list(found)[:2] == ["test_b", "test_sub"]  # import errors first (they hide a whole file), then FAILs
+
+
+def test_failure_note_is_bounded_and_keeps_html_readable(tmp_path):
+    from watchtower.floors.f2_dev.devfloor import _failure_note
+    many = [{"test": f"test_{i}", "id": f"m.T.test_{i}", "kind": "FAIL",
+             "line": "AssertionError: '" + "<li>x</li>" * 30 + "'", "diff": "- <ul>" * 60, "whitespace": False}
+            for i in range(5)]
+    note = _failure_note(many)
+    assert len(note) <= 2200 and "&lt;" not in note and "<li>" in note and "test_4" in note
+
+
+def test_stuck_round_keeps_the_failure_rows_and_the_diagnosis_survives_a_garbled_reply(tmp_path):
+    replies = [{"files": [APP, TEST]}, {"files": [APP, TEST]}, "garbled", {"files": [APP, TEST]}]
+    calls = []
+
+    def ask(role, prompt):
+        calls.append((role.id, prompt))
+        if role.id == "f2.hr":
+            return {"diagnosis": "reset the shared list in setUp"}
+        r = replies.pop(0) if len(replies) > 1 else replies[0]
+        if r == "garbled":
+            raise BadModelOutput("x")
+        return r
+    d = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([FAILED]), max_rounds=4, hr=HR)
+    d.build(SPEC, PLAN3, [])
+    coder = [p for r, p in calls if r == "f2.coder"]
+    assert "reset the shared list in setUp" in coder[3] and "test_list_todos" in coder[3]
+    hr = [p for r, p in calls if r == "f2.hr"]
+    assert len(hr) == 1 and "test_list_todos" in hr[0] and "x" * 200 not in hr[0]
+
+
+def test_failing_set_resets_after_a_passing_round(tmp_path):
+    seq = [FAILED, OK, FAILED]
+    script = Script({"f2.coder": [{"files": [APP, TEST]}], "f2.hr": [{"pass": False, "reason": "add more"}]})
+    d = DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=Runner(seq), max_rounds=4, hr=HR)
+    d.build(SPEC, PLAN3, [])
+    assert not any("same tests failed again" in p for p in script.prompts["f2.coder"])
+
+
+PY314B = (_Path(__file__).parent / "fixtures" / "unittest_report_py314_b.txt").read_text()
+APP_ERROR = """E
+======================================================================
+ERROR: test_add (test_app.T.test_add)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/test_app.py", line 5, in test_add
+    add_todo("x")
+    ~~~~~~~~^^^^^
+  File "/work/app.py", line 42, in add_todo
+    return TODOS[kind]
+           ~~~~~^^^^^^
+KeyError: 'default'
+
+----------------------------------------------------------------------
+Ran 1 test in 0.001s
+
+FAILED (errors=1)
+"""
+
+
+def test_docstring_tests_chained_and_multiline_causes():
+    found = {f["test"]: f for f in failures(PY314B)}
+    assert set(found) == {"test_chain", "test_err_doc", "test_dash", "test_doc", "test_msg", "test_none"}
+    assert found["test_chain"]["line"] == "ValueError: outer"
+    assert found["test_msg"]["line"] == "AssertionError: 1 != 2 : custom"
+    assert found["test_err_doc"]["line"] == "KeyError: 'k'"
+
+
+def test_error_rows_say_where_the_app_raised():
+    from watchtower.floors.f2_dev.devfloor import _failure_rows
+    rows = _failure_rows(failures(APP_ERROR))
+    assert "KeyError: 'default'" in rows and "app.py" in rows and "line 42" in rows and "TODOS[kind]" in rows
+
+
+def test_more_than_five_failures_says_so_and_import_errors_come_first():
+    from watchtower.floors.f2_dev.devfloor import _failure_rows
+    found = failures(PY314B + PY314)
+    rows = _failure_rows(found)
+    assert rows.startswith("- test_b (ERROR): ImportError") and "more failing" in rows
+
+
+def test_a_diagnosis_is_only_shown_for_the_failures_it_was_made_for(tmp_path):
+    other = SandboxResult(1, 'WATCHTOWER_TESTS {"run": 1, "skipped": 0, "failures": 0, "errors": 1}\n', APP_ERROR, False)
+    calls = []
+
+    def ask(role, prompt):
+        calls.append((role.id, prompt))
+        if role.id == "f2.hr":
+            return {"diagnosis": f"diagnosis number {sum(r == 'f2.hr' for r, _ in calls)}"}
+        return {"files": [APP, TEST]}
+    d = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path),
+                 run=Runner([FAILED, FAILED, other, other, other]), max_rounds=5, hr=HR)
+    d.build(SPEC, PLAN3, [])
+    coder = [p for r, p in calls if r == "f2.coder"]
+    assert "diagnosis number 1" in coder[2] and "diagnosis number 1" not in coder[3]
+    assert "diagnosis number 1" not in coder[4] and "diagnosis number 2" in coder[4]
+
+
+def test_hr_change_request_survives_a_garbled_reply(tmp_path):
+    replies = [{"files": [APP, TEST]}, "garbled", {"files": [APP, TEST]}]
+    calls = []
+
+    def ask(role, prompt):
+        calls.append((role.id, prompt))
+        if role.id == "f2.hr":
+            return {"pass": False, "reason": "add a delete route"}
+        r = replies.pop(0) if len(replies) > 1 else replies[0]
+        if r == "garbled":
+            raise BadModelOutput("x")
+        return r
+    DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([OK]), max_rounds=3, hr=HR).build(
+        SPEC, PLAN3, [])
+    coder = [p for r, p in calls if r == "f2.coder"]
+    assert "add a delete route" in coder[2]
