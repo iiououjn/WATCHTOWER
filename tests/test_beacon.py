@@ -168,3 +168,14 @@ def test_runner_builds_lookup_beacons_without_consistency(conn, settings):
     factory = runner._tower._beacon_factory
     assert factory(lambda p: {}, "f1")._consistency is True and factory(lambda p: {}, "f2")._consistency is False
     runner.close()
+
+
+def test_consistency_never_quotes_a_site_this_glass_refuses(conn):
+    Knowledge(conn).add(TEXT.replace("long", "short"), "https://denied.example/older")
+    ask, calls = _ask(True)
+    search = Search(provider=lambda q, n: [{"title": "t", "href": "https://a.example/x", "body": ""}])
+    beacon = Beacon(search, FakeFetcher({"https://a.example/x": page("https://a.example/x")}),
+                    Glass(GlassRules("f1", deny_domains=("denied.example",), allow_domains=()), ask),
+                    Knowledge(conn), AuditLog(conn))
+    beacon.research("fresnel lens lighthouse optics", "j")
+    assert not any("contradict" in c for c in calls) and beacon.conflicts == []

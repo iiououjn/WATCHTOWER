@@ -54,7 +54,8 @@ class Beacon:
             if self._consistency and not checked:  # at most one check per task, against another site's page
                 host = registrable_domain(page.final_url)
                 other = next((h for h in self._knowledge.search(task, limit=5, distinct=False)
-                              if h.source.startswith("http") and registrable_domain(h.source) != host), None)
+                              if h.source.startswith("http") and registrable_domain(h.source) != host
+                              and self._glass.domain_allowed(h.source) and self._glass.credibility(h.source)), None)
                 if other is not None:
                     checked = True
                     point = self._glass.consistent(verdict.text, other.text, task, page.final_url, other.source)

@@ -63,16 +63,24 @@ class GlassVerdict:
     text: str
 
 
+def _domains(value) -> tuple[str, ...]:
+    """An owner-written domain list: one name or a list; names trimmed and lower-cased; junk dropped."""
+    items = [value] if isinstance(value, str) else value if isinstance(value, list) else [] if value is None else None
+    if items is None or not all(isinstance(x, str) for x in items):  # junk must fail loudly, never open the glass
+        raise ValueError("glass rules: domain lists must be site names")
+    return tuple(d for d in (x.strip().lower() for x in items) if d)
+
+
 def load_glass_rules(floor: str, directory: Path = GLASS_DIR) -> GlassRules:
     data = yaml.safe_load((directory / f"{floor}.yaml").read_text()) or {}
     return GlassRules(
         name=str(data.get("name") or floor),
-        deny_domains=tuple(data.get("deny_domains") or ()),
-        allow_domains=tuple(data.get("allow_domains") or ()),
+        deny_domains=_domains(data.get("deny_domains")),
+        allow_domains=_domains(data.get("allow_domains")),
         min_chars=int(data.get("min_chars", 200)),
         max_injection_ratio=float(data.get("max_injection_ratio", 0.3)),
-        credible_domains=tuple(data.get("credible_domains") or ()),
-        low_credibility_domains=tuple(data.get("low_credibility_domains") or ()),
+        credible_domains=_domains(data.get("credible_domains")),
+        low_credibility_domains=_domains(data.get("low_credibility_domains")),
     )
 
 

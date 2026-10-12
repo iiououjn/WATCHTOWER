@@ -134,3 +134,18 @@ def test_every_glass_has_a_relevance_role():
     from watchtower.roles import load_roles
     roles = load_roles()
     assert all(f"glass.f{n}" in roles for n in range(1, 6))
+
+
+def test_domain_lists_written_as_text_or_odd_case_still_work(tmp_path):
+    (tmp_path / "f9.yaml").write_text("deny_domains: Reddit.com\nlow_credibility_domains: spam.example\n"
+                                      "credible_domains: ['  NPS.gov ', '']\n")
+    glass = Glass(load_glass_rules("f9", tmp_path))
+    assert not glass.domain_allowed("https://www.reddit.com/r/x")
+    assert glass.credibility("https://spam.example/a") == 0 and glass.credibility("https://nps.gov/a") == 2
+    assert glass.credibility("https://other.example/a") == 1
+
+
+def test_junk_in_a_domain_list_is_an_error_not_an_open_glass(tmp_path):
+    (tmp_path / "f9.yaml").write_text("allow_domains:\n  - null\n")
+    with pytest.raises(ValueError):
+        load_glass_rules("f9", tmp_path)

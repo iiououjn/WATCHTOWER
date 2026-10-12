@@ -123,8 +123,8 @@ class TowerPipeline:
         cto = CTO(r["cto"], ask)
         online = data.get("research") and not data.get("offline")  # floors 2–5 search only with --research
         look = Lookout(self._beacon_factory if online else None, self._knowledge)
-        peek = lambda floor, query, hits=2: look.ask(  # noqa: E731
-            floor, query, job_id, lambda prompt: self._ask(r[f"glass.{floor}"], data, prompt), hits)
+        peek = lambda floor, query, hits=2, chars=700: look.ask(  # noqa: E731
+            floor, query, job_id, lambda prompt: self._ask(r[f"glass.{floor}"], data, prompt), hits, chars)
         docs = peek("f2", "python standard library http.server " + spec["title"])
         plan, feedback = self._approved_plan(data, dev, cto, research, lessons, [], docs), []
         units_due = True  # F2 workers write units on the first build and after each re-plan, never on a fix
@@ -206,10 +206,10 @@ class TowerPipeline:
                     self._post(data, "f3", "issue", "diagnosis: " + diagnosis)
             elif f4 is not None and not f4.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 4 QA checks failed:\n" + untrusted("sandbox", f4.summary)]
-                feedback += _reference("4", peek("f4", _status_query(f4.checks_run[-1]), 1))  # one fits 600 chars
+                feedback += _reference("4", peek("f4", _status_query(f4.checks_run[-1]), 1, 480))  # + header ≤ 600
             elif sec is not None and not sec.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 5 security scan found problems; fix them:\n" + untrusted("security", sec.summary)]
-                feedback += _reference("5", peek("f5", _finding_query(sec.checks_run[-1], self._g.security_fail_on), 1))
+                feedback += _reference("5", peek("f5", _finding_query(sec.checks_run[-1], self._g.security_fail_on), 1, 480))
             if verdict.route in ("design", "research"):
                 plan, units_due = self._approved_plan(data, dev, cto, research, lessons, feedback, docs), True
                 checks = self._plan_qa(data, plan, qa_office)

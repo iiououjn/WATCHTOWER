@@ -78,10 +78,12 @@ class Knowledge:
             raise
         return doc_id
 
-    def search(self, query: str, limit: int = 5, distinct: bool = True) -> list[Hit]:
-        """Best-ranked chunks; distinct=True keeps one hit per document (for display)."""
+    def search(self, query: str, limit: int = 5, distinct: bool = True, doc_ids=None) -> list[Hit]:
+        """Best-ranked chunks; distinct=True keeps one hit per document (for display); doc_ids limits the
+        search to those documents (e.g. the pages one lookup just accepted)."""
         terms = [t for t in re.findall(r"\w+", query.lower()) if t not in STOPWORDS][:MAX_TERMS]
-        if not terms:
+        ids = sorted({int(i) for i in doc_ids})[:50] if doc_ids is not None else None
+        if not terms or ids == []:
             return []
         match = " OR ".join(f'"{t}"' for t in terms)
         rows = self._conn.execute(
@@ -90,8 +92,9 @@ class Knowledge:
             " bm25(knowledge_fts) AS rank"
             " FROM knowledge_fts JOIN knowledge_docs d ON d.id = knowledge_fts.doc_id"
             " WHERE knowledge_fts MATCH ? AND knowledge_fts.workspace_id = ?"
+            + (f" AND d.id IN ({','.join('?' * len(ids))})" if ids else "") +
             " ORDER BY rank LIMIT ?",
-            (match, self._ws, limit * 4),
+            (match, self._ws, *(ids or ()), limit * 4),
         ).fetchall()
         hits, seen = [], set()
         for r in rows:

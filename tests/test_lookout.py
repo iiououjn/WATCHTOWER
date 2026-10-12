@@ -107,3 +107,31 @@ def test_crash_query_sends_only_the_error_kind(log, expected):
 def test_error_line_prefers_the_crash_over_a_later_warning():
     log = "TypeError: bad operand\nDeprecationWarning: old api\nResourceWarning: unclosed socket"
     assert error_line(log) == "TypeError: bad operand"
+
+
+def test_lookout_answers_even_when_older_pages_match_better(conn):
+    kb = Knowledge(conn)
+    for i in range(12):
+        kb.add(("python http server standard library todo list " * 8) + str(i), f"https://blog{i}.example/p")
+    text = Lookout(Factory(conn), kb).ask("f2", "python standard library http.server Todo list", "j", lambda p: {})
+    assert "docs.python.org" in text
+
+
+@pytest.mark.parametrize("yaml_text", ["min_chars: abc\n", "deny_domains: [\n", "allow_domains:\n  - null\n"])
+def test_broken_glass_file_makes_the_lookup_empty_not_the_job_fail(conn, tmp_path, monkeypatch, yaml_text):
+    import watchtower.beacon.lookout as lookout_mod
+    (tmp_path / "f2.yaml").write_text(yaml_text)
+    real = lookout_mod.load_glass_rules
+    monkeypatch.setattr(lookout_mod, "load_glass_rules", lambda floor: real(floor, tmp_path))
+    assert Lookout(Factory(conn), Knowledge(conn)).ask("f2", "python http.server", "j", lambda p: {}) == ""
+
+
+def test_app_made_exception_names_never_leave():
+    assert crash_query("AliceAtExampleDotComError: boom") == "exception python"
+    assert crash_query("json.decoder.JSONDecodeError: Expecting value") == "JSONDecodeError python"
+
+
+def test_reference_fits_a_feedback_item(conn):
+    text = Lookout(Factory(conn), Knowledge(conn)).ask("f4", "python http.server GET", "j", lambda p: {},
+                                                       max_hits=1, max_chars=480)
+    assert 0 < len(text) <= 480

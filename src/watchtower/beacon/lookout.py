@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import builtins
 import re
+import sqlite3
 from collections import Counter
 from typing import Callable
+
+import yaml
 
 from watchtower.beacon.glass import SECRET, Glass, load_glass_rules, normalize
 from watchtower.beacon.search import SearchUnavailable
@@ -15,6 +19,8 @@ _PATHISH = re.compile(r"\S*[/\\]\S*|\S+\.(py|html|css|js|json|md|txt|sql|db)\b\S
 _ERROR = re.compile(r"^\s*([A-Za-z_][\w.]*(Error|Exception)\b.*)$", re.MULTILINE)
 _WARNING = re.compile(r"^\s*([A-Za-z_][\w.]*Warning\b.*)$", re.MULTILINE)
 # phrases that describe an error without carrying the app's data: the only words of a message that may leave
+STDLIB_ERRORS = {"JSONDecodeError", "URLError", "HTTPError", "OperationalError", "IntegrityError",
+                 "ProgrammingError", "UnpicklingError", "ParseError", "Error"}
 SAFE_PHRASES = ("No module named", "Address already in use", "is not defined", "has no attribute",
                 "object is not callable", "object is not subscriptable", "unexpected keyword argument",
                 "missing 1 required positional argument", "invalid literal for int", "list index out of range",
@@ -43,6 +49,8 @@ def crash_query(log: str) -> str:
     if not line:
         return ""
     kind = re.match(r"[A-Za-z_][\w.]*", line).group(0).rsplit(".", 1)[-1]
+    if not (isinstance(getattr(builtins, kind, None), type) or kind in STDLIB_ERRORS):
+        kind = "exception"  # a class the app's own code named can carry its data
     phrase = next((p for p in SAFE_PHRASES if p in line), "")
     return " ".join(f"{kind} {phrase} python".split())
 
@@ -55,26 +63,25 @@ class Lookout:
         self._factory, self._knowledge, self._used = beacon_factory, knowledge, Counter()
 
     def ask(self, floor: str, query: str, job_id: str | None, ask_glass: Callable[[str], dict],
-            max_hits: int = 2) -> str:
+            max_hits: int = 2, max_chars: int = ANSWER_CHARS + 200) -> str:
         q = scrub_query(query)
         if self._factory is None or self._used[floor] >= MAX_PER_FLOOR or len(q) < 3:
             return ""
         self._used[floor] += 1
-        glass = Glass(load_glass_rules(floor))
-        try:
+        try:  # advisory end to end: a bad owner glass file or a busy database costs the lookup, not the job
+            glass = Glass(load_glass_rules(floor))
             accepted = set(self._factory(ask_glass, floor).research(q, job_id) or [])
-        except (SearchUnavailable, OSError, *ADVISORY_ERRORS):
+            hits = [h for h in self._knowledge.search(q, limit=8, distinct=True, doc_ids=accepted)
+                    if h.source.startswith("https://") and glass.domain_allowed(h.source) and glass.credibility(h.source)]
+        except (SearchUnavailable, OSError, yaml.YAMLError, ValueError, TypeError, sqlite3.Error, *ADVISORY_ERRORS):
             return ""
-        hits = [h for h in self._knowledge.search(q, limit=8, distinct=True)  # only what this glass just passed
-                if h.doc_id in accepted and h.source.startswith("https://") and glass.domain_allowed(h.source)
-                and glass.credibility(h.source)]
         out, used = [], 0
         for h in hits[:max_hits]:
             body = h.text
-            while body and len(untrusted(h.source, body)) > ANSWER_CHARS + 200 - used:  # bounded after escaping
+            while body and len(untrusted(h.source, body)) > max_chars - used:  # bounded after escaping
                 body = body[:int(len(body) * 0.8)]
             if len(body) < 80:
                 break
             out.append(untrusted(h.source, body))
-            used += len(out[-1])
+            used += len(out[-1]) + 1
         return "\n".join(out)
