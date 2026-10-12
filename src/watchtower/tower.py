@@ -128,7 +128,8 @@ class TowerPipeline:
             self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "
                        f"after {len(package.checks_run)} round(s) (attempt {attempt + 1})")
             self._handoff(data, "f2", attempt, tests_ok and plan["entry"] in ws.files(),
-                          [] if tests_ok else ["unit tests do not pass"])
+                          ["unit tests do not pass"] if not tests_ok else
+                          [] if plan["entry"] in ws.files() else [f"planned entry file {plan['entry']} missing"])
             if package.checks_run and package.checks_run[-1].get("pass") and plan["entry"] not in ws.files():
                 feedback = [f"the planned entry file {plan['entry']} does not exist; create it"]
                 package = WorkPackage("f2", package.summary, ws.files(), [], package.checks_run +
@@ -201,9 +202,10 @@ class TowerPipeline:
             f"Safer — deploy it isolated, with no internet: watchtower deploy {data['job_id']}",
             f"After you approve: watchtower deploy {data['job_id']}  (isolated, no internet)")
         verdict = {True: "approve", False: "REJECT"}.get(ceo.get("approve"), "no clear view")
+        spec = spec_text(data["spec"]) + "\n\n" if data.get("auto_approve") else ""  # the owner never saw it
         note = f" — {ceo['note']}" if ceo.get("note") else ""
         return {"signoff_id": self._approvals.request(data["job_id"], "signoff",
-                                                     f"{answer}\n\nEvidence:\n{data['evidence']}\n\n"
+                                                     f"{answer}\n\n{spec}Evidence:\n{data['evidence']}\n\n"
                                                      f"CEO recommends: {verdict}{note}")}
 
     def _signoff(self, data: dict) -> dict:
@@ -214,7 +216,7 @@ class TowerPipeline:
             if status != "approved":
                 raise NeedsOwner(f"app awaiting your sign-off; review it, then: watchtower approve {data['job_id']}")
         if not data.get("manifest"):
-            raise NeedsOwner("this job was checkpointed before release pinning; rebuild it")
+            raise NeedsOwner("this job was checkpointed before release pinning; run it again with: watchtower run")
         problems = manifest_problems(Path(data["workspace"]), data["manifest"])
         if problems:  # what ships is exactly what passed QA and the gate, or nothing
             raise NeedsOwner("workspace changed after QA; nothing released: " + "; ".join(problems[:3])
@@ -289,7 +291,10 @@ class TowerPipeline:
         approved, changes = cto.review(data["spec"], plan, self._g.rules)
         if not approved and changes:
             self._post(data, "f2", "issue", "CTO asked for: " + "; ".join(changes))
-            plan = dev.plan(data["spec"], research, list(feedback) + [f"CTO: {c}" for c in changes], lessons)
+            try:  # CTO changes first: the architect sees only the first few feedback items
+                plan = dev.plan(data["spec"], research, [f"CTO: {c}" for c in changes[:3]] + list(feedback), lessons)
+            except ADVISORY_ERRORS:  # the C-suite is advisory: a failed re-plan keeps the plan we have
+                self._post(data, "f2", "issue", "re-plan for the CTO failed; keeping the first plan")
         return plan
 
     def _handoff(self, data: dict, floor: str, attempt: int, passed: bool, reasons: list[str]) -> None:

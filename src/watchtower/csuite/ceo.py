@@ -27,5 +27,15 @@ class CEO:
                 evidence=untrusted("evidence", evidence[:1500]), audit=untrusted("f5.auditor", audit[:1500] or "(none)")))
         except ADVISORY_ERRORS:
             return None, ""
-        verdict = out.get("approve")
-        return (verdict if isinstance(verdict, bool) else None), " ".join(str(out.get("note") or "").split())[:200]
+        return _verdict(out.get("approve")), " ".join(str(out.get("note") or "").split())[:200]
+
+
+_WORDS = {"true": True, "yes": True, "approve": True, "approved": True, "accept": True,
+          "false": False, "no": False, "reject": False, "rejected": False}
+
+
+def _verdict(value) -> bool | None:
+    """Small models often answer booleans as words; a reject in any spelling must still stop --yes."""
+    if isinstance(value, bool):
+        return value
+    return _WORDS.get(str(value).strip().lower()) if isinstance(value, str) else None

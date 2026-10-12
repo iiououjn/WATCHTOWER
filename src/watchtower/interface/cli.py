@@ -44,7 +44,11 @@ def build_socket(settings: Settings, budget: Budget, audit: AuditLog) -> ModelSo
 
 
 def _open():
-    settings = load_settings()
+    try:
+        settings = load_settings()
+    except ValueError as e:  # e.g. a bad WATCHTOWER_WORK_MODEL: a clear message, not a traceback
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(2)
     return settings, connect(settings.db_path)
 
 
@@ -294,7 +298,7 @@ def knowledge_search(query: str, limit: int = typer.Option(5, min=1, max=50)):
 @app.command()
 def run(
     idea: str,
-    yes: bool = typer.Option(False, "--yes", help="Skip CPO questions; auto-approve spec and sign-off"),
+    yes: bool = typer.Option(False, "--yes", help="Skip CPO questions; auto-approve spec and sign-off (a CEO reject still waits for you)"),
     offline: bool = typer.Option(False, "--offline", help="Do not search the web"),
     research: bool = typer.Option(False, "--research", help="Floor 1 researches the web first"),
     max_tokens: Optional[int] = typer.Option(None, min=1, help="Token budget for this job"),
@@ -351,8 +355,8 @@ def _tower_job(goal: str, app: bool, yes: bool, offline: bool, research: bool, m
 
 
 @app.command()
-def approve(job_id: str, reject: bool = typer.Option(False, "--reject", help="Reject the spec instead")):
-    """Approve (or reject) the spec a job is waiting on, then resume it."""
+def approve(job_id: str, reject: bool = typer.Option(False, "--reject", help="Reject instead (the spec, or the finished app)")):
+    """Approve (or reject) what a job is waiting on — its spec or the finished app's sign-off — then resume it."""
     settings, conn = _open()
     approvals = Approvals(conn)
     pending = approvals.pending_for(job_id)

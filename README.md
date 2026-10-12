@@ -301,7 +301,7 @@ Then edit `~/.watchtower/guardrails.yaml`:
 
 ```yaml
 stdlib_only: true                 # apps may import only the Python standard library
-security_fail_on: [HIGH, MEDIUM]  # Bandit severities that fail the build
+security_fail_on: [HIGH, MEDIUM]  # lowest severity that fails the build (Bandit + secret scan); HIGH always fails
 min_source_domains: 2             # research needs sources from N independent sites
 max_send_backs: 3                 # gate retries per floor before owner decides
 

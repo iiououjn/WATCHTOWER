@@ -52,11 +52,11 @@
 |---|---|---|
 | macOS + apps | ~3–4 GB | Reserved |
 | Ollama model | ~2.5 GB | One model loaded at a time; unload when idle |
-| Docker (Sandbox, SearXNG) | ~1.5–2 GB | Started on demand, stopped when idle; Colima as lighter alternative to Docker Desktop |
+| Docker (Sandbox; SearXNG optional) | ~1.5–2 GB | Started on demand, stopped when idle; Colima as lighter alternative to Docker Desktop |
 | Engine (Python, SQLite, Chroma) | ~0.5 GB | Always on |
 | Dashboard | ~0.2 GB | Production build only (`next start`), never dev mode while jobs run |
 
-The Governor monitors free memory and defers starting a component that would exceed the budget. Search falls back to DuckDuckGo (no Docker) when SearXNG cannot start.
+The Governor monitors free memory and defers starting a component that would exceed the budget. Search uses DuckDuckGo (no Docker); a SearXNG container is optional.
 
 **Honest expectation:** on 8 GB with local models only, the tower works but produces simpler apps slowly. Quality scales with better hardware (swap in larger local models) or optional cloud models, with zero code changes.
 
@@ -128,7 +128,7 @@ Every step writes a checkpoint. On crash or restart, the Scheduler resumes each 
 
 - **Roles as config:** each role is a YAML file — name, model tier, allowed tools, prompt, output schema. The org chart changes without code changes.
 - **Per floor:** 1 **Lead** (plans, splits work), N **Workers** (execute tasks), 1 **HR** (in-floor quality and process check before handoff).
-- **Tower-wide C-suite:** **CPO** (turns the owner's prompt into a spec via clarifying questions), **CTO** (approves tech choices), **CEO** (final sign-off). All report to the **Owner**.
+- **Tower-wide C-suite:** **CPO** (turns the owner's prompt into a spec via clarifying questions), **CTO** (approves tech choices), **CEO** (final recommendation; the owner signs off). All report to the **Owner**.
 - **HR vs F5:** HR checks quality *inside* one floor. F5 checks *across* floors plus guardrails and security.
 - **Idle agents ("breaks"):** agents exist only when the Scheduler assigns a task. On completion they persist context to Memory and go idle (no compute, no tokens). Concurrency default = 1 active thinking agent (8 GB limit), configurable.
 - **Work package (handoff contract):** structured output of each floor — `summary`, `artifacts` (files), `sources`, `checks_run` + results, `open_questions`. Validated against a schema; invalid packages are rejected.
