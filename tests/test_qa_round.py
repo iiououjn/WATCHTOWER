@@ -30,50 +30,42 @@ def test_hr_cannot_drop_every_check():
     assert [c["name"] for c in qa.review(SPEC, [], [HOME, ADD])] == ["home", "add"]
 
 
-def test_a_check_is_relaxed_only_after_two_consecutive_f4_failures():
-    qa, calls = office([{"check_wrong": True}])
-    rnd = QARound(qa, None, SPEC)
-    rnd.reset([HOME, TITLE])
-    assert rnd.after_fail(fail("title"), replanning=False) == []
-    rnd.no_f4()  # F3 failed in between: not consecutive
-    assert rnd.after_fail(fail("title"), replanning=False) == []
-    notes = rnd.after_fail(fail("title"), replanning=False)
-    assert notes and "title" in notes[0] and next(c for c in rnd.checks if c["name"] == "title")["expect_text"] == ""
-    assert sum(r == "f4.hr" for r, _ in calls) == 1
+def test_hr_cannot_drop_every_text_check():
+    status_only = {**ADD, "name": "post", "expect_text": ""}
+    qa, _ = office([{"pass": False, "drop": ["home", "title"]}])
+    assert {c["name"] for c in qa.review(SPEC, [], [HOME, TITLE, status_only])} == {"home", "title", "post"}
 
 
-def test_persistence_checks_and_the_last_text_check_are_never_relaxed():
-    qa, calls = office([{"check_wrong": True}])
-    rnd = QARound(qa, None, SPEC)
-    rnd.reset([HOME, ADD])
-    for _ in range(3):
-        rnd.after_fail(fail("add"), replanning=False)
-    assert next(c for c in rnd.checks if c["name"] == "add")["expect_text"] == "milk" and calls == []
-    rnd.reset([HOME])
-    for _ in range(3):
-        rnd.after_fail(fail("home"), replanning=False)
-    assert rnd.checks[0]["expect_text"] == "Todo List" and calls == []
+def test_a_suite_without_page_text_counts_as_empty_and_the_guarded_writer_runs():
+    status_only = {**ADD, "name": "post", "expect_text": ""}
+
+    class Writer:
+        calls = 0
+
+        def write_checks(self, spec, code):
+            Writer.calls += 1
+            return [HOME]
+    qa, _ = office([{"pass": True, "drop": []}])
+    rnd = QARound(qa, Writer(), SPEC)
+    rnd.reset([status_only])
+    assert rnd.checks == [] and rnd.ensure([], "code") == [HOME] and Writer.calls == 1
 
 
-def test_wrong_status_or_garbage_or_replanning_keeps_the_check():
-    for replies, results, replanning in (([{"check_wrong": True}], fail("title", status=500), False),
-                                         ([ValueError("x")], fail("title"), False),
-                                         ([{"check_wrong": "true"}], fail("title"), False),
-                                         ([{"check_wrong": True}], fail("title"), True)):
-        from watchtower.engine.model_socket import BadModelOutput
-        replies = [BadModelOutput("x") if isinstance(r, ValueError) else r for r in replies]
-        qa, _ = office(replies)
-        rnd = QARound(qa, None, SPEC)
-        rnd.reset([HOME, TITLE])
-        rnd.after_fail(results, replanning=replanning)
-        rnd.after_fail(results, replanning=replanning)
-        assert next(c for c in rnd.checks if c["name"] == "title")["expect_text"] == "My Todos"
+def test_fallback_checks_are_rewritten_from_the_current_code_each_attempt():
+    class Writer:
+        def __init__(self):
+            self.codes = []
 
-
-def test_reset_forgets_failures_of_the_old_plan():
-    qa, calls = office([{"check_wrong": True}])
-    rnd = QARound(qa, None, SPEC)
-    rnd.reset([HOME, TITLE])
-    rnd.after_fail(fail("title"), replanning=False)
-    rnd.reset([HOME, TITLE])
-    assert rnd.after_fail(fail("title"), replanning=False) == [] and calls == []
+        def write_checks(self, spec, code):
+            self.codes.append(code)
+            return [HOME]
+    qa, _ = office([{"pass": True, "drop": []}])
+    w = Writer()
+    rnd = QARound(qa, w, SPEC)
+    rnd.reset([])
+    rnd.ensure([], "v1")
+    rnd.ensure([], "v2")
+    assert w.codes == ["v1", "v2"]
+    rnd.reset([HOME])  # test-first checks are kept as they are
+    rnd.ensure([], "v3")
+    assert w.codes == ["v1", "v2"]

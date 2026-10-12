@@ -74,8 +74,9 @@ def _str(value, cap: int) -> str | None:
     return value if isinstance(value, str) and len(value) <= cap else None
 
 
-_DESCRIBES = re.compile(r"^(the|a|an)\s+\w+(\s+\w+){3,}|\b(should|input field|text field|text box|submit button|"
-                       r"form with|page with)\b", re.IGNORECASE)
+_DESCRIBES = re.compile(r"^(the|a|an)\s+(\w+\s+){0,2}(home ?page|page|form|list|field|input|button|table|screen)\b"
+                       r"(\s+\S+){2,}|\b(input field|text field|text box|submit button)\b", re.IGNORECASE)
+MAX_TEXT_WORDS = 12
 
 
 def _page_text(text: str, known: str = "") -> str:
@@ -84,7 +85,7 @@ def _page_text(text: str, known: str = "") -> str:
     title or routes really contain it."""
     if text and text.lower() in known.lower():
         return text
-    return "" if len(text.split()) > 8 or _DESCRIBES.search(text) else text
+    return "" if len(text.split()) > MAX_TEXT_WORDS or _DESCRIBES.search(text) else text
 
 
 def _check(raw) -> dict | None:

@@ -178,7 +178,10 @@ def test_qa_script_ignores_an_app_that_prints_a_fake_pass(tmp_path):
     ("Todo List", "Todo List"), ("Add a new todo item", "Add a new todo item"),
     ("No items yet, add one above", "No items yet, add one above"), ("TV Shows", "TV Shows"),
     ("Show all", "Show all"), ("Display name", "Display name"), ("No items to display", "No items to display"),
-    ("A list of items", "A list of items"), ("The list", "The list")])
+    ("A list of items", ""), ("The list", "The list"), ("A new item was added", "A new item was added"),
+    ("You should add your first item", "You should add your first item"),
+    ("No items yet. Add your first item above to get started", "No items yet. Add your first item above to get started"),
+    ("one two three four five six seven eight nine ten eleven twelve thirteen", "")])
 def test_expected_text_must_be_page_text_not_a_description(text, kept):
     check = parse_checks({"checks": [{"name": "c", "method": "GET", "path": "/", "expect_text": text}]})[0]
     assert check["expect_text"] == kept

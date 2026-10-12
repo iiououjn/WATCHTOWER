@@ -205,8 +205,6 @@ class TowerPipeline:
                                    "  (then open http://127.0.0.1:8000)\n"
                                    f"Safer — deploy it isolated, with no internet: watchtower deploy {job_id}")}
             feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]
-            if f4 is None:
-                qa_round.no_f4()  # F4 did not run this attempt: its failures are not "consecutive"
             if f3 is not None and not f3.checks_run[-1]["pass"]:  # show the coder the app's real error
                 feedback = feedback + ["Floor 3 started the app and it failed:\n" + untrusted("sandbox", f3.summary)]
                 crash = crash_query(f3.summary)
@@ -216,10 +214,6 @@ class TowerPipeline:
                     self._post(data, "f3", "issue", "diagnosis: " + diagnosis)
             elif f4 is not None and not f4.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 4 QA checks failed:\n" + untrusted("sandbox", f4.summary)]
-                for note in qa_round.after_fail(f4.checks_run[-1].get("results") or [],
-                                                verdict.route in ("design", "research")):
-                    feedback.append(note)
-                    self._post(data, "f4", "issue", note)
                 feedback += _reference("4", peek("f4", _status_query(f4.checks_run[-1]), 1, 480))  # + header ≤ 600
             elif sec is not None and not sec.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 5 security scan found problems; fix them:\n" + untrusted("security", sec.summary)]

@@ -30,13 +30,6 @@ def _bullets(items) -> str:
     return "\n".join(f"- {a}" for a in items) or "- (none)"
 
 
-RECHECK_PROMPT = (
-    "Spec acceptance criteria:\n{acceptance}\n\nThis QA check failed twice in a row against the running app:\n"
-    "{check}\n\nWhat it got:\n{detail}\n\nIs the check itself wrong (it expects something the criteria do not "
-    'require, or text that is not real page text)? Reply as JSON: {{"check_wrong": boolean, "reason": string}}'
-)
-
-
 class QAOffice:
     """Floor 4 office, test-first: the QA Lead splits the acceptance criteria into areas, QA workers write
     checks per area from the architect's routes contract (before any code exists), QA HR drops bad ones."""
@@ -78,60 +71,27 @@ class QAOffice:
         except ADVISORY_ERRORS:
             drop = set()
         kept = [c for c in checks if c["name"] not in drop]
-        return kept or checks  # HR may prune, never empty the suite: zero checks would test nothing
+        # HR may prune, never empty the suite or strip every page-text check: status-only checks test nothing
+        return kept if any(c["expect_text"] for c in kept) or not any(c["expect_text"] for c in checks) else checks
 
-    def recheck(self, spec: dict, check: dict, detail: str) -> bool:
-        """A check that failed twice in a row: QA HR says whether the CHECK is wrong (then it is dropped).
-        Advisory: garbage or no clear verdict keeps the check."""
-        try:
-            out = self._ask(self._hr, RECHECK_PROMPT.format(
-                acceptance=_bullets(spec["acceptance"]), check=untrusted("f4.qa", json.dumps(check)),
-                detail=untrusted("sandbox", detail[:600])))
-        except ADVISORY_ERRORS:
-            return False
-        return out.get("check_wrong") is True
 
 
 class QARound:
-    """Floor 4's checks for one plan, and what happened to them. Checks come from the test-first office or,
-    failing that, are written once from the code and reviewed. A check whose expected text fails two F4 runs
-    in a row (status right) gets one QA HR second look; a wrong one is relaxed to status-only — never a check
-    that a POST must persist, and never the last text check, so a broken app cannot slip through."""
+    """Floor 4's checks for one plan. Test-first checks (from the routes contract) are kept as written; if
+    there are none — or none tests real page text — QA writes checks from the current code every attempt
+    (so they never go stale) and QA HR reviews them. Nothing here ever weakens a check: a bad check that
+    keeps failing runs out the send-backs and the owner decides, which is the safe way to fail."""
 
     def __init__(self, office: QAOffice, writer, spec: dict):
         self._office, self._writer, self._spec = office, writer, spec
         self.checks: list[dict] = []
-        self._failed: set[str] = set()
-        self._looked: set[str] = set()
+        self._fallback = True
 
     def reset(self, checks: list[dict]) -> None:
-        self.checks, self._failed, self._looked = [dict(c) for c in checks], set(), set()
+        good = any(c["expect_text"] for c in checks)  # a status-only suite passes almost any app: not a suite
+        self.checks, self._fallback = ([dict(c) for c in checks], False) if good else ([], True)
 
     def ensure(self, routes: list[dict], code: str) -> list[dict]:
-        if not self.checks:
-            self.reset(self._office.review(self._spec, routes, self._writer.write_checks(self._spec, code)))
+        if self._fallback:
+            self.checks = self._office.review(self._spec, routes, self._writer.write_checks(self._spec, code))
         return self.checks
-
-    def no_f4(self) -> None:
-        self._failed = set()  # F4 did not run: the next F4 failure is not "consecutive"
-
-    def after_fail(self, results: list[dict], replanning: bool) -> list[str]:
-        failed = {str(r.get("name")) for r in results if r.get("pass") is not True}
-        twice, self._failed = failed & self._failed, failed
-        if replanning:  # the checks are about to be replaced: no second look worth paying for
-            return []
-        posted = {str(v) for c in self.checks if c["method"] == "POST" for v in c["form"].values()}
-        notes = []
-        for c in self.checks:
-            result = next((r for r in results if r.get("name") == c["name"]), {})
-            texts = [x for x in self.checks if x["expect_text"]]
-            if (c["name"] not in twice or c["name"] in self._looked or not c["expect_text"]
-                    or c["expect_text"] in posted or len(texts) <= 1
-                    or result.get("status") != c["expect_status"]):  # wrong status is a real failure
-                continue
-            self._looked.add(c["name"])
-            if self._office.recheck(self._spec, c, str(result.get("detail") or "")):
-                c["expect_text"] = ""
-                notes.append(f"QA HR found check {c['name']!r} was wrong; it now only checks the status — ignore "
-                             "its expected text")
-        return notes
