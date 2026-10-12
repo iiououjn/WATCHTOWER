@@ -442,3 +442,25 @@ def test_app_that_never_passes_qa_has_no_release(app_tower, conn):
     out = runner.start(job.id, extra={"auto_approve": True})
     assert out.status == "paused" and Releases(conn).get(job.id) is None
     runner.close()
+
+
+def test_qa_checks_are_written_before_coding_and_are_the_ones_run(app_tower):
+    runner, model, sandbox, job = app_tower()
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert model.calls.index("f4.lead") < model.calls.index("f2.coder")
+    assert model.calls.count("f4.qa") == 1  # written once, test-first; no second QA writer after coding
+    qa_run = [c for c in sandbox.calls if "WATCHTOWER_QA" in c[2]][0]
+    assert '"name": "home"' in qa_run[4]
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"][0]
+    assert '<untrusted source="f4">' in coder
+    runner.close()
+
+
+def test_build_hr_diagnosis_of_a_crash_reaches_the_coder(app_tower):
+    runner, model, sandbox, job = app_tower({"f3.hr": [{"diagnosis": "add import json at the top"}]},
+                                            http="500\nNameError: name 'json' is not defined")
+    runner.start(job.id, extra={"auto_approve": True})
+    assert "f3.lead" in model.calls and "f2.hr" in model.calls
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert any("add import json at the top" in p for p in coder[1:])
+    runner.close()

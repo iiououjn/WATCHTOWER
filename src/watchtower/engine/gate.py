@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from watchtower.engine.floor import WorkPackage, strs, truthy, untrusted
+from watchtower.engine.floor import WorkPackage, strs, truthy, untrusted, untrusted_code
 from watchtower.roles import Role
 
 GATE_PROMPT = (
@@ -39,9 +39,10 @@ class Gate:
         prompt = GATE_PROMPT.format(
             acceptance=_bullets(spec.get("acceptance", [])),
             out_of_scope=_bullets(spec.get("out_of_scope", [])),
-            floor=package.floor, summary=untrusted(package.floor, package.summary),
+            floor=package.floor, summary=untrusted_code(package.floor, package.summary),
             sources=", ".join(package.sources) or "(none)",
-            questions="; ".join(package.open_questions) or "(none)",
+            questions=untrusted("open-questions", "; ".join(package.open_questions)) if package.open_questions
+            else "(none)",
         )
         if routes:
             prompt += (f'\nIf it fails, also set "send_back_to" to one of: {", ".join(routes)}. '

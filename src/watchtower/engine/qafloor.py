@@ -4,7 +4,7 @@ import json
 import re
 from typing import Callable
 
-from watchtower.engine.floor import WorkPackage, untrusted
+from watchtower.engine.floor import WorkPackage, untrusted_code
 from watchtower.engine.model_socket import BadModelOutput
 from watchtower.engine.sandbox import SandboxResult
 from watchtower.roles import Role
@@ -90,6 +90,33 @@ def _check(raw) -> dict | None:
             "expect_status": status, "expect_text": _str(raw.get("expect_text"), 200) or ""}
 
 
+_FIELD = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,30}")
+MAX_ROUTES = 8
+_SAFE_TEXT = re.compile(r"[^<>{}\x00-\x1f\x7f]*")
+
+
+def _route(raw) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    method = str(raw.get("method") or "GET").upper()
+    path = _str(raw.get("path"), 200)
+    if method not in ("GET", "POST") or not path or not _PATH.fullmatch(path) or ".." in path or "//" in path:
+        return None
+    fields = raw.get("fields") or []
+    if not isinstance(fields, list) or len(fields) > 6 or not all(isinstance(f, str) and _FIELD.fullmatch(f)
+                                                                  for f in fields):
+        return None
+    shows = raw.get("shows") or ""
+    if not isinstance(shows, str) or len(shows) > 100 or not _SAFE_TEXT.fullmatch(shows):
+        return None
+    return {"method": method, "path": path, "fields": list(fields), "shows": shows}
+
+
+def parse_routes(raw) -> list[dict]:
+    """The architect's routes contract, kept only if every value is safe to show other floors."""
+    return [r for r in map(_route, raw if isinstance(raw, list) else []) if r][:MAX_ROUTES]
+
+
 def parse_checks(reply) -> list[dict]:
     """Keep only checks that are safe to run: local relative paths, small forms, sane values."""
     raw = reply.get("checks") if isinstance(reply, dict) else None
@@ -135,7 +162,7 @@ class QAFloor:
     def write_checks(self, spec: dict, code: str) -> list[dict]:
         out = self._ask(self._role, QA_PROMPT.format(
             title=spec["title"], goal=spec["goal"], acceptance="\n".join(f"- {a}" for a in spec["acceptance"]),
-            code=untrusted("workspace", code)))
+            code=untrusted_code("workspace", code)))
         checks = parse_checks(out)
         if not checks:
             raise BadModelOutput("QA wrote no usable checks; resume to retry")

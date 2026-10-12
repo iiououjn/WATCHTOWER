@@ -16,5 +16,6 @@ class Bus:
             raise ValueError(f"topic must be namespaced like 'job.paused', got {topic!r}")
         return self._audit.append("bus", topic, payload, job_id)
 
-    def events(self, after: int = 0, job_id: str | None = None, limit: int = 500) -> list[AuditEntry]:
-        return self._audit.since(after, job_id=job_id, actor="bus", limit=limit)
+    def events(self, after: int = 0, job_id: str | None = None, limit: int = 500,
+               topic: str | None = None) -> list[AuditEntry]:
+        return self._audit.since(after, job_id=job_id, actor="bus", limit=limit, action=topic)

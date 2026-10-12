@@ -56,11 +56,17 @@ class RoleModel:
 
 APP_REPLIES = {
     "f2.architect": [{"files": [{"path": "app.py", "purpose": "server"},
-                                {"path": "test_app.py", "purpose": "tests"}], "entry": "app.py"}],
+                                {"path": "test_app.py", "purpose": "tests"}], "entry": "app.py",
+                      "routes": [{"method": "GET", "path": "/", "shows": "the Todo list"}]}],
     "f2.coder": [{"files": [{"path": "app.py", "content": "import json\n"},
                             {"path": "test_app.py", "content": "import unittest\n"}]}],
     "f5.dev_gate": [{"pass": True, "reasons": []}],
     "f4.qa": [{"checks": [{"name": "home", "path": "/", "expect_text": "Todo"}]}],
+    "f4.lead": [{"areas": ["home page"]}],
+    "f4.hr": [{"pass": True, "drop": []}],
+    "f2.hr": [{"pass": True, "reason": "ok"}],
+    "f3.lead": [{"expect_text": "Todo"}],
+    "f3.hr": [{"diagnosis": "check the traceback"}],
 }
 
 

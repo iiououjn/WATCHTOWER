@@ -30,6 +30,16 @@ def untrusted(source: str, text: str) -> str:
     return f'<untrusted source="{safe_source}">\n{text.replace("<", "&lt;")}\n</untrusted>'
 
 
+_TAG = re.compile(r"<(/?untrusted)", re.IGNORECASE)
+
+
+def untrusted_code(source: str, text: str) -> str:
+    """Like untrusted(), for code an agent must edit: only tag-like '<untrusted' / '</untrusted' are escaped,
+    so '<h1>' stays '<h1>' (escaping every '<' made the coder copy '&lt;' back into its own files)."""
+    safe_source = re.sub(r"[^A-Za-z0-9:/._%#?=&@+~-]", "", source)[:200]
+    return f'<untrusted source="{safe_source}">\n{_TAG.sub(r"&lt;\1", text)}\n</untrusted>'
+
+
 SOURCE_ATTR = re.compile(r'<untrusted source="([^"]*)">')
 REALITY_FLOORS = {"f2", "f3", "f4", "dev"}
 SECOND_LEVEL = {"co", "com", "org", "net", "gov", "ac", "edu"}
@@ -105,7 +115,8 @@ class Floor:
     def run(self, goal: str, feedback: Sequence[str] = ()) -> WorkPackage:
         gate_note = ""
         if feedback:
-            gate_note = "\nThe gate rejected the previous attempt; fix these:\n- " + "\n- ".join(feedback)
+            gate_note = ("\nThe gate rejected the previous attempt; fix these:\n"
+                         + "\n".join(untrusted("gate", str(f)[:600]) for f in feedback[:5]))
         plan = self._ask(self._lead, LEAD_PROMPT.format(goal=goal, context=self._context(goal) or "(none)",
                                                          feedback=gate_note, n=self._max_tasks))
         tasks = strs(plan.get("tasks"))[: self._max_tasks]

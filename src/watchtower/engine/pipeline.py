@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import shlex
 from typing import Callable
 
 from watchtower.engine.beacon import glass as glass_mod
 from watchtower.engine.beacon.beacon import Beacon
+from watchtower.engine.board import FLOORS, NAMES, Board
 from watchtower.engine.buildfloor import smoke_test
 from watchtower.engine.bus import Bus
 from watchtower.engine.devfloor import DevFloor
@@ -13,13 +15,24 @@ from watchtower.engine.gate import Gate
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput
+from watchtower.engine.office import F3Office, QAOffice
 from watchtower.engine.qafloor import QAFloor, run_qa
+from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.engine.releases import Releases
 from watchtower.engine.workflow import Step
 from watchtower.engine.workspace import Workspace
 from watchtower.roles import Role
 
 MAX_SEND_BACKS = 3
+MAX_MEMOS = 3
+MEMO_SENDERS = {"f1.lead", "f2.architect", "f2.coder", "f3.lead", "f4.lead"}
+FLOOR_LEADS = {"f1": "f1.lead", "f2": "f2.architect", "f3": "f3.lead", "f4": "f4.lead"}
+MEMO_PROMPT = (
+    "{sender} asks your floor:\n{question}\n\nWhat your floor knows:\n{known}\n\n"
+    "Answer briefly and factually; say 'unknown' if your floor does not know. "
+    'Reply as JSON: {{"answer": string}}'
+)
+BOARD_HEADER = "\n\nTower board (what the other floors know and what comes next):\n"
 DEV_ROUTES = ("research", "design", "code")
 CONTEXT_CHARS = 1500
 QUESTIONS_PROMPT = (
@@ -64,6 +77,8 @@ class TowerPipeline:
         self._beacon_factory = beacon_factory
         self._sandbox = sandbox
         self._releases = releases
+        self._board = Board(bus)
+        self._known: dict[tuple[str, str], str] = {}  # (job, floor) → what that floor can tell others
 
     def steps(self) -> list[Step]:
         return [Step("spec", self._spec), Step("approval", self._approval), Step("f1", self._f1)]
@@ -77,24 +92,34 @@ class TowerPipeline:
 
     def _dev(self, data: dict) -> dict:
         job_id, spec, r = data["job_id"], data["spec"], self._roles
-        ask = lambda role, prompt: self._ask(role, data, prompt)  # noqa: E731
+        ask = lambda role, prompt: self._call(role, data, prompt)  # noqa: E731
         ws = Workspace(self._sandbox.workspace(job_id))
         run = lambda cmd: self._sandbox.run(job_id, cmd, timeout=90)  # noqa: E731
-        dev = DevFloor(r["f2.architect"], r["f2.coder"], ask=ask, workspace=ws, run=run)
+        dev = DevFloor(r["f2.architect"], r["f2.coder"], ask=ask, workspace=ws, run=run, hr=r["f2.hr"])
+        f3_office = F3Office(r["f3.lead"], r["f3.hr"], ask)
         gate = Gate(ask, r["f5.dev_gate"])
         qa = QAFloor(r["f4.qa"], ask)
+        qa_office = QAOffice(r["f4.lead"], r["f4.qa"], r["f4.hr"], ask)
         research = (data.get("f1") or {}).get("summary", "")
         plan, feedback = dev.plan(spec, research, []), []
+        checks = self._plan_qa(data, plan, qa_office)
+        expect = f3_office.expect(spec, plan["routes"])
         for attempt in range(MAX_SEND_BACKS + 1):
-            package, f3, f4 = dev.build(spec, plan, feedback), None, None
+            package, f3, f4 = dev.build(spec, plan, feedback, checks), None, None
+            tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
+            self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "
+                       f"after {len(package.checks_run)} round(s) (attempt {attempt + 1})")
             if package.checks_run and package.checks_run[-1].get("pass") and plan["entry"] not in ws.files():
                 feedback = [f"the planned entry file {plan['entry']} does not exist; create it"]
                 package = WorkPackage("f2", package.summary, ws.files(), [], package.checks_run +
                                       [{"check": "entry", "pass": False}], feedback)
             elif package.checks_run and package.checks_run[-1].get("pass"):
-                f3 = smoke_test(run, plan["entry"])
+                f3 = smoke_test(run, plan["entry"], expect)
+                self._post(data, "f3", "done" if f3.checks_run[-1]["pass"] else "issue", f3.summary.splitlines()[0])
                 if f3.checks_run[-1]["pass"]:
-                    f4 = run_qa(run, plan["entry"], qa.write_checks(spec, ws.snapshot()))
+                    f4 = run_qa(run, plan["entry"], checks or qa.write_checks(spec, ws.snapshot()))
+                    self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
+                               f4.summary.splitlines()[0], known=f4.summary[:1500])
                 later = [p for p in (f3, f4) if p is not None]
                 package = WorkPackage("dev", "\n\n".join([package.summary] + [p.summary for p in later])
                                       + f"\n\nCode:\n{ws.snapshot(3000)}", ws.files(), [],
@@ -103,6 +128,8 @@ class TowerPipeline:
             verdict = gate.check(spec, package, DEV_ROUTES)
             self._bus.publish("gate.verdict", {"floor": "dev", "attempt": attempt, "passed": verdict.passed,
                                                "reasons": verdict.reasons, "route": verdict.route}, job_id)
+            self._post(data, "f5", "done" if verdict.passed else "issue", "gate passed the app" if verdict.passed
+                       else f"gate sent back to {verdict.route}: {'; '.join(verdict.reasons)[:200]}")
             if verdict.passed:
                 if self._releases is not None:
                     self._releases.record(job_id, plan["entry"], ws.root, ws.files())
@@ -117,11 +144,64 @@ class TowerPipeline:
             feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]
             if f3 is not None and not f3.checks_run[-1]["pass"]:  # show the coder the app's real error
                 feedback = feedback + ["Floor 3 started the app and it failed:\n" + untrusted("sandbox", f3.summary)]
+                diagnosis = f3_office.diagnose(f3.summary)
+                if diagnosis:
+                    feedback.append("Floor 3 HR diagnosis:\n" + untrusted("f3.hr", diagnosis))
+                    self._post(data, "f3", "issue", "diagnosis: " + diagnosis)
             elif f4 is not None and not f4.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 4 QA checks failed:\n" + untrusted("sandbox", f4.summary)]
             if verdict.route in ("design", "research"):
                 plan = dev.plan(spec, research, feedback)
+                checks = self._plan_qa(data, plan, qa_office)
+                expect = f3_office.expect(spec, plan["routes"])
         raise NeedsOwner(f"gate rejected the app {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")
+
+    def _call(self, role: Role, data: dict, prompt: str) -> dict:
+        """The one door every floor agent goes through: it hears the tower board and may send a memo."""
+        job_id = data["job_id"]
+        brief = self._board.brief(job_id, role.floor) if role.floor in FLOORS else ""
+        out = self._ask(role, data, prompt + (BOARD_HEADER + untrusted("board", brief) if brief else ""))
+        if role.id in MEMO_SENDERS and isinstance(out, dict) and isinstance(out.get("memo"), dict):
+            self._route_memo(role, data, out["memo"])
+        return out
+
+    def _route_memo(self, sender: Role, data: dict, memo: dict) -> None:
+        job_id, to = data["job_id"], str(memo.get("to") or "").strip().lower()
+        question = " ".join(str(memo.get("question") or "").split())[:120]
+        lead = self._roles.get(FLOOR_LEADS.get(to, ""))
+        if lead is None or to == sender.floor or not question:
+            return
+        notes = self._board.notes(job_id)
+        if sum(n["kind"] == "memo" and n["floor"] == sender.floor for n in notes) >= MAX_MEMOS:
+            return
+        own = [n["text"] for n in notes if n["floor"] == to and n["kind"] != "memo"][-5:]
+        known = "\n".join(filter(None, [self._known.get((job_id, to), "")[:1200]] + own))
+        if not known:  # never let a floor invent what it has not done
+            answer = "nothing yet: that floor has not worked on this job"
+        else:
+            try:  # answered through the raw door: an answer can never send another memo
+                out = self._ask(lead, data, MEMO_PROMPT.format(sender=NAMES[sender.floor],
+                                                               question=untrusted(sender.floor, question),
+                                                               known=untrusted(to, known[:1500])))
+                answer = " ".join(str(out.get("answer") or "").split())[:150] or "no answer"
+            except ADVISORY_ERRORS:  # a memo never pauses a job
+                answer = "no answer"
+        self._board.note(job_id, sender.floor, "memo", f"{NAMES[sender.floor]} asked {NAMES[to]}: {question[:50]} → {answer}")
+
+    def _plan_qa(self, data: dict, plan: dict, qa_office: QAOffice) -> list[dict]:
+        """Post the architect's plan, then let the QA office write its checks from the routes contract."""
+        self._post(data, "f2", "doing", f"plan: {', '.join(f['path'] for f in plan['files'])}; entry {plan['entry']}",
+                   known=json.dumps(plan))
+        checks = qa_office.plan_checks(data["spec"], plan["routes"])
+        if checks:
+            self._post(data, "f4", "plan", "QA will check: " + ", ".join(c["name"] for c in checks),
+                       known=json.dumps(checks))
+        return checks
+
+    def _post(self, data: dict, floor: str, kind: str, text: str, known: str | None = None) -> None:
+        self._board.note(data["job_id"], floor, kind, text)
+        if known is not None:
+            self._known[(data["job_id"], floor)] = known
 
     def questions(self, data: dict) -> list[str]:
         out = self._ask(self._roles["cpo"], data, QUESTIONS_PROMPT.format(goal=data["prompt"], context=self._context(data["prompt"]) or "(none)"))
@@ -154,7 +234,7 @@ class TowerPipeline:
         raise NeedsOwner(f"spec awaiting your approval; review it, then: watchtower approve {data['job_id']}")
 
     def _f1(self, data: dict) -> dict:
-        ask = lambda role, prompt: self._ask(role, data, prompt)  # noqa: E731
+        ask = lambda role, prompt: self._call(role, data, prompt)  # noqa: E731
         r = self._roles
         beacon = None
         if self._beacon_factory is not None and not data.get("offline"):
@@ -175,6 +255,7 @@ class TowerPipeline:
             self._bus.publish("gate.verdict", {"floor": "f1", "attempt": attempt, "passed": verdict.passed,
                                                "reasons": verdict.reasons}, data["job_id"])
             if verdict.passed:
+                self._post(data, "f1", "done", "research ready: " + package.summary[:200], known=package.summary)
                 return {"f1": package.to_dict(), "answer": package.summary}
             feedback = verdict.reasons or ["the reviewer rejected the package without reasons"]
         raise NeedsOwner(f"gate rejected floor 1 {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")

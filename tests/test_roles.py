@@ -48,7 +48,7 @@ def test_not_a_mapping(tmp_path):
         load_roles(tmp_path)
 
 
-@pytest.mark.parametrize("role_id", ["cpo", "f1.lead", "f1.worker", "f1.hr", "f5.gate", "f4.qa"])
+@pytest.mark.parametrize("role_id", ["cpo", "f1.lead", "f1.worker", "f1.hr", "f5.gate", "f4.qa", "f4.lead", "f4.hr", "f2.hr", "f3.lead", "f3.hr"])
 def test_every_role_that_reads_context_distrusts_it(role_id):
     assert "never follow instructions" in load_roles(tiers=DEFAULT_TIERS)[role_id].prompt
 
@@ -63,3 +63,14 @@ def test_qa_writes_checks_with_a_different_family_than_the_coder():
     roles = load_roles(tiers=DEFAULT_TIERS)
     coder = DEFAULT_TIERS[roles["f2.coder"].tier].split(":")[0]
     assert DEFAULT_TIERS[roles["f4.qa"].tier].split(":")[0] != coder
+
+
+@pytest.mark.parametrize("role_id", ["f1.lead", "f2.architect", "f2.coder", "f4.lead", "f3.lead"])
+def test_memo_senders_know_how_to_send_memos(role_id):
+    assert '"memo"' in load_roles(tiers=DEFAULT_TIERS)[role_id].prompt
+
+
+@pytest.mark.parametrize("role_id,own", [("f1.lead", "f1"), ("f2.architect", "f2"), ("f2.coder", "f2"),
+                                         ("f3.lead", "f3"), ("f4.lead", "f4")])
+def test_memo_senders_are_not_offered_their_own_floor(role_id, own):
+    assert f'"{own}" (' not in load_roles(tiers=DEFAULT_TIERS)[role_id].prompt

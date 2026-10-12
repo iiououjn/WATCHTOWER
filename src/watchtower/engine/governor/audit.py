@@ -64,9 +64,12 @@ class AuditLog:
         return [AuditEntry(**{**dict(r), "detail": json.loads(r["detail"])}) for r in rows]
 
     def since(
-        self, seq: int = 0, job_id: str | None = None, actor: str | None = None, limit: int = 500
+        self, seq: int = 0, job_id: str | None = None, actor: str | None = None, limit: int = 500,
+        action: str | None = None,
     ) -> list[AuditEntry]:
         sql, args = "SELECT * FROM audit_log WHERE seq > ?", [seq]
+        if action is not None:
+            sql, args = sql + " AND action = ?", args + [action]
         if job_id is not None:
             sql, args = sql + " AND job_id = ?", args + [job_id]
         if actor is not None:
