@@ -6,6 +6,7 @@ from typing import Optional
 
 import click
 import typer
+import yaml
 
 from watchtower.config import Settings, load_settings
 from watchtower.beacon.beacon import Beacon
@@ -229,6 +230,17 @@ def guardrails_status(settings: Settings) -> tuple[bool, str]:
     return True, f"{len(g.rules)} rules, {g.max_send_backs} send-backs ({'your copy' if owner else 'defaults'})"
 
 
+def glass_status() -> tuple[bool, str]:
+    """Every floor's glass rules file loads (a typo there would otherwise surface mid-job)."""
+    from watchtower.beacon import glass as glass_mod
+    for n in range(1, 6):
+        try:
+            glass_mod.load_glass_rules(f"f{n}", glass_mod.GLASS_DIR)
+        except (OSError, ValueError, TypeError, yaml.YAMLError) as e:
+            return False, f"f{n}.yaml: {str(e)[:120]} (in {glass_mod.GLASS_DIR})"
+    return True, "Glass 1–5 rules load"
+
+
 def bandit_status() -> tuple[bool, str]:
     from importlib.metadata import PackageNotFoundError, version
     try:
@@ -251,6 +263,7 @@ def doctor():
         ("Audit chain", audit.verify(), "ok" if audit.verify() else "BROKEN"),
         ("Bandit", *bandit_status()),
         ("Guardrails", *guardrails_status(settings)),
+        ("Glass", *glass_status()),
     ]
     for name, ok, detail in checks:
         typer.echo(f"{'✓' if ok else '✗'} {name:<12} {detail}")

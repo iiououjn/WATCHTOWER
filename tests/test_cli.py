@@ -500,3 +500,18 @@ def test_bad_work_model_is_a_clear_error_not_a_traceback(monkeypatch, tmp_path):
     monkeypatch.setenv("WATCHTOWER_WORK_MODEL", "bad model;rm")
     result = runner.invoke(cli.app, ["deployments"])
     assert result.exit_code == 2 and "WATCHTOWER_WORK_MODEL" in result.output
+
+
+def test_doctor_checks_every_glass_file(monkeypatch, tmp_path):
+    import shutil
+    from watchtower.beacon import glass as glass_mod
+    monkeypatch.setattr(cli, "ollama_status", lambda s: (True, "ok"))
+    monkeypatch.setattr(cli, "docker_status", lambda s, a: (True, "ready"))
+    monkeypatch.setattr(cli, "free_ram_pct", lambda: 55)
+    assert "✓ Glass" in runner.invoke(cli.app, ["doctor"]).output
+    for f in glass_mod.GLASS_DIR.glob("*.yaml"):
+        shutil.copy(f, tmp_path / f.name)
+    (tmp_path / "f3.yaml").write_text("allow_domains:\n  - null\n")
+    monkeypatch.setattr(glass_mod, "GLASS_DIR", tmp_path)
+    result = runner.invoke(cli.app, ["doctor"])
+    assert result.exit_code == 1 and "✗ Glass" in result.output and "f3" in result.output
