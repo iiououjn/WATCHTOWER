@@ -81,7 +81,17 @@ _BLOCK = re.compile(r"^(FAIL|ERROR): (\w+) \(([^)\n]*)\)(?: \([^\n]*\))?\n(?:(?!
                     r"(.*?)(?=^={20,}$|^-{20,}$|\Z)", re.M | re.S)  # optional docstring line before the dashes
 _EXC = re.compile(r"^[A-Za-z_][\w.]*(: |$)")  # an unindented 'Name: message' line ends a traceback
 _FRAME = re.compile(r'^\s+File "([^"]+)", line (\d+), in (\S+)')
-MAX_FAILURES, MAX_PARSED, NOTE_CHARS = 5, 20, 1800
+MAX_FAILURES, MAX_PARSED, NOTE_CHARS = 5, 20, 1000
+NOTE_CAP = 2000  # any one note, after escaping: the newest note is never trimmed, so it must stay small
+
+
+def _capped(source: str, text: str, cap: int = NOTE_CAP // 2, code: bool = False) -> str:
+    """Wrap text as untrusted and keep the result within cap characters (escaping can quadruple a '<')."""
+    wrap = untrusted_code if code else untrusted
+    body = str(text)
+    while body and len(wrap(source, body)) > cap:
+        body = body[:int(len(body) * 0.8)]
+    return wrap(source, body)
 
 
 def failures(output: str) -> list[dict]:
@@ -120,7 +130,7 @@ def _failure_rows(found: list[dict]) -> str:
     """The failures as text, bounded: at most 5 rows, which shrink (diffs first) instead of disappearing."""
     shown, more = found[:MAX_FAILURES], len(found) - MAX_FAILURES
     for diff_cap in (400, 150, 0):
-        rows = "\n".join(f"- {f['test']} ({f['kind']}): {f['line']}"
+        rows = "\n".join(f"- {f['test'][:60]} ({f['kind']}): {f['line'][:200]}"
                          + (f"\n{f['diff'][:diff_cap]}" if f["diff"] and diff_cap else "") for f in shown)
         rows += f"\n(+{more} more failing)" if more > 0 else ""
         if len(rows) <= NOTE_CHARS:
@@ -131,12 +141,12 @@ def _failure_rows(found: list[dict]) -> str:
 def _failure_note(found: list[dict], stuck: str = "", diagnosis: str = "") -> str:
     """One note (so prompt trimming keeps or drops it whole): the failures, whitespace hints, and — when the
     coder is stuck — the stuck note and Floor 2 HR's diagnosis."""
-    hints = [f"{f['test']}: the two sides differ only in spaces or indentation — make them identical, or compare "
-             "without exact whitespace" for f in found[:MAX_FAILURES] if f["whitespace"]]
-    # untrusted_code: the coder's own test output, HTML kept readable (only <untrusted tags are escaped)
-    return ("Failing tests (unittest's own report):\n" + untrusted_code("sandbox", _failure_rows(found))
-            + ("\n" + "\n".join(hints) if hints else "") + (f"\n{stuck}" if stuck else "")
-            + ("\nFloor 2 HR diagnosis:\n" + untrusted("f2.hr", diagnosis) if diagnosis else ""))
+    hints = [f"{f['test'][:60]}: the two sides differ only in spaces or indentation — make them identical, or "
+             "compare without exact whitespace" for f in found[:MAX_FAILURES] if f["whitespace"]][:2]
+    # the coder's own test output: HTML kept readable (untrusted_code escapes only <untrusted tags), then bounded
+    return ("Failing tests (unittest's own report):\n" + _capped("sandbox", _failure_rows(found), NOTE_CHARS + 100, code=True)
+            + ("\n" + "\n".join(hints) if hints else "") + (f"\n{stuck[:250]}" if stuck else "")
+            + ("\nFloor 2 HR diagnosis:\n" + _capped("f2.hr", diagnosis, 300) if diagnosis else ""))
 
 
 _SYNTAX = re.compile(r"^(.+?) has a syntax error on line (\d+):")
@@ -147,18 +157,21 @@ def _problem_note(problems: list[str], ws: Workspace, tests_ok: bool) -> str:
     """Problems the test run cannot show (syntax errors in files the tests never import, banned imports),
     with the lines around a syntax error. When the tests already pass, say this is all that is left."""
     parts, shown = [], False
-    for p in problems[:3]:
+    ordered = sorted(problems, key=lambda p: not _SYNTAX.match(p))  # syntax errors first: they get the excerpt
+    for p in ordered[:3]:
         parts.append(p[:200])
         match = None if shown else _SYNTAX.match(p)  # one excerpt: the snapshot shows the rest of the code
         try:
-            lines = ws.read(match.group(1)).splitlines() if match else []
+            lines = re.split(r"\r\n|\r|\n", ws.read(match.group(1))) if match else []  # Python's own line count
         except (WorkspaceError, OSError):
             lines = []
         if lines:
             shown, n = True, int(match.group(2))
-            excerpt = "\n".join(f"{i + 1:4}| {lines[i][:LINE_CHARS]}"  # per line: the error line always shows
+            excerpt = "\n".join(f"{'>' if i + 1 == n else ' '}{i + 1:4}| {lines[i][:LINE_CHARS]}"  # error line marked
                                  for i in range(max(0, min(n, len(lines)) - 3), min(len(lines), n + 2)))
             parts.append(untrusted_code(match.group(1), excerpt))
+    if len(problems) > 3:
+        parts.append(f"(+{len(problems) - 3} more)")
     head = "Your unit tests pass; this is the only thing left to fix:" if tests_ok else "Also fix these problems:"
     return head + "\n" + "\n".join(parts)  # bounded by its parts (≤ 3 × 200 + one 5-line excerpt); never cut
 
@@ -315,7 +328,7 @@ class DevFloor:
                 break
             kept.append(item)
             used += len(item)
-        notes = [f"Reviewer feedback to address:\n{untrusted('gate', f)}" for f in kept]
+        notes = [f"Reviewer feedback to address:\n{_capped('gate', f, 800)}" for f in kept]
         qa = ("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n"
               + untrusted("f4", _compact_checks(qa_checks)) + "\n") if qa_checks else ""
         checks, output, passed, hr_asks, hr_question = [], "", False, 0, None
@@ -362,7 +375,7 @@ class DevFloor:
                 if hr_asks >= MAX_HR_ASKS or round_no == self._max_rounds - 1:
                     hr_question = f"F2 HR not satisfied: {verdict[1][:200]}"
                     break
-                carry = ["Floor 2 HR reviewed your code and asked for changes:\n" + untrusted("f2.hr", verdict[1])]
+                carry = ["Floor 2 HR reviewed your code and asked for changes:\n" + _capped("f2.hr", verdict[1], 800)]
                 notes += carry  # kept through a garbled reply
                 continue
             if not has_tests:
@@ -386,9 +399,10 @@ class DevFloor:
             carry = [] if tests_ok and problems else [
                 _failure_note(found, STUCK_NOTE.format(names=", ".join(sorted({f["test"] for f in found})))
                               if stuck else "", shown) if found  # last: trimming drops the oldest first
-                else "Test output:\n" + untrusted("sandbox", (output or "(no output)")[-1200:])]
-            if problems:  # the very last note: never trimmed, kept through a garbled reply
-                carry.append(_problem_note(problems, self._ws, tests_ok))
+                else "Test output:\n" + _capped("sandbox", (output or "(no output)")[-1200:], 1300, code=True)]
+            if problems:  # one note with the failures (trimming keeps or drops them together), kept last
+                note = _problem_note(problems, self._ws, tests_ok)
+                carry = [carry[0] + "\n" + note] if carry else [note]
             notes += carry
             last_failing = failing
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"

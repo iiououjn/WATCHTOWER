@@ -776,3 +776,35 @@ def test_excerpt_always_shows_the_error_line(tmp_path):
     ws.write("my app.py", ("x = '" + "h" * 300 + "'\n") * 3 + "if (\n")
     note = _problem_note(["my app.py has a syntax error on line 4: '(' was never closed"], ws, True)
     assert "   4| if (" in note and len(note) < 1700 and note.count("<untrusted") == note.count("</untrusted>")
+
+
+def test_every_note_kind_is_bounded_after_escaping():
+    from watchtower.floors.f2_dev.devfloor import NOTE_CAP, _capped, _failure_note
+    huge = [{"test": "test_" + "n" * 300 + str(i), "id": f"m.T.{i}", "kind": "FAIL", "line": "AssertionError: " + "<" * 200,
+             "diff": "<" * 400, "whitespace": True} for i in range(20)]
+    stuck = "names " + ", ".join(f["test"] for f in huge)
+    assert len(_failure_note(huge, stuck, "<b>" * 300)) <= NOTE_CAP
+    assert len(_capped("gate", "<" * 600)) <= NOTE_CAP // 2
+
+
+def test_failures_and_problems_share_one_note(tmp_path):
+    ws = Workspace(tmp_path)
+    ws.write("__main__.py", BROKEN_MAIN)
+    ws.write("test_todo.py", "import unittest\nimport todo\n")
+    ws.write("todo.py", "x = 1\n")
+    script = Script({"f2.coder": [{"files": []}]})
+    DevFloor(ARCH, CODER, ask=script, workspace=ws, run=Runner([FAILED]), max_rounds=2).build(
+        SPEC, {"entry": "app.py", "routes": [], "files": []}, [])
+    second = script.prompts["f2.coder"][1]
+    fail_at, prob_at = second.index("Failing tests"), second.index("Also fix these problems")
+    assert fail_at < prob_at and "\n\n" not in second[fail_at:prob_at].split("Failing tests")[0]
+
+
+def test_syntax_error_first_marked_and_counted_right(tmp_path):
+    from watchtower.floors.f2_dev.devfloor import _problem_note
+    ws = Workspace(tmp_path)
+    ws.write("z.py", "a = 1\x0c\nb = 2\nif (\n")
+    probs = [f"m{i}.py imports flask (not in the Python standard library)" for i in range(4)]
+    note = _problem_note(probs + ["z.py has a syntax error on line 3: '(' was never closed"], ws, True)
+    assert note.index("z.py has a syntax error") < note.index("m0.py") and "(+2 more)" in note
+    assert ">   3| if (" in note
