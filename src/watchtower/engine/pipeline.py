@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shlex
+from pathlib import Path
 from typing import Callable
 
 from watchtower.engine.beacon import glass as glass_mod
@@ -15,10 +16,12 @@ from watchtower.engine.gate import Gate
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput
-from watchtower.engine.office import F3Office, QAOffice
+from watchtower.engine.office import F3Office, OversightOffice, QAOffice
+from watchtower.engine.oversight import is_failing as _failing, security_package, security_scan
 from watchtower.engine.qafloor import QAFloor, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
-from watchtower.engine.releases import Releases
+from watchtower.engine.beacon.glass import INJECTION, normalize
+from watchtower.engine.releases import Releases, manifest_of, manifest_problems
 from watchtower.engine.workflow import Step
 from watchtower.engine.workspace import Workspace
 from watchtower.roles import Role
@@ -55,6 +58,10 @@ class SpecRejected(Exception):
     pass
 
 
+class AppRejected(SpecRejected):  # same outcome for the runner: the job fails
+    pass
+
+
 def spec_text(spec: dict) -> str:
     lines = [f"Title: {spec['title']}", f"Goal: {spec['goal']}", "Acceptance criteria:"]
     lines += [f"  - {a}" for a in spec["acceptance"]]
@@ -85,7 +92,8 @@ class TowerPipeline:
 
     def app_steps(self) -> list[Step]:
         return [Step("spec", self._spec), Step("approval", self._approval),
-                Step("research", self._research), Step("dev", self._dev)]
+                Step("research", self._research), Step("dev", self._dev),
+                Step("signoff_request", self._signoff_request), Step("signoff", self._signoff)]
 
     def _research(self, data: dict) -> dict:
         return self._f1(data) if data.get("research") else {"f1": None}
@@ -100,12 +108,14 @@ class TowerPipeline:
         gate = Gate(ask, r["f5.dev_gate"])
         qa = QAFloor(r["f4.qa"], ask)
         qa_office = QAOffice(r["f4.lead"], r["f4.qa"], r["f4.hr"], ask)
-        research = (data.get("f1") or {}).get("summary", "")
-        plan, feedback = dev.plan(spec, research, []), []
+        oversight = OversightOffice(r["f5.lead"], r["f5.auditor"], ask)
+        research, lessons = (data.get("f1") or {}).get("summary", ""), self._lessons(data)
+        plan, feedback = dev.plan(spec, research, [], lessons), []
+        focus = oversight.focus(spec)
         checks = self._plan_qa(data, plan, qa_office)
         expect = f3_office.expect(spec, plan["routes"])
         for attempt in range(MAX_SEND_BACKS + 1):
-            package, f3, f4 = dev.build(spec, plan, feedback, checks), None, None
+            package, f3, f4, sec, audit = dev.build(spec, plan, feedback, checks), None, None, None, ""
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
             self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "
                        f"after {len(package.checks_run)} round(s) (attempt {attempt + 1})")
@@ -120,8 +130,15 @@ class TowerPipeline:
                     f4 = run_qa(run, plan["entry"], checks or qa.write_checks(spec, ws.snapshot()))
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
                                f4.summary.splitlines()[0], known=f4.summary[:1500])
-                later = [p for p in (f3, f4) if p is not None]
-                package = WorkPackage("dev", "\n\n".join([package.summary] + [p.summary for p in later])
+                if f4 is not None and f4.checks_run[-1]["pass"]:  # Floor 5 office: security scan, then spec audit
+                    sec = security_package(security_scan(ws.root, ws.files()))
+                    self._post(data, "f5", "doing" if sec.checks_run[-1]["pass"] else "issue",
+                               sec.summary.splitlines()[0], known=sec.summary[:1500])
+                    if sec.checks_run[-1]["pass"]:
+                        audit = oversight.audit(spec, focus, ws.snapshot(3000), f4.summary)
+                later = [p for p in (f3, f4, sec) if p is not None]
+                package = WorkPackage("dev", "\n\n".join([package.summary] + [p.summary for p in later]
+                                                         + ([f"Oversight audit:\n{audit}"] if audit else []))
                                       + f"\n\nCode:\n{ws.snapshot(3000)}", ws.files(), [],
                                       package.checks_run + [c for p in later for c in p.checks_run],
                                       package.open_questions + [q for p in later for q in p.open_questions])
@@ -131,10 +148,10 @@ class TowerPipeline:
             self._post(data, "f5", "done" if verdict.passed else "issue", "gate passed the app" if verdict.passed
                        else f"gate sent back to {verdict.route}: {'; '.join(verdict.reasons)[:200]}")
             if verdict.passed:
-                if self._releases is not None:
-                    self._releases.record(job_id, plan["entry"], ws.root, ws.files())
-                self._bus.publish("app.released", {"entry": plan["entry"], "files": len(ws.files())}, job_id)
+                self._retro(data, oversight, passed=True)
                 return {"dev": package.to_dict(), "files": ws.files(), "workspace": str(ws.root),
+                        "entry": plan["entry"], "manifest": manifest_of(ws.root, ws.files()),
+                        "evidence": _evidence(package.checks_run),
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
                                    "Note: written by a local AI and tested only inside the sandbox — untested on "
                                    "your Mac. Read the code before running it.\n"
@@ -150,11 +167,68 @@ class TowerPipeline:
                     self._post(data, "f3", "issue", "diagnosis: " + diagnosis)
             elif f4 is not None and not f4.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 4 QA checks failed:\n" + untrusted("sandbox", f4.summary)]
+            elif sec is not None and not sec.checks_run[-1]["pass"]:
+                feedback = feedback + ["Floor 5 security scan found problems; fix them:\n" + untrusted("security", sec.summary)]
             if verdict.route in ("design", "research"):
-                plan = dev.plan(spec, research, feedback)
+                plan = dev.plan(spec, research, feedback, lessons)
                 checks = self._plan_qa(data, plan, qa_office)
                 expect = f3_office.expect(spec, plan["routes"])
+        self._retro(data, oversight, passed=False)
         raise NeedsOwner(f"gate rejected the app {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")
+
+    def _signoff_request(self, data: dict) -> dict:
+        """Lifecycle: final audit → owner sign-off → done. Nothing is released until the owner signs off."""
+        if data.get("auto_approve"):
+            return {"signoff_id": None}
+        answer = data["answer"].replace(  # deploying needs a release, and a release needs this sign-off first
+            f"Safer — deploy it isolated, with no internet: watchtower deploy {data['job_id']}",
+            f"After you approve: watchtower deploy {data['job_id']}  (isolated, no internet)")
+        return {"signoff_id": self._approvals.request(data["job_id"], "signoff",
+                                                     f"{answer}\n\nEvidence:\n{data['evidence']}")}
+
+    def _signoff(self, data: dict) -> dict:
+        if data.get("signoff_id") is not None:
+            status = self._approvals.get(data["signoff_id"]).status
+            if status == "rejected":
+                raise AppRejected("app rejected by owner")
+            if status != "approved":
+                raise NeedsOwner(f"app awaiting your sign-off; review it, then: watchtower approve {data['job_id']}")
+        if not data.get("manifest"):
+            raise NeedsOwner("this job was checkpointed before release pinning; rebuild it")
+        problems = manifest_problems(Path(data["workspace"]), data["manifest"])
+        if problems:  # what ships is exactly what passed QA and the gate, or nothing
+            raise NeedsOwner("workspace changed after QA; nothing released: " + "; ".join(problems[:3])
+                             + f". Restore those files, then: watchtower resume {data['job_id']}")
+        if self._releases is not None:
+            self._releases.record_manifest(data["job_id"], data["entry"], data["manifest"])
+        self._bus.publish("app.released", {"entry": data["entry"], "files": len(data["files"])}, data["job_id"])
+        return {"released": True}
+
+    def _lessons(self, data: dict) -> str:
+        """Past retrospectives that match this job (stored untrusted; shown to the architect wrapped)."""
+        hits = {}
+        for query in (data["prompt"], f"{data['spec']['title']} {data['spec']['goal']}"):
+            for h in self._knowledge.search(query, limit=8, distinct=True):
+                if h.source.startswith("watchtower://retro/") and h.source != f"watchtower://retro/{data['job_id']}":
+                    hits.setdefault(h.source, h.text[:400])
+        return "\n".join(list(hits.values())[:2])
+
+    def _retro(self, data: dict, oversight: OversightOffice, passed: bool) -> None:
+        """Never lets a retrospective problem cost the job: any error is logged and skipped."""
+        try:
+            self._write_retro(data, oversight, passed)
+        except Exception as e:  # noqa: BLE001 — advisory by design
+            self._bus.publish("retro.skipped", {"error": type(e).__name__}, data["job_id"])
+
+    def _write_retro(self, data: dict, oversight: OversightOffice, passed: bool) -> None:
+        notes = [f"{n['floor']} {n['kind']}: {n['text']}" for n in self._board.notes(data["job_id"])][-12:]
+        lessons = [x for x in oversight.retro(data["spec"], notes) if not INJECTION.search(normalize(x))]
+        if lessons:
+            outcome = "passed" if passed else "did not pass"
+            self._knowledge.add(f"Lessons from job {data['job_id']} ({data['spec']['title']}, {outcome}):\n"
+                                + "\n".join(f"- {x}" for x in lessons), f"watchtower://retro/{data['job_id']}",
+                                title=f"Retrospective: {data['spec']['title']}", trusted=False)
+            self._post(data, "f5", "done", "lessons: " + "; ".join(lessons))
 
     def _call(self, role: Role, data: dict, prompt: str) -> dict:
         """The one door every floor agent goes through: it hears the tower board and may send a memo."""
@@ -263,5 +337,30 @@ class TowerPipeline:
     def _context(self, task: str) -> str:
         # re-check stored sources against the CURRENT glass rules: a site denied later never reaches agents
         glass = glass_mod.Glass(glass_mod.load_glass_rules("f1"))
-        hits = [h for h in self._knowledge.search(task, limit=6, distinct=False) if glass.domain_allowed(h.source)]
+        hits = [h for h in self._knowledge.search(task, limit=12, distinct=False)  # over-fetch: lessons are dropped
+                if glass.domain_allowed(h.source) and not h.source.startswith("watchtower://")]  # lessons: architect only
         return "\n".join(untrusted(h.source, h.text[:CONTEXT_CHARS]) for h in hits[:3])
+
+
+def _evidence(checks: list[dict]) -> str:
+    """Sign-off evidence built from the checks' own results — never from text the app could print."""
+    last = {}
+    for c in checks:
+        last[c.get("check")] = c
+    tests, http, qa, sec = last.get("tests", {}), last.get("http", {}), last.get("qa", {}), last.get("security", {})
+    results = qa.get("results") or []
+    findings = sec.get("findings") or []
+    serious = sum(_failing(f) for f in findings)
+    unknown = sum(f.get("severity") == "UNKNOWN" for f in findings)
+    if unknown:
+        scan = f"INCOMPLETE — a scanner did not run (see watchtower doctor); {serious} serious found"
+    else:
+        scan = f"{'pass' if sec.get('pass') else 'FAIL'} ({serious} serious, {len(findings) - serious} minor)"
+    qa_line = (f"{sum(r.get('pass') is True for r in results)}/{len(results)} checks passed" if results
+               else "no QA checks ran")
+    return "\n".join([
+        f"- unit tests: {'pass' if tests.get('pass') else 'FAIL'}",
+        f"- app answered HTTP {http.get('status')}",
+        f"- QA: {qa_line}",
+        f"- security scan: {scan}",
+    ])

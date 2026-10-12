@@ -30,7 +30,7 @@ def test_verify_reports_changed_missing_and_extra_files(conn, ws):
     problems = rel.verify("job1", ws)
     assert any("app.py" in p and "changed" in p for p in problems)
     assert any("pkg/util.py" in p and "missing" in p for p in problems)
-    assert any("evil.py" in p and "not in the release" in p for p in problems)
+    assert not any("evil.py" in p for p in problems)  # extras never ship: deploy copies manifest files only
 
 
 def test_rerecord_replaces_and_unknown_job_is_none(conn, ws):

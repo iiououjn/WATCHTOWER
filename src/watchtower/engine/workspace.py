@@ -20,7 +20,7 @@ class Workspace:
     def _target(self, path: str) -> tuple[str, Path]:
         raw = (path or "").strip()
         rel = PurePosixPath(raw)
-        if not raw or "\\" in raw or rel.is_absolute() or ".." in rel.parts:
+        if not raw or "\\" in raw or rel.is_absolute() or ".." in rel.parts or any(ord(c) < 32 or c == "\x7f" for c in raw):
             raise WorkspaceError(f"unsafe path {path!r}")
         if any(part.startswith(".") for part in rel.parts):
             raise WorkspaceError(f"hidden files are not allowed: {path!r}")

@@ -102,3 +102,30 @@ def test_qa_office_on_low_memory_degrades_instead_of_pausing():
             raise LowMemory("no RAM")
         return {"areas": ["a"]} if role.id == "f4.lead" else {"checks": [ADD]}
     assert [c["name"] for c in QAOffice(LEAD, WORKER, HR, ask).plan_checks(SPEC, ROUTES)] == ["add"]
+
+
+def oversight(replies):
+    from watchtower.engine.office import OversightOffice
+    s = Script({"f5.lead": [{"focus": ["adding works"]}], "f5.auditor": [{"findings": []}], **replies})
+    return OversightOffice(Role("f5.lead", "OL", "f5", "small", (), "l"),
+                           Role("f5.auditor", "A", "f5", "small", (), "a"), s), s
+
+
+def test_oversight_focus_audit_and_retro():
+    o, s = oversight({"f5.lead": [{"focus": ["a", "b", "c", "d"], "lessons": ["x" * 300, "keep\x1b tests simple"]}],
+                      "f5.auditor": [{"findings": [{"focus": "a", "ok": True, "note": "fine"},
+                                                   {"focus": "b", "ok": False, "note": "no delete route"}]}]})
+    assert o.focus(SPEC) == ["a", "b", "c"]
+    report = o.audit(SPEC, ["a", "b"], "HTML = '<h1>x</h1>'", "QA passed")
+    assert "a: OK" in report and "b: CONCERN no delete route" in report
+    prompt = s.prompts["f5.auditor"][0]
+    assert "'<h1>x</h1>'" in prompt and '<untrusted source="evidence">' in prompt
+    lessons = o.retro(SPEC, ["f2: tests failed"])
+    assert len(lessons) == 2 and len(lessons[0]) <= 200 and "\x1b" not in lessons[1]
+    assert '<untrusted source="board">' in s.prompts["f5.lead"][-1]
+
+
+def test_oversight_garbage_degrades():
+    o, _ = oversight({"f5.lead": ["bad"], "f5.auditor": ["bad"]})
+    assert o.focus(SPEC) == ["add a todo", "list todos"] and o.audit(SPEC, ["a"], "", "") == ""
+    assert o.retro(SPEC, []) == []
