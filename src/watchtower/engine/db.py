@@ -77,6 +77,24 @@ MIGRATIONS = [
     );
     ALTER TABLE jobs ADD COLUMN pipeline TEXT NOT NULL DEFAULT 'demo';
     """,
+    """
+    CREATE TABLE releases(
+        job_id TEXT PRIMARY KEY,
+        entry TEXT NOT NULL,
+        manifest TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE deployments(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        job_id TEXT NOT NULL,
+        image TEXT NOT NULL,
+        port INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        ended_at TEXT
+    );
+    """,
 ]
 
 

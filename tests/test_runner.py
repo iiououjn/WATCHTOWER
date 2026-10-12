@@ -378,7 +378,8 @@ def test_app_pipeline_builds_tests_and_smoke_checks(app_tower):
     out = runner.start(job.id, extra={"auto_approve": True})
     assert out.status == "done" and "app.py" in out.answer and "python app.py" in out.answer
     assert "untested on your Mac" in out.answer
-    assert "WATCHTOWER_TESTS" in sandbox.calls[0][2] and "SMOKE_STATUS" in sandbox.calls[-1][2]
+    assert "WATCHTOWER_TESTS" in sandbox.calls[0][2] and "SMOKE_STATUS" in sandbox.calls[-2][2]
+    assert "WATCHTOWER_QA" in sandbox.calls[-1][2] and f"watchtower deploy {job.id}" in out.answer
     assert "f1.lead" not in model.calls  # research is opt-in for apps
     runner.close()
 
@@ -411,4 +412,33 @@ def test_smoke_failure_output_reaches_the_coder(app_tower):
     runner.start(job.id, extra={"auto_approve": True})
     coder_prompts = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
     assert any("NameError: name 'json' is not defined" in p for p in coder_prompts[1:])
+    runner.close()
+
+
+def test_passing_app_is_recorded_as_a_release(app_tower, conn):
+    from watchtower.engine.releases import Releases
+    runner, model, sandbox, job = app_tower()
+    runner.start(job.id, extra={"auto_approve": True})
+    rel = Releases(conn).get(job.id)
+    assert rel.entry == "app.py" and set(rel.manifest) == {"app.py", "test_app.py"}
+    assert Releases(conn).verify(job.id, sandbox.workspace(job.id)) == []
+    runner.close()
+
+
+def test_qa_failure_routes_to_coder_with_detail_and_skips_model_gate(app_tower, conn):
+    from watchtower.engine.releases import Releases
+    runner, model, sandbox, job = app_tower(qa_ok=[False, True])
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "done" and model.calls.count("f5.dev_gate") == 1
+    coder_prompts = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert any("KeyError item" in p and '<untrusted source="gate">' in p for p in coder_prompts[1:])
+    assert Releases(conn).get(job.id) is not None
+    runner.close()
+
+
+def test_app_that_never_passes_qa_has_no_release(app_tower, conn):
+    from watchtower.engine.releases import Releases
+    runner, model, sandbox, job = app_tower(qa_ok=False)
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "paused" and Releases(conn).get(job.id) is None
     runner.close()

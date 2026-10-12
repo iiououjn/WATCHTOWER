@@ -60,14 +60,16 @@ APP_REPLIES = {
     "f2.coder": [{"files": [{"path": "app.py", "content": "import json\n"},
                             {"path": "test_app.py", "content": "import unittest\n"}]}],
     "f5.dev_gate": [{"pass": True, "reasons": []}],
+    "f4.qa": [{"checks": [{"name": "home", "path": "/", "expect_text": "Todo"}]}],
 }
 
 
 class FakeSandbox:
     """Sandbox stand-in: unittest and smoke results are scripted."""
 
-    def __init__(self, root, test_ok=True, http="200", unavailable=False):
+    def __init__(self, root, test_ok=True, http="200", unavailable=False, qa_ok=True):
         self.root, self.test_ok, self.http, self.unavailable, self.calls = root, test_ok, http, unavailable, []
+        self.qa_ok = qa_ok
 
     def workspace(self, job_id):
         path = self.root / job_id
@@ -83,4 +85,9 @@ class FakeSandbox:
             ok = self.test_ok if isinstance(self.test_ok, bool) else self.test_ok.pop(0)
             line = '{"run": 2, "skipped": 0, "failures": %d, "errors": 0}' % (0 if ok else 1)
             return SandboxResult(0 if ok else 1, "WATCHTOWER_TESTS " + line + "\n", "FAILED\n" if not ok else "", False)
+        if command[:2] == ["python", "-c"] and "WATCHTOWER_QA" in command[2]:
+            ok = self.qa_ok if isinstance(self.qa_ok, bool) else self.qa_ok.pop(0)
+            detail = "" if ok else "expected 200 with 'Todo', got 500: KeyError item"
+            return SandboxResult(0, 'WATCHTOWER_QA [{"name": "home", "pass": %s, "status": 200, "detail": "%s"}]\n'
+                                 % ("true" if ok else "false", detail), "", False)
         return SandboxResult(0, f"SMOKE_STATUS {self.http}\n", "", False)
