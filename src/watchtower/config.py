@@ -34,7 +34,7 @@ class Settings:
         return self.home / "watchtower.db"
 
 
-_MODEL = re.compile(r"[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)?")
+_MODEL = re.compile(r"[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*(:[A-Za-z0-9._-]+)?")
 
 
 def load_settings() -> Settings:

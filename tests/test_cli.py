@@ -493,3 +493,10 @@ def test_bad_guardrails_stop_jobs_with_a_clear_message(monkeypatch, home):
     result = runner.invoke(cli.app, ["ask", "hello"])
     assert result.exit_code == 2 and "guardrails" in result.output and "Traceback" not in result.output
     assert "hello" not in runner.invoke(cli.app, ["status"]).output  # no orphan job left behind
+
+
+def test_bad_work_model_is_a_clear_error_not_a_traceback(monkeypatch, tmp_path):
+    monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
+    monkeypatch.setenv("WATCHTOWER_WORK_MODEL", "bad model;rm")
+    result = runner.invoke(cli.app, ["deployments"])
+    assert result.exit_code == 2 and "WATCHTOWER_WORK_MODEL" in result.output

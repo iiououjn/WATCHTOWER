@@ -37,3 +37,10 @@ def test_ceo_recommends_with_a_note():
     assert ceo.recommend(SPEC, "- unit tests: pass", "- add: OK") == (False, "no delete")
     assert '<untrusted source="evidence">' in prompts[0]
     assert CEO(Role("ceo", "CEO", "csuite", "small", (), "e"), ask_with("bad", [])).recommend(SPEC, "", "") == (None, "")
+
+
+def test_ceo_string_verdicts_are_understood():
+    role = Role("ceo", "CEO", "csuite", "small", (), "e")
+    for word, expected in [("false", False), ("No", False), ("reject", False), ("true", True), ("yes", True),
+                           ("maybe", None)]:
+        assert CEO(role, ask_with({"approve": word}, [])).recommend(SPEC, "", "")[0] is expected

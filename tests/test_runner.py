@@ -702,3 +702,53 @@ def test_ceo_recommendation_is_shown_at_sign_off(app_tower, conn):
     runner, model, sandbox, job, approvals = _to_signoff(app_tower, conn)
     assert "CEO recommends: approve — meets the spec" in approvals.pending_for(job.id).summary
     runner.close()
+
+
+def test_cto_changes_survive_a_full_send_back(app_tower):
+    runner, model, sandbox, job = app_tower({
+        "f5.dev_gate": [{"pass": False, "reasons": ["r1", "r2", "r3", "r4", "r5"], "send_back_to": "design"},
+                        {"pass": True, "reasons": []}],
+        "cto": [{"approve": True}, {"approve": False, "changes": ["add a delete route"]}, {"approve": True}]})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    arch = [p for c, p in zip(model.calls, model.prompts) if c == "f2.architect"]
+    assert len(arch) == 3 and "CTO: add a delete route" in arch[2]
+    runner.close()
+
+
+def test_failed_cto_re_plan_keeps_the_first_plan(app_tower):
+    good = APP_REPLIES["f2.architect"][0]
+    runner, model, sandbox, job = app_tower({"f2.architect": [good, "garbage", "garbage", good],
+                                             "cto": [{"approve": False, "changes": ["x"]}, {"approve": True}]})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    runner.close()
+
+
+def test_missing_entry_handoff_says_why(app_tower, conn):
+    runner, model, sandbox, job = app_tower({"f2.architect": [{**APP_REPLIES["f2.architect"][0], "entry": "main.py"}]})
+    runner.start(job.id, extra={"auto_approve": True})
+    from watchtower.engine.bus import Bus as _Bus
+    f2 = [e.detail for e in _Bus(AuditLog(conn)).events(job_id=job.id, topic="gate.verdict") if e.detail["floor"] == "f2"]
+    assert any(not e["passed"] and "main.py" in " ".join(e["reasons"]) for e in f2)
+    runner.close()
+
+
+def test_ceo_reject_under_yes_shows_the_spec_at_sign_off(app_tower, conn):
+    from watchtower.engine.governor.approvals import Approvals
+    runner, model, sandbox, job = app_tower({"ceo": [{"approve": "reject", "note": "bad"}]})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "paused"
+    summary = Approvals(conn).pending_for(job.id).summary
+    assert "CEO recommends: REJECT" in summary and "Acceptance" in summary
+    runner.close()
+
+
+def test_gate_prompt_fits_with_maximum_owner_rules(app_tower, settings):
+    rules = "".join(f"  - '{chr(97 + i)}" + "r" * 199 + "'\n" for i in range(12))
+    (settings.home / "guardrails.yaml").write_text("rules:\n" + rules)
+    big = "".join(f"assert {i} == {i}  # " + "pad " * 30 + "\n" for i in range(60))
+    runner, model, sandbox, job = app_tower({"f2.coder": [{"files": [
+        {"path": "app.py", "content": big}, {"path": "test_app.py", "content": "import unittest\n" + big}]}]})
+    runner.start(job.id, extra={"auto_approve": True})
+    gate = [p for c, p in zip(model.calls, model.prompts) if c == "f5.dev_gate"][-1]
+    assert len(gate) <= 11_000 and "Guardrails" in gate
+    assert gate.index("Guardrails") < gate.index("Reply as JSON")  # the JSON instruction comes after the rules
+    runner.close()

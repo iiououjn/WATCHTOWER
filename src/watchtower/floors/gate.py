@@ -9,6 +9,7 @@ from watchtower.roles import Role
 GATE_PROMPT = (
     "Spec acceptance criteria:\n{acceptance}\n\nOut of scope:\n{out_of_scope}\n\n"
     "Work package from {floor}:\n{summary}\n\nSources: {sources}\nOpen questions: {questions}\n\n"
+    "{rules}"
     'Does the package satisfy the criteria? Reply as JSON: {{"pass": boolean, "reasons": [string]}}'
 )
 
@@ -42,11 +43,10 @@ class Gate:
             out_of_scope=_bullets(spec.get("out_of_scope", [])),
             floor=package.floor, summary=untrusted_code(package.floor, package.summary),
             sources=", ".join(package.sources) or "(none)",
+            rules=("Guardrails:\n" + "\n".join(f"- {r}" for r in self._rules) + "\n\n") if self._rules else "",
             questions=untrusted("open-questions", "; ".join(package.open_questions)) if package.open_questions
             else "(none)",
         )
-        if self._rules:
-            prompt += "\n\nGuardrails:\n" + "\n".join(f"- {r}" for r in self._rules)
         if routes:
             prompt += (f'\nIf it fails, also set "send_back_to" to one of: {", ".join(routes)}. '
                        'Reply as JSON: {"pass": boolean, "reasons": [string], "send_back_to": string}')
