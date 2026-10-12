@@ -90,3 +90,10 @@ def test_work_model_with_ollama_prefix_is_not_doubled(monkeypatch, tmp_path):
     monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
     monkeypatch.setenv("WATCHTOWER_WORK_MODEL", "ollama/qwen2.5-coder:7b")
     assert load_settings().tiers["work"] == "ollama/qwen2.5-coder:7b"
+
+
+def test_the_7b_coder_is_the_default_work_model(monkeypatch, tmp_path):
+    from watchtower.config import load_settings
+    monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
+    monkeypatch.delenv("WATCHTOWER_WORK_MODEL", raising=False)
+    assert load_settings().tiers["work"] == "ollama/qwen2.5-coder:7b"

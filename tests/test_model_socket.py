@@ -61,7 +61,7 @@ def test_only_one_local_model_loaded(parts):
     assert unloaded == []
     sock.ask("work", [{"role": "user", "content": "c"}], "j")
     assert unloaded == ["ollama/llama3.2:3b"]
-    assert sock.loaded == "ollama/qwen2.5-coder:3b"
+    assert sock.loaded == "ollama/qwen2.5-coder:7b"
 
 
 def test_unknown_tier(parts):

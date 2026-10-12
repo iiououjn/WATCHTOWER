@@ -114,7 +114,7 @@ A single Python service on the Mac. Nine modules, each with one job and a narrow
 
 ### Model tiers (default config, all local, $0)
 - **tier-small** (glass filters, summarizing, classifying): ~3B local model (e.g. Llama 3.2 3B / Qwen 2.5 3B).
-- **tier-work** (coding, planning): best local model that fits RAM.
+- **tier-work** (coding, planning): best local model that fits RAM — Qwen2.5-Coder 7B by default (the only local coder whose apps passed their own tests on 8 GB); the 3B is the cooler fallback (`WATCHTOWER_WORK_MODEL`). The model is unloaded before each Sandbox run when free RAM is low.
 - **tier-review** (F5): a *different model family* from tier-work, loaded sequentially.
 - **tier-cloud** (optional, off): Claude / Gemini / others. Requires owner approval and a per-job $ cap.
 - **Free-tier privacy rule:** providers that may train on prompts never receive private code or secrets; the Glass layers enforce this.
