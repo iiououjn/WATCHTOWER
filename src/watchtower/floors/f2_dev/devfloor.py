@@ -139,27 +139,28 @@ def _failure_note(found: list[dict], stuck: str = "", diagnosis: str = "") -> st
             + ("\nFloor 2 HR diagnosis:\n" + untrusted("f2.hr", diagnosis) if diagnosis else ""))
 
 
-_SYNTAX = re.compile(r"^(\S+) has a syntax error on line (\d+)")
+_SYNTAX = re.compile(r"^(.+?) has a syntax error on line (\d+):")
+LINE_CHARS = 160
 
 
 def _problem_note(problems: list[str], ws: Workspace, tests_ok: bool) -> str:
     """Problems the test run cannot show (syntax errors in files the tests never import, banned imports),
     with the lines around a syntax error. When the tests already pass, say this is all that is left."""
-    parts = []
+    parts, shown = [], False
     for p in problems[:3]:
-        parts.append(p)
-        match = _SYNTAX.match(p)
+        parts.append(p[:200])
+        match = None if shown else _SYNTAX.match(p)  # one excerpt: the snapshot shows the rest of the code
         try:
             lines = ws.read(match.group(1)).splitlines() if match else []
         except (WorkspaceError, OSError):
             lines = []
         if lines:
-            n = int(match.group(2))
-            excerpt = "\n".join(f"{i + 1:4}| {lines[i]}" for i in range(max(0, n - 3), min(len(lines), n + 2)))
-            parts.append(untrusted_code(match.group(1), excerpt[:600]))
-    head = ("Your unit tests pass; this is the only thing left to fix:" if tests_ok
-            else "Also fix these problems (the tests cannot show them):")
-    return head + "\n" + "\n".join(parts)
+            shown, n = True, int(match.group(2))
+            excerpt = "\n".join(f"{i + 1:4}| {lines[i][:LINE_CHARS]}"  # per line: the error line always shows
+                                 for i in range(max(0, min(n, len(lines)) - 3), min(len(lines), n + 2)))
+            parts.append(untrusted_code(match.group(1), excerpt))
+    head = "Your unit tests pass; this is the only thing left to fix:" if tests_ok else "Also fix these problems:"
+    return head + "\n" + "\n".join(parts)  # bounded by its parts (≤ 3 × 200 + one 5-line excerpt); never cut
 
 
 STUCK_NOTE = ("The same tests failed again after your last change: {names}. Before changing the app again, check "
@@ -322,8 +323,8 @@ class DevFloor:
         for round_no in range(self._max_rounds):
             parts = dict(spec=_spec_text(spec), plan=untrusted("f2.architect", json.dumps(plan)), qa=qa,
                          feedback=("\n" + "\n".join(notes)) if notes else "")
-            while notes and len(CODE_PROMPT.format(files="", **parts)) > PROMPT_CHARS - 1500:
-                notes = notes[1:]  # oldest notes go first: the snapshot must stay readable
+            while len(notes) > 1 and len(CODE_PROMPT.format(files="", **parts)) > PROMPT_CHARS - 1500:
+                notes = notes[1:]  # oldest notes go first (the newest, most important one is kept)
                 parts["feedback"] = ("\n" + "\n".join(notes)) if notes else ""
             room = max(1500, min(6000, PROMPT_CHARS - len(CODE_PROMPT.format(files="", **parts))))
             if test_first and round_no == 0:  # the unit workers just wrote every file: test before rewriting
@@ -348,9 +349,9 @@ class DevFloor:
             real = (summary or {}).get("run", 0) - (summary or {}).get("skipped", 0)
             ran_tests = real >= 1
             imports_app = app_is_tested(self._ws)
-            passed = (result.exit_code == 0 and has_tests and real >= 2 and imports_app and not problems
-                      and not result.timed_out and summary is not None and not summary.get("failures")
-                      and not summary.get("errors"))
+            clean = (result.exit_code == 0 and has_tests and real >= 2 and imports_app and not result.timed_out
+                     and summary is not None and not summary.get("failures") and not summary.get("errors"))
+            passed = clean and not problems
             checks.append({"check": "tests", "round": round_no, "pass": passed, "output": output[-300:]})
             if passed:
                 last_failing, carry, diagnosis, diagnosed_for = None, [], "", None  # a pass ends any stuck set
@@ -381,8 +382,7 @@ class DevFloor:
                 diagnoses += 1  # one F2 HR diagnosis per stuck set, at most 2 per build
                 diagnosis, diagnosed_for = self._diagnose_tests(_failure_rows(found)), failing
             shown = diagnosis if stuck and failing == diagnosed_for else ""  # never another set's diagnosis
-            tests_ok = (result.exit_code == 0 and real >= 1 and summary is not None
-                        and not summary.get("failures") and not summary.get("errors"))
+            tests_ok = clean  # "only thing left" only when the whole test bar is met
             carry = [] if tests_ok and problems else [
                 _failure_note(found, STUCK_NOTE.format(names=", ".join(sorted({f["test"] for f in found})))
                               if stuck else "", shown) if found  # last: trimming drops the oldest first

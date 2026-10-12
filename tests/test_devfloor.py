@@ -739,12 +739,40 @@ def test_when_only_a_syntax_error_remains_the_coder_is_told_exactly_that(tmp_pat
     assert "__main__.py" in note and "line 4" in note and "html += '<form>" in note
 
 
-def test_the_problem_note_is_last_so_trimming_keeps_it(tmp_path):
+def test_the_problem_note_survives_trimming_in_a_big_prompt(tmp_path):
     ws = Workspace(tmp_path)
     ws.write("__main__.py", BROKEN_MAIN)
-    ws.write("test_todo.py", "import unittest\nimport __main__\n")
-    big_feedback = ["reviewer note " + "y" * 590 for _ in range(6)]
-    script = Script({"f2.coder": [{"files": []}]})
+    for name, body in (("todo.py", "items = []\n"),
+                       ("test_todo.py", "import unittest\nimport todo\nclass T(unittest.TestCase):\n    pass\n")):
+        ws.write(name, body)
+    spec = {**SPEC, "acceptance": ["a" * 190 for _ in range(6)]}
+    plan = {"entry": "app.py", "routes": [], "files": [{"path": f"m{i}/" + "p" * 80 + ".py", "purpose": "q" * 78}
+                                                       for i in range(15)]}
+    qa = [{"name": f"c{i}", "method": "GET", "path": "/" + "z" * 60, "form": {}, "expect_status": 200,
+           "expect_text": "t" * 70} for i in range(8)]
+    script = Script({"f2.coder": [{"files": [{"path": "x.txt", "content": "y"}] * 3 + [{"path": "../bad", "content": ""}]}]})
     d = DevFloor(ARCH, CODER, ask=script, workspace=ws, run=Runner([OK]), max_rounds=2)
-    d.build(SPEC, {"entry": "app.py", "routes": [], "files": []}, big_feedback)
-    assert "only thing left" in script.prompts["f2.coder"][1]
+    d.build(spec, plan, [], qa)
+    second = script.prompts["f2.coder"][1]
+    assert "only thing left" in second and "html += '<form>" in second
+    assert len(second) <= 9_000 + 2_000  # the prompt stays bounded (+ system/brief elsewhere)
+
+
+def test_only_thing_left_is_never_claimed_while_the_test_bar_is_unmet(tmp_path):
+    ws = Workspace(tmp_path)
+    ws.write("__main__.py", BROKEN_MAIN)
+    ws.write("test_todo.py", "import unittest\n")  # imports nothing from the app
+    one = SandboxResult(0, 'WATCHTOWER_TESTS {"run": 1, "skipped": 0, "failures": 0, "errors": 0}\n', "", False)
+    script = Script({"f2.coder": [{"files": []}]})
+    DevFloor(ARCH, CODER, ask=script, workspace=ws, run=Runner([one]), max_rounds=2).build(
+        SPEC, {"entry": "app.py", "routes": [], "files": []}, [])
+    second = script.prompts["f2.coder"][1]
+    assert "only thing left" not in second and "syntax error" in second and "import nothing" in second
+
+
+def test_excerpt_always_shows_the_error_line(tmp_path):
+    from watchtower.floors.f2_dev.devfloor import _problem_note
+    ws = Workspace(tmp_path)
+    ws.write("my app.py", ("x = '" + "h" * 300 + "'\n") * 3 + "if (\n")
+    note = _problem_note(["my app.py has a syntax error on line 4: '(' was never closed"], ws, True)
+    assert "   4| if (" in note and len(note) < 1700 and note.count("<untrusted") == note.count("</untrusted>")
