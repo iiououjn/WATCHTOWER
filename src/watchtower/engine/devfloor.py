@@ -6,6 +6,7 @@ from pathlib import PurePosixPath
 from typing import Callable, Sequence
 
 from watchtower.engine.floor import WorkPackage, untrusted
+from watchtower.engine.qafloor import parse_routes
 from watchtower.engine.sandbox import SandboxResult
 from watchtower.engine.stdlib_check import import_problems
 from watchtower.engine.workspace import Workspace, WorkspaceError
@@ -35,10 +36,12 @@ def test_summary(stdout: str) -> dict | None:
 MAX_FILES_PER_ROUND = 3
 PLAN_PROMPT = (
     "Spec:\n{spec}\n\nResearch notes:\n{research}\n{feedback}\n"
-    'Plan the files. Reply as JSON: {{"files": [{{"path": string, "purpose": string}}], "entry": string}}'
+    "Plan the files and the app's routes (the contract QA will test). Reply as JSON: "
+    '{{"files": [{{"path": string, "purpose": string}}], "entry": string, '
+    '"routes": [{{"method": "GET" or "POST", "path": string, "fields": [form field names], "shows": string}}]}}'
 )
 CODE_PROMPT = (
-    "Spec:\n{spec}\n\nFile plan:\n{plan}\n\nCurrent files:\n{files}\n{feedback}\n"
+    "Spec:\n{spec}\n\nFile plan and routes contract:\n{plan}\n\nCurrent files:\n{files}\n{qa}{feedback}\n"
     "Write or fix up to 3 files so the unittest tests pass and the spec is met. To remove a stale file, "
     'send {{"path": string, "delete": true}}. Reply as JSON: {{"files": [{{"path": string, "content": string}}]}}'
 )
@@ -68,15 +71,17 @@ class DevFloor:
                  for f in out.get("files") or [] if isinstance(f, dict) and str(f.get("path", "")).strip()]
         entry = str(out.get("entry") or "app.py").strip()
         safe = _SAFE_ENTRY.fullmatch(entry) and ".." not in entry.split("/")
-        return {"files": files[:15], "entry": entry if safe else "app.py"}
+        return {"files": files[:15], "entry": entry if safe else "app.py", "routes": parse_routes(out.get("routes"))}
 
-    def build(self, spec: dict, plan: dict, feedback: Sequence[str]) -> WorkPackage:
+    def build(self, spec: dict, plan: dict, feedback: Sequence[str], qa_checks: Sequence[dict] = ()) -> WorkPackage:
         notes = [f"Reviewer feedback to address:\n{untrusted('gate', f)}" for f in feedback]
+        qa = ("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n"
+              + untrusted("f4", json.dumps(list(qa_checks), indent=1)) + "\n") if qa_checks else ""
         checks, output, passed = [], "", False
         for round_no in range(self._max_rounds):
             reply = self._ask(self._coder, CODE_PROMPT.format(
                 spec=_spec_text(spec), plan=json.dumps(plan, indent=1), files=untrusted("workspace", self._ws.snapshot()),
-                feedback=("\n" + "\n".join(notes)) if notes else ""))
+                qa=qa, feedback=("\n" + "\n".join(notes)) if notes else ""))
             notes = self._write(reply.get("files"))
             self._ensure_packages()
             problems = import_problems(self._ws)

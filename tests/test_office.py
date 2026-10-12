@@ -1,0 +1,72 @@
+import pytest
+
+from watchtower.engine.office import QAOffice
+from watchtower.engine.qafloor import parse_routes
+from watchtower.roles import Role
+
+LEAD = Role("f4.lead", "QA Lead", "f4", "small", (), "l")
+WORKER = Role("f4.qa", "QA", "f4", "small", (), "q")
+HR = Role("f4.hr", "QA HR", "f4", "small", (), "h")
+SPEC = {"title": "Todo", "goal": "todo app", "acceptance": ["add a todo", "list todos"], "out_of_scope": []}
+ROUTES = parse_routes([{"method": "GET", "path": "/", "shows": "the todo list"},
+                       {"method": "POST", "path": "/add", "fields": ["item"], "shows": "redirects to /"}])
+ADD = {"name": "add", "method": "POST", "path": "/add", "form": {"item": "milk"}, "expect_text": "milk"}
+LIST = {"name": "list", "path": "/", "expect_text": "milk"}
+
+
+class Script:
+    def __init__(self, replies):
+        self.replies, self.prompts = {k: list(v) for k, v in replies.items()}, {k: [] for k in replies}
+
+    def __call__(self, role, prompt):
+        from watchtower.engine.model_socket import BadModelOutput
+        self.prompts[role.id].append(prompt)
+        q = self.replies[role.id]
+        r = q.pop(0) if len(q) > 1 else q[0]
+        if r == "bad":
+            raise BadModelOutput("garbage")
+        return r
+
+
+def office(replies):
+    s = Script({"f4.lead": [{"areas": ["adding", "listing"]}], "f4.qa": [{"checks": [ADD]}, {"checks": [LIST]}],
+                "f4.hr": [{"pass": True, "drop": []}], **replies})
+    return QAOffice(LEAD, WORKER, HR, s), s
+
+
+@pytest.mark.parametrize("bad", [{"method": "PUT", "path": "/"}, {"path": "http://x/"}, {"path": "/a/../b"},
+                                 {"path": "/", "fields": ["ok", "bad name"]}, {"path": "/", "fields": "item"},
+                                 "junk", {"path": "/", "shows": "x" * 101}])
+def test_parse_routes_drops_bad_routes(bad):
+    assert parse_routes([bad]) == []
+
+
+def test_parse_routes_normalises_and_caps():
+    assert ROUTES[1] == {"method": "POST", "path": "/add", "fields": ["item"], "shows": "redirects to /"}
+    assert len(parse_routes([{"path": f"/{i}"} for i in range(20)])) == 8 and parse_routes("x") == []
+
+
+def test_lead_splits_workers_write_hr_reviews():
+    qa, s = office({})
+    checks = qa.plan_checks(SPEC, ROUTES)
+    assert [c["name"] for c in checks] == ["add", "list"]
+    assert "add a todo" in s.prompts["f4.lead"][0] and '"/add"' in s.prompts["f4.qa"][0]
+    assert "adding" in s.prompts["f4.qa"][0] and '<untrusted source="f4.qa">' in s.prompts["f4.hr"][0]
+
+
+def test_hr_drops_named_checks_and_code_drops_off_contract_or_trivial():
+    qa, _ = office({"f4.qa": [{"checks": [ADD, {"name": "ghost", "path": "/delete", "expect_text": "x"}]},
+                              {"checks": [LIST, {"name": "trivial", "path": "/"}]}],
+                    "f4.hr": [{"pass": False, "drop": ["list"]}]})
+    assert [c["name"] for c in qa.plan_checks(SPEC, ROUTES)] == ["add"]
+
+
+def test_lead_or_hr_garbage_degrades_gracefully():
+    qa, s = office({"f4.lead": ["bad"], "f4.hr": ["bad"]})
+    assert [c["name"] for c in qa.plan_checks(SPEC, ROUTES)] == ["add", "list"]
+    assert "add a todo" in s.prompts["f4.qa"][0]  # areas fell back to the acceptance criteria
+
+
+def test_no_contract_means_no_test_first_checks():
+    qa, s = office({})
+    assert qa.plan_checks(SPEC, []) == [] and s.prompts["f4.lead"] == []

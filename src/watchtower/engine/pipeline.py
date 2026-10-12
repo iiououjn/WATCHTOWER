@@ -15,6 +15,7 @@ from watchtower.engine.gate import Gate
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput
+from watchtower.engine.office import QAOffice
 from watchtower.engine.qafloor import QAFloor, run_qa
 from watchtower.engine.releases import Releases
 from watchtower.engine.workflow import Step
@@ -96,12 +97,12 @@ class TowerPipeline:
         dev = DevFloor(r["f2.architect"], r["f2.coder"], ask=ask, workspace=ws, run=run)
         gate = Gate(ask, r["f5.dev_gate"])
         qa = QAFloor(r["f4.qa"], ask)
+        qa_office = QAOffice(r["f4.lead"], r["f4.qa"], r["f4.hr"], ask)
         research = (data.get("f1") or {}).get("summary", "")
         plan, feedback = dev.plan(spec, research, []), []
-        self._post(data, "f2", "doing", f"plan: {', '.join(f['path'] for f in plan['files'])}; entry {plan['entry']}",
-                   known=json.dumps(plan))
+        checks = self._plan_qa(data, plan, qa_office)
         for attempt in range(MAX_SEND_BACKS + 1):
-            package, f3, f4 = dev.build(spec, plan, feedback), None, None
+            package, f3, f4 = dev.build(spec, plan, feedback, checks), None, None
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
             self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "
                        f"after {len(package.checks_run)} round(s) (attempt {attempt + 1})")
@@ -113,7 +114,7 @@ class TowerPipeline:
                 f3 = smoke_test(run, plan["entry"])
                 self._post(data, "f3", "done" if f3.checks_run[-1]["pass"] else "issue", f3.summary.splitlines()[0])
                 if f3.checks_run[-1]["pass"]:
-                    f4 = run_qa(run, plan["entry"], qa.write_checks(spec, ws.snapshot()))
+                    f4 = run_qa(run, plan["entry"], checks or qa.write_checks(spec, ws.snapshot()))
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
                                f4.summary.splitlines()[0], known=f4.summary[:1500])
                 later = [p for p in (f3, f4) if p is not None]
@@ -144,6 +145,7 @@ class TowerPipeline:
                 feedback = feedback + ["Floor 4 QA checks failed:\n" + untrusted("sandbox", f4.summary)]
             if verdict.route in ("design", "research"):
                 plan = dev.plan(spec, research, feedback)
+                checks = self._plan_qa(data, plan, qa_office)
         raise NeedsOwner(f"gate rejected the app {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")
 
     def _call(self, role: Role, data: dict, prompt: str) -> dict:
@@ -173,6 +175,16 @@ class TowerPipeline:
         except BadModelOutput:
             answer = "no answer"
         self._board.note(job_id, sender.floor, "memo", f"{NAMES[sender.floor]} asked {NAMES[to]}: {question} → {answer}")
+
+    def _plan_qa(self, data: dict, plan: dict, qa_office: QAOffice) -> list[dict]:
+        """Post the architect's plan, then let the QA office write its checks from the routes contract."""
+        self._post(data, "f2", "doing", f"plan: {', '.join(f['path'] for f in plan['files'])}; entry {plan['entry']}",
+                   known=json.dumps(plan))
+        checks = qa_office.plan_checks(data["spec"], plan["routes"])
+        if checks:
+            self._post(data, "f4", "plan", "QA will check: " + ", ".join(c["name"] for c in checks),
+                       known=json.dumps(checks))
+        return checks
 
     def _post(self, data: dict, floor: str, kind: str, text: str, known: str | None = None) -> None:
         self._board.note(data["job_id"], floor, kind, text)

@@ -43,7 +43,23 @@ def dev(tmp_path, script, runner, rounds=4):
 def test_plan_normalises_entry_and_files(tmp_path):
     s = Script({"f2.architect": [{"files": [{"path": "app.py", "purpose": "server"}, "junk"]}], "f2.coder": [{}]})
     plan = dev(tmp_path, s, Runner([OK])).plan(SPEC, "", [])
-    assert plan == {"files": [{"path": "app.py", "purpose": "server"}], "entry": "app.py"}
+    assert plan == {"files": [{"path": "app.py", "purpose": "server"}], "entry": "app.py", "routes": []}
+
+
+def test_plan_keeps_a_valid_routes_contract(tmp_path):
+    s = Script({"f2.architect": [{"files": [], "routes": [{"method": "POST", "path": "/add", "fields": ["item"]},
+                                                          {"path": "http://evil/"}]}], "f2.coder": [{}]})
+    assert dev(tmp_path, s, Runner([OK])).plan(SPEC, "", [])["routes"] == [
+        {"method": "POST", "path": "/add", "fields": ["item"], "shows": ""}]
+
+
+def test_coder_sees_the_qa_checks_it_will_face(tmp_path):
+    s = Script({"f2.architect": [{}], "f2.coder": [{"files": [APP, TEST]}]})
+    checks = [{"name": "add", "method": "POST", "path": "/add", "form": {"item": "<b>"}, "expect_status": 200,
+               "expect_text": "milk"}]
+    dev(tmp_path, s, Runner([OK])).build(SPEC, {"files": [], "entry": "app.py", "routes": []}, [], checks)
+    prompt = s.prompts["f2.coder"][0]
+    assert '<untrusted source="f4">' in prompt and '"/add"' in prompt and "&lt;b>" in prompt
 
 
 def test_coder_fixes_failing_tests_from_real_output(tmp_path):
