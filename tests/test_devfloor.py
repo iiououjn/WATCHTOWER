@@ -510,3 +510,83 @@ def test_entry_must_be_importable(tmp_path):
     script = Script({"f2.architect": [{"entry": "2048.py", "routes": [], "files": [{"path": "2048.py", "purpose": "g"}]}]})
     plan = DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=Runner([OK])).plan(SPEC, "", [])
     assert plan["entry"] == "app_2048.py" and [f["path"] for f in plan["files"]] == ["app_2048.py"]
+
+
+from watchtower.floors.f2_dev.devfloor import failures  # noqa: E402
+
+REAL = """.FF
+======================================================================
+FAIL: test_list_todos (test_todo.TestTodoFunctions.test_list_todos)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/test_todo.py", line 6, in test_list_todos
+    self.assertEqual(list_todos(), '<ul></ul>')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '<ul><li>Buy milk</li></ul>' != '<ul></ul>'
+- <ul><li>Buy milk</li></ul>
++ <ul></ul>
+
+
+======================================================================
+FAIL: test_render_todo_form (test_todo.TestTodoFunctions.test_render_todo_form)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/work/test_todo.py", line 18, in test_render_todo_form
+    self.assertEqual(render_todo_form(), expected)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '<for[35 chars]     <input' != '<for[35 chars]         <input'
+  <form action="/add" method="post">
+-         <input type="text" name="item">
++             <input type="text" name="item">
+? ++++
+-     </form>
++         </form>
+? ++++
+
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.001s
+
+FAILED (failures=2)
+""" + "x" * 3000  # long noise after: the old 1200-char tail would lose the first failure
+FAILED = SandboxResult(1, 'WATCHTOWER_TESTS {"run": 3, "skipped": 0, "failures": 2, "errors": 0}\n', REAL, False)
+HR = Role("f2.hr", "HR", "f2", "small", (), "h")
+
+
+def test_failures_are_parsed_from_unittests_own_report():
+    found = failures(REAL)
+    assert [f["test"] for f in found] == ["test_list_todos", "test_render_todo_form"]
+    assert found[0]["line"].startswith("AssertionError: '<ul><li>Buy milk") and not found[0]["whitespace"]
+    assert found[1]["whitespace"] is True
+    assert failures("garbage\nFAIL: nothing here") == [] and failures("") == []
+
+
+def test_every_failure_reaches_the_coder_even_with_long_output(tmp_path):
+    script = Script({"f2.coder": [{"files": [APP, TEST]}]})
+    dev(tmp_path, script, Runner([FAILED]), rounds=2).build(SPEC, PLAN3, [])
+    second = script.prompts["f2.coder"][1]
+    assert "test_list_todos" in second and "test_render_todo_form" in second
+    assert "differ only in spaces" in second
+
+
+def test_stuck_coder_gets_a_note_and_one_hr_diagnosis(tmp_path):
+    script = Script({"f2.coder": [{"files": [APP, TEST]}],
+                     "f2.hr": [{"diagnosis": "test_add_todo leaves Buy milk in the shared list; reset it in setUp"}]})
+    d = DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=Runner([FAILED]), max_rounds=4, hr=HR)
+    d.build(SPEC, PLAN3, [])
+    prompts = script.prompts["f2.coder"]
+    assert "same tests failed again" not in prompts[1] and "same tests failed again" in prompts[2]
+    assert "reset it in setUp" in prompts[2] and '<untrusted source="f2.hr">' in prompts[2]
+    assert len(script.prompts["f2.hr"]) == 1  # once per build, however long it stays stuck
+
+
+def test_hr_garbage_while_stuck_costs_nothing(tmp_path):
+    calls = []
+
+    def ask(role, prompt):
+        calls.append(role.id)
+        if role.id == "f2.hr":
+            raise BadModelOutput("x")
+        return {"files": [APP, TEST]}
+    d = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([FAILED]), max_rounds=3, hr=HR)
+    assert not d.build(SPEC, PLAN3, []).checks_run[-1]["pass"] and calls.count("f2.hr") == 1

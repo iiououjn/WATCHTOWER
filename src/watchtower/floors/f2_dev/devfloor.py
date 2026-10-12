@@ -76,6 +76,47 @@ def _compact_checks(checks: Sequence[dict]) -> str:
     return text if len(text) <= QA_CHARS else text[:QA_CHARS] + " ...(more checks)"
 
 
+_BLOCK = re.compile(r"^(FAIL|ERROR): (\w+) \([^)\n]*\)\n-{20,}\n(.*?)(?=^={20,}$|^-{20,}$|\Z)", re.M | re.S)
+_EXC = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception|Exit)\b")
+MAX_FAILURES = 5
+
+
+def failures(output: str) -> list[dict]:
+    """unittest's own FAIL/ERROR report as a compact list: test name, the assertion line, a few diff lines,
+    and whether the two sides differ only in whitespace. Unparseable output → []."""
+    out = []
+    for kind, test, body in _BLOCK.findall(output or ""):
+        lines = body.rstrip().splitlines()
+        at = next((i for i, ln in enumerate(lines) if _EXC.match(ln)), None)
+        if at is None:
+            continue
+        rest = lines[at + 1:]
+        minus = "".join(ln[2:] for ln in rest if ln.startswith("- "))
+        plus = "".join(ln[2:] for ln in rest if ln.startswith("+ "))
+        space_only = bool(minus or plus) and minus != plus and re.sub(r"\s", "", minus) == re.sub(r"\s", "", plus)
+        out.append({"test": test, "kind": kind, "line": lines[at][:200], "diff": "\n".join(rest[:6])[:400],
+                    "whitespace": space_only})
+    return out[:MAX_FAILURES]
+
+
+def _failure_note(found: list[dict]) -> str:
+    rows = [f"- {f['test']} ({f['kind']}): {f['line']}" + (f"\n{f['diff']}" if f["diff"] else "") for f in found]
+    hints = [f"{f['test']}: the two sides differ only in spaces or indentation — make them identical, or compare "
+             "without exact whitespace" for f in found if f["whitespace"]]
+    return ("Failing tests (unittest's own report):\n" + untrusted("sandbox", "\n".join(rows))
+            + ("\n" + "\n".join(hints) if hints else ""))
+
+
+STUCK_NOTE = ("The same tests failed again after your last change: {names}. Before changing the app again, check "
+              "each failing test itself: tests run in alphabetical order and share module-level state (reset it "
+              "in setUp), and a test's own expected value can be wrong — fix the test when it is.")
+TEST_DIAGNOSE_PROMPT = (
+    "The coder's unit tests keep failing the same way. unittest's report:\n{report}\n\nIn one or two plain "
+    "sentences: is the test wrong or the code, and what exactly should change? Reply as JSON: "
+    '{{"diagnosis": string}}'
+)
+
+
 def _is_test_file(path: str) -> bool:
     """Exactly what the runner discovers: test*.py anywhere (_ensure_packages makes every folder a package)."""
     return fnmatch(PurePosixPath(path).name, "test*.py")
@@ -222,6 +263,7 @@ class DevFloor:
         qa = ("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n"
               + untrusted("f4", _compact_checks(qa_checks)) + "\n") if qa_checks else ""
         checks, output, passed, hr_asks, hr_question = [], "", False, 0, None
+        last_failing, diagnosed = None, False  # stuck = the same tests fail two rounds in a row
         for round_no in range(self._max_rounds):
             parts = dict(spec=_spec_text(spec), plan=untrusted("f2.architect", json.dumps(plan)), qa=qa,
                          feedback=("\n" + "\n".join(notes)) if notes else "")
@@ -276,12 +318,31 @@ class DevFloor:
             if has_tests and not imports_app:
                 notes.append("Your tests import nothing from the app: import the app's own functions or handler "
                              "(e.g. from app import ...) and test what they do.")
-            notes.append("Test output:\n" + untrusted("sandbox", (output or "(no output)")[-1200:]))
+            found = failures(result.stderr or "")
+            notes.append(_failure_note(found) if found
+                         else "Test output:\n" + untrusted("sandbox", (output or "(no output)")[-1200:]))
+            failing = sorted({f["test"] for f in found})
+            if failing and failing == last_failing:
+                notes.append(STUCK_NOTE.format(names=", ".join(failing)))
+                if self._hr is not None and not diagnosed:
+                    diagnosed = True
+                    diagnosis = self._diagnose_tests(result.stderr or "")
+                    if diagnosis:
+                        notes.append("Floor 2 HR diagnosis:\n" + untrusted("f2.hr", diagnosis))
+            last_failing = failing
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"
                    f"Tests: {'PASS' if passed else 'FAIL'}\n{output[-800:]}")
         questions = [] if passed else [f"tests still failing after {len(checks)} round(s)"]
         questions += [hr_question] if hr_question else []
         return WorkPackage("f2", summary, self._ws.files(), [], checks, questions)
+
+    def _diagnose_tests(self, report: str) -> str:
+        """Floor 2 HR, only when the coder is stuck: plain words on why the same tests keep failing. Advisory."""
+        try:
+            out = self._ask(self._hr, TEST_DIAGNOSE_PROMPT.format(report=untrusted("sandbox", report[-2500:])))
+        except ADVISORY_ERRORS:
+            return ""
+        return " ".join(str(out.get("diagnosis") or "").split())[:400]
 
     def _hr_review(self, spec: dict, plan: dict) -> tuple[bool, str] | None:
         """Floor 2 HR: a second model family reads the passing code against the spec. Garbage → skipped."""
