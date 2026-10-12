@@ -70,7 +70,7 @@ def test_docker_not_installed(settings, audit):
 
 
 def test_image_missing_gives_pull_hint(settings, audit):
-    with pytest.raises(SandboxUnavailable, match="docker pull python:3.12-slim"):
+    with pytest.raises(SandboxUnavailable, match="docker pull python:latest"):
         Sandbox(settings, audit, run=FakeDocker(image=False)).run("j", ["true"])
 
 
@@ -105,7 +105,7 @@ def test_container_has_hard_in_container_time_limit(settings, audit):
     docker = FakeDocker()
     Sandbox(settings, audit, run=docker).run("j", ["sleep", "999"], timeout=5)
     argv = docker.run_argv()
-    assert argv[argv.index("python:3.12-slim") + 1:][:4] == ["timeout", "-s", "KILL", "5"]
+    assert argv[argv.index("python:latest") + 1:][:4] == ["timeout", "-s", "KILL", "5"]
 
 
 def test_failed_kill_falls_back_to_force_remove(settings, audit):
@@ -159,6 +159,6 @@ def test_workspace_is_mounted_read_only_and_copied_to_capped_scratch(settings, a
     assert f"{settings.home / 'workspaces' / 'j'}:/src:ro" in argv
     assert not any(a.endswith(":/work:rw") for a in argv)
     assert "/work:rw,size=64m,uid=1000,gid=1000" in argv
-    tail = argv[argv.index("python:3.12-slim") + 1:]
+    tail = argv[argv.index("python:latest") + 1:]
     assert tail[:4] == ["timeout", "-s", "KILL", "60"] and "cp -a /src/. /work/" in tail[6]
     assert tail[-3:] == ["python", "-m", "unittest"]
