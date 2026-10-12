@@ -1,0 +1,14 @@
+# THE WATCHTOWER guardrails — enforced by Floor 5 at every gate.
+# Copy this file to ~/.watchtower/guardrails.yaml to change it; unset keys keep these defaults.
+
+stdlib_only: true                 # apps may import only the Python standard library
+security_fail_on: [HIGH, MEDIUM]  # security finding severities that fail the build (LOW = note)
+min_source_domains: 2             # research claims need sources from this many independent sites
+max_send_backs: 3                 # gate send-backs per floor before the owner decides
+
+rules:                            # shown to every gate reviewer
+  - "Spec match: output must satisfy the approved spec's acceptance criteria; no unrequested features."
+  - "Evidence: claims cite sources; code claims are backed by passing checks."
+  - "Safety: no secrets in code or logs; no actions outside the role's permissions."
+  - "Budget: stay within the job's token and time limits."
+  - "Scope: files are touched only inside the job's workspace."

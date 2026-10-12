@@ -27,9 +27,10 @@ def _bullets(items: list[str]) -> str:
 class Gate:
     """Floor-5 gate between floors: deterministic checks first, then a reviewer model."""
 
-    def __init__(self, ask: Callable[[Role, str], dict], reviewer: Role):
+    def __init__(self, ask: Callable[[Role, str], dict], reviewer: Role, rules: tuple[str, ...] = ()):
         self._ask = ask
         self._reviewer = reviewer
+        self._rules = rules
 
     def check(self, spec: dict, package: WorkPackage, routes: tuple[str, ...] = ()) -> Verdict:
         default_route = routes[-1] if routes else None
@@ -44,6 +45,8 @@ class Gate:
             questions=untrusted("open-questions", "; ".join(package.open_questions)) if package.open_questions
             else "(none)",
         )
+        if self._rules:
+            prompt += "\n\nGuardrails:\n" + "\n".join(f"- {r}" for r in self._rules)
         if routes:
             prompt += (f'\nIf it fails, also set "send_back_to" to one of: {", ".join(routes)}. '
                        'Reply as JSON: {"pass": boolean, "reasons": [string], "send_back_to": string}')

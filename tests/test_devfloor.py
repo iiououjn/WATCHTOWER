@@ -327,3 +327,10 @@ def test_entry_file_is_always_in_the_file_plan(tmp_path):
                 "f2.coder": [{}]})
     files = dev(tmp_path, s, Runner([OK])).plan(SPEC, "", [])["files"]
     assert [f["path"] for f in files] == ["todo.py", "app.py"] and "entry" in files[1]["purpose"]
+
+
+def test_third_party_imports_allowed_when_guardrails_say_so(tmp_path):
+    s = Script({"f2.architect": [{}], "f2.coder": [{"files": [{"path": "app.py", "content": "import flask\n"}, TEST]}]})
+    pkg = DevFloor(ARCH, CODER, ask=s, workspace=Workspace(tmp_path), run=Runner([OK]), stdlib_only=False).build(
+        SPEC, {"files": [], "entry": "app.py"}, [])
+    assert pkg.checks_run[-1]["pass"]

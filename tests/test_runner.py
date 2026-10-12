@@ -655,3 +655,12 @@ def test_gate_prompt_stays_bounded_with_many_findings_and_big_code(app_tower):
     gate = [p for c, p in zip(model.calls, model.prompts) if c == "f5.dev_gate"][-1]
     assert len(gate) <= 11_000 and "more minor" in gate
     runner.close()
+
+
+def test_owner_guardrails_set_the_send_back_limit(app_tower, settings):
+    (settings.home / "guardrails.yaml").write_text("max_send_backs: 1\n")
+    runner, model, sandbox, job = app_tower({"f5.dev_gate": [{"pass": False, "reasons": ["no"],
+                                                               "send_back_to": "code"}]})
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "paused" and model.calls.count("f5.dev_gate") == 2
+    runner.close()

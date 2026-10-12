@@ -52,7 +52,17 @@ def make_sandbox(settings: Settings, conn) -> Sandbox:
     return Sandbox(settings, AuditLog(conn))
 
 
+def _check_guardrails(settings: Settings) -> None:
+    from watchtower.guardrails import GuardrailsError, load_guardrails
+    try:
+        load_guardrails(settings.home)
+    except GuardrailsError as e:
+        typer.echo(f"Error: {e} — fix or delete {settings.home / 'guardrails.yaml'}", err=True)
+        raise typer.Exit(2)
+
+
 def _runner(settings: Settings, conn) -> JobRunner:
+    _check_guardrails(settings)
     audit = AuditLog(conn)
     bus = Bus(audit)
     socket = build_socket(settings, Budget(conn), audit)
@@ -95,6 +105,7 @@ def run(
     if tier not in settings.tiers:
         typer.echo(f"Error: unknown tier {tier!r}; choose from {sorted(settings.tiers)}", err=True)
         raise typer.Exit(2)
+    _check_guardrails(settings)
     job = JobStore(conn).create(prompt)
     Budget(conn).open(job.id, settings.default_max_tokens if max_tokens is None else max_tokens,
                       settings.default_max_seconds, settings.default_max_usd)
@@ -204,6 +215,16 @@ def docker_status(settings: Settings, audit: AuditLog) -> tuple[bool, str]:
     return (problem is None), (problem or f"ready ({settings.sandbox_image})")
 
 
+def guardrails_status(settings: Settings) -> tuple[bool, str]:
+    from watchtower.guardrails import GuardrailsError, load_guardrails
+    try:
+        g = load_guardrails(settings.home)
+    except GuardrailsError as e:
+        return False, str(e)
+    owner = (settings.home / "guardrails.yaml").is_file()
+    return True, f"{len(g.rules)} rules, {g.max_send_backs} send-backs ({'your copy' if owner else 'defaults'})"
+
+
 def bandit_status() -> tuple[bool, str]:
     from importlib.metadata import PackageNotFoundError, version
     try:
@@ -225,6 +246,7 @@ def doctor():
          "unknown" if ram is None else f"{ram}% free (need {settings.min_free_ram_pct}%)"),
         ("Audit chain", audit.verify(), "ok" if audit.verify() else "BROKEN"),
         ("Bandit", *bandit_status()),
+        ("Guardrails", *guardrails_status(settings)),
     ]
     for name, ok, detail in checks:
         typer.echo(f"{'✓' if ok else '✗'} {name:<12} {detail}")
@@ -283,6 +305,7 @@ def build(
         typer.echo("Error: goal must not be empty", err=True)
         raise typer.Exit(2)
     settings, conn = _open()
+    _check_guardrails(settings)
     job = JobStore(conn).create(goal, pipeline="app" if app else "tower")
     Budget(conn).open(job.id, settings.tower_max_tokens if max_tokens is None else max_tokens,
                       settings.default_max_seconds, settings.default_max_usd)

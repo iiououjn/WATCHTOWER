@@ -98,3 +98,10 @@ def test_serious_findings_come_first_and_minor_ones_are_capped():
     pkg = security_package(low + [high])
     lines = pkg.summary.splitlines()
     assert "B602" in lines[1] and len(pkg.summary) <= 2500 and "more minor" in pkg.summary
+
+
+def test_guardrails_choose_which_severities_fail():
+    medium = {"tool": "bandit", "id": "B608", "severity": "MEDIUM", "confidence": "MEDIUM", "file": "a.py",
+              "line": 1, "text": "sql"}
+    assert security_package([medium]).checks_run[-1]["pass"] is False
+    assert security_package([medium], fail_on=("HIGH",)).checks_run[-1]["pass"] is True

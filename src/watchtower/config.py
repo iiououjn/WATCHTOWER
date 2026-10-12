@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,12 +34,21 @@ class Settings:
         return self.home / "watchtower.db"
 
 
+_MODEL = re.compile(r"[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)?")
+
+
 def load_settings() -> Settings:
     home = Path(os.environ.get("WATCHTOWER_HOME", Path.home() / ".watchtower"))
     home.mkdir(parents=True, exist_ok=True)
+    tiers = dict(DEFAULT_TIERS)
+    work = os.environ.get("WATCHTOWER_WORK_MODEL")
+    if work:
+        if not _MODEL.fullmatch(work):
+            raise ValueError(f"WATCHTOWER_WORK_MODEL {work!r} is not an Ollama model name")
+        tiers["work"] = f"ollama/{work}"
     return Settings(
         home=home,
-        tiers=dict(DEFAULT_TIERS),
+        tiers=tiers,
         min_free_ram_pct=int(os.environ.get("WATCHTOWER_MIN_FREE_RAM_PCT", 20)),
         sandbox_image=os.environ.get("WATCHTOWER_SANDBOX_IMAGE", "python:latest"),
         online=os.environ.get("WATCHTOWER_OFFLINE") != "1",

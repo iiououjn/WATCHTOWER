@@ -475,3 +475,21 @@ def test_doctor_checks_bandit(monkeypatch):
     monkeypatch.setattr(cli, "docker_status", lambda s, a: (True, "ready"))
     monkeypatch.setattr(cli, "free_ram_pct", lambda: 55)
     assert "Bandit" in runner.invoke(cli.app, ["doctor"]).output
+
+
+def test_doctor_reports_bad_guardrails(monkeypatch, home):
+    monkeypatch.setattr(cli, "ollama_status", lambda s: (True, "ok"))
+    monkeypatch.setattr(cli, "docker_status", lambda s, a: (True, "ready"))
+    monkeypatch.setattr(cli, "free_ram_pct", lambda: 55)
+    assert "✓ Guardrails" in runner.invoke(cli.app, ["doctor"]).output
+    (home / "guardrails.yaml").write_text("max_send_backs: 99\n")
+    result = runner.invoke(cli.app, ["doctor"])
+    assert result.exit_code == 1 and "✗ Guardrails" in result.output and "max_send_backs" in result.output
+
+
+def test_bad_guardrails_stop_jobs_with_a_clear_message(monkeypatch, home):
+    use_completion(monkeypatch, lambda **kw: fake_response("hi", 1, 1))
+    (home / "guardrails.yaml").write_text("surprise: 1\n")
+    result = runner.invoke(cli.app, ["run", "hello"])
+    assert result.exit_code == 2 and "guardrails" in result.output and "Traceback" not in result.output
+    assert "hello" not in runner.invoke(cli.app, ["status"]).output  # no orphan job left behind

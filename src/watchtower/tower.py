@@ -26,10 +26,10 @@ from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.beacon.glass import INJECTION, normalize
 from watchtower.floors.f4_qa_deploy.releases import Releases, manifest_of, manifest_problems
 from watchtower.engine.workflow import Step
+from watchtower.guardrails import Guardrails, load_guardrails
 from watchtower.engine.workspace import Workspace
 from watchtower.roles import Role
 
-MAX_SEND_BACKS = 3
 MAX_MEMOS = 3
 MEMO_SENDERS = {"f1.lead", "f2.architect", "f2.coder", "f3.lead", "f4.lead"}
 FLOOR_LEADS = {"f1": "f1.lead", "f2": "f2.architect", "f3": "f3.lead", "f4": "f4.lead"}
@@ -78,7 +78,7 @@ class TowerPipeline:
     def __init__(self, ask: Callable[[Role, dict, str], dict], roles: dict[str, Role],
                  approvals: Approvals, bus: Bus, knowledge: Knowledge,
                  beacon_factory: Callable[[Callable[[str], dict]], Beacon] | None = None, sandbox=None,
-                 releases: Releases | None = None):
+                 releases: Releases | None = None, guardrails: Guardrails | None = None):
         self._ask = ask
         self._roles = roles
         self._approvals = approvals
@@ -87,6 +87,7 @@ class TowerPipeline:
         self._beacon_factory = beacon_factory
         self._sandbox = sandbox
         self._releases = releases
+        self._g = guardrails or load_guardrails(None)
         self._board = Board(bus)
         self._known: dict[tuple[str, str], str] = {}  # (job, floor) → what that floor can tell others
 
@@ -106,9 +107,10 @@ class TowerPipeline:
         ask = lambda role, prompt: self._call(role, data, prompt)  # noqa: E731
         ws = Workspace(self._sandbox.workspace(job_id))
         run = lambda cmd: self._sandbox.run(job_id, cmd, timeout=90)  # noqa: E731
-        dev = DevFloor(r["f2.architect"], r["f2.coder"], ask=ask, workspace=ws, run=run, hr=r["f2.hr"])
+        dev = DevFloor(r["f2.architect"], r["f2.coder"], ask=ask, workspace=ws, run=run, hr=r["f2.hr"],
+                       stdlib_only=self._g.stdlib_only)
         f3_office = F3Office(r["f3.lead"], r["f3.hr"], ask)
-        gate = Gate(ask, r["f5.dev_gate"])
+        gate = Gate(ask, r["f5.dev_gate"], self._g.rules)
         qa = QAFloor(r["f4.qa"], ask)
         qa_office = QAOffice(r["f4.lead"], r["f4.qa"], r["f4.hr"], ask)
         oversight = OversightOffice(r["f5.lead"], r["f5.auditor"], ask)
@@ -117,7 +119,7 @@ class TowerPipeline:
         focus = oversight.focus(spec)
         checks = self._plan_qa(data, plan, qa_office)
         expect = f3_office.expect(spec, plan["routes"])
-        for attempt in range(MAX_SEND_BACKS + 1):
+        for attempt in range(self._g.max_send_backs + 1):
             package, f3, f4, sec, audit = dev.build(spec, plan, feedback, checks), None, None, None, ""
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
             self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "
@@ -134,7 +136,7 @@ class TowerPipeline:
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
                                f4.summary.splitlines()[0], known=f4.summary[:1500])
                 if f4 is not None and f4.checks_run[-1]["pass"]:  # Floor 5 office: security scan, then spec audit
-                    sec = security_package(security_scan(ws.root, ws.files()))
+                    sec = security_package(security_scan(ws.root, ws.files()), self._g.security_fail_on)
                     self._post(data, "f5", "doing" if sec.checks_run[-1]["pass"] else "issue",
                                sec.summary.splitlines()[0], known=sec.summary[:1500])
                     if sec.checks_run[-1]["pass"]:
@@ -154,7 +156,7 @@ class TowerPipeline:
                 self._retro(data, oversight, passed=True)
                 return {"dev": package.to_dict(), "files": ws.files(), "workspace": str(ws.root),
                         "entry": plan["entry"], "manifest": manifest_of(ws.root, ws.files()),
-                        "evidence": _evidence(package.checks_run),
+                        "evidence": _evidence(package.checks_run, self._g.security_fail_on),
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
                                    "Note: written by a local AI and tested only inside the sandbox — untested on "
                                    "your Mac. Read the code before running it.\n"
@@ -177,7 +179,7 @@ class TowerPipeline:
                 checks = self._plan_qa(data, plan, qa_office)
                 expect = f3_office.expect(spec, plan["routes"])
         self._retro(data, oversight, passed=False)
-        raise NeedsOwner(f"gate rejected the app {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")
+        raise NeedsOwner(f"gate rejected the app {self._g.max_send_backs + 1} times: {'; '.join(feedback)[:300]}")
 
     def _signoff_request(self, data: dict) -> dict:
         """Lifecycle: final audit → owner sign-off → done. Nothing is released until the owner signs off."""
@@ -323,10 +325,10 @@ class TowerPipeline:
             return self._context(task)
 
         floor = Floor("f1", r["f1.lead"], r["f1.worker"], r["f1.hr"], ask=ask, context=context,
-                      min_domains=2 if beacon is not None else 0)
-        gate = Gate(ask, r["f5.gate"])
+                      min_domains=self._g.min_source_domains if beacon is not None else 0)
+        gate = Gate(ask, r["f5.gate"], self._g.rules)
         feedback: list[str] = []
-        for attempt in range(MAX_SEND_BACKS + 1):
+        for attempt in range(self._g.max_send_backs + 1):
             package = floor.run(data["spec"]["goal"], feedback)
             verdict = gate.check(data["spec"], package)
             self._bus.publish("gate.verdict", {"floor": "f1", "attempt": attempt, "passed": verdict.passed,
@@ -335,7 +337,7 @@ class TowerPipeline:
                 self._post(data, "f1", "done", "research ready: " + package.summary[:200], known=package.summary)
                 return {"f1": package.to_dict(), "answer": package.summary}
             feedback = verdict.reasons or ["the reviewer rejected the package without reasons"]
-        raise NeedsOwner(f"gate rejected floor 1 {MAX_SEND_BACKS + 1} times: {'; '.join(feedback)[:300]}")
+        raise NeedsOwner(f"gate rejected floor 1 {self._g.max_send_backs + 1} times: {'; '.join(feedback)[:300]}")
 
     def _context(self, task: str) -> str:
         # re-check stored sources against the CURRENT glass rules: a site denied later never reaches agents
@@ -345,7 +347,7 @@ class TowerPipeline:
         return "\n".join(untrusted(h.source, h.text[:CONTEXT_CHARS]) for h in hits[:3])
 
 
-def _evidence(checks: list[dict]) -> str:
+def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:
     """Sign-off evidence built from the checks' own results — never from text the app could print."""
     last = {}
     for c in checks:
@@ -353,7 +355,7 @@ def _evidence(checks: list[dict]) -> str:
     tests, http, qa, sec = last.get("tests", {}), last.get("http", {}), last.get("qa", {}), last.get("security", {})
     results = qa.get("results") or []
     findings = sec.get("findings") or []
-    serious = sum(_failing(f) for f in findings)
+    serious = sum(_failing(f, fail_on) for f in findings)
     unknown = sum(f.get("severity") == "UNKNOWN" for f in findings)
     if unknown:
         scan = f"INCOMPLETE — a scanner did not run (see watchtower doctor); {serious} serious found"

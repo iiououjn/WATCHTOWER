@@ -69,17 +69,17 @@ def security_scan(root: Path, files: list[str], run: Callable = subprocess.run) 
     return (_secrets(root, files) + _bandit(root, files, run))[:MAX_FINDINGS * 2]
 
 
-def is_failing(f: dict) -> bool:
-    return f["severity"] in FAILING and f["confidence"] in ("HIGH", "MEDIUM")
+def is_failing(f: dict, fail_on=FAILING) -> bool:
+    return f["severity"] in fail_on and f["confidence"] in ("HIGH", "MEDIUM")
 
 
 def _line(f: dict) -> str:
     return f"- [{f['severity']}] {f['id']} {f['file']!r}:{f['line']} {str(f['text'])[:120]}"
 
 
-def security_package(findings: list[dict]) -> WorkPackage:
+def security_package(findings: list[dict], fail_on=FAILING) -> WorkPackage:
     """Serious findings first (they are what the coder must fix), then tool problems, then at most 5 minor."""
-    failing = [f for f in findings if is_failing(f)]
+    failing = [f for f in findings if is_failing(f, fail_on)]
     unknown = [f for f in findings if f["severity"] == "UNKNOWN"]
     minor = [f for f in findings if f not in failing and f not in unknown]
     lines = [_line(f) for f in failing[:10] + unknown[:3] + minor[:5]]

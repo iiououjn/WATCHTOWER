@@ -77,8 +77,10 @@ class DevFloor:
     sandbox test results (tool-using agent), until tests pass or the round budget runs out."""
 
     def __init__(self, architect: Role, coder: Role, ask: Callable[[Role, str], dict], workspace: Workspace,
-                 run: Callable[[list[str]], SandboxResult], max_rounds: int = 4, hr: Role | None = None):
+                 run: Callable[[list[str]], SandboxResult], max_rounds: int = 4, hr: Role | None = None,
+                 stdlib_only: bool = True):
         self._architect, self._coder, self._hr = architect, coder, hr
+        self._stdlib_only = stdlib_only
         self._ask = ask
         self._ws = workspace
         self._run = run
@@ -130,7 +132,7 @@ class DevFloor:
                 continue
             notes = self._write(reply.get("files"))
             self._ensure_packages()
-            problems = import_problems(self._ws)
+            problems = import_problems(self._ws) if self._stdlib_only else []
             has_tests = any(PurePosixPath(f).name.startswith("test") for f in self._ws.files() if f.endswith(".py"))
             result = self._run(TEST_COMMAND)
             output = ((result.stdout or "") + (result.stderr or ""))[-2000:]

@@ -20,6 +20,7 @@ from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import BadModelOutput, CloudDisabled, LowMemory, ModelSocket, ModelUnavailable
 from watchtower.tower import NeedsOwner, SpecRejected, TowerPipeline
 from watchtower.floors.f4_qa_deploy.releases import Releases
+from watchtower.guardrails import load_guardrails
 from watchtower.engine.sandbox import Sandbox, SandboxUnavailable
 from watchtower.engine.scheduler import Scheduler, SchedulerBusy
 from watchtower.engine.workflow import Step, Workflow, WorkflowResult
@@ -60,7 +61,8 @@ class JobRunner:
                               AuditLog(conn))
         self._tower = TowerPipeline(self._ask_role, load_roles(tiers=settings.tiers), Approvals(conn), bus,
                                     Knowledge(conn), beacon_factory=beacon_factory,
-                                    sandbox=sandbox or Sandbox(settings, AuditLog(conn)), releases=Releases(conn))
+                                    sandbox=sandbox or Sandbox(settings, AuditLog(conn)), releases=Releases(conn),
+                                    guardrails=load_guardrails(settings.home))
         checkpoints = settings.home / "checkpoints.db"
         self._wfs = {
             "demo": Workflow([Step("plan", self._plan), Step("answer", self._answer)], checkpoints,
