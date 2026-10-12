@@ -181,7 +181,7 @@ Pipeline, cheapest checks first:
 4. **Independent corroboration:** a factual claim passes only with **2+ independent sources on different domains**.
 5. **Consistency check** against Knowledge (flags contradictions; Knowledge is never treated as proof, since the Beacon filled it).
 
-Each glass has floor-specific rules (e.g. Glass 2 only passes technical docs and API references). Rejected content is logged with a reason, never silently dropped.
+Each glass has floor-specific rules in `beacon/glass_rules/fN.yaml` (owner-editable): Glass 1 open web with a deny list; Glass 2 technical docs and API references; Glass 3 docs + Q&A for crash causes; Glass 4 HTTP references; Glass 5 security references (allow-lists). Credibility (step 3) is by rule: listed/allow-listed sites and .gov/.edu rank first and are marked; low-credibility domains are rejected. Corroboration (step 4) applies to F1 research claims. Consistency (step 5): at most one model check per task against a page from another site; a contradiction becomes a note for the floor, never a reject. Floors 2–5 ask the Beacon through their own glass only with `--research`, at most twice per floor per job, with code-built queries scrubbed of code, paths and secrets; a page cached through one glass reaches another floor only if that floor's glass allows it. Rejected content is logged with a reason, never silently dropped.
 
 ---
 

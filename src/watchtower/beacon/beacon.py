@@ -6,6 +6,7 @@ from watchtower.beacon.netguard import BlockedURL
 from watchtower.beacon.search import Search
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.knowledge import Knowledge
+from watchtower.floors.framework import registrable_domain
 
 
 class Beacon:
@@ -24,6 +25,8 @@ class Beacon:
     def research(self, task: str, job_id: str | None) -> list[int]:
         self._audit.append("beacon", "beacon_search", {"query": task[:200]}, job_id)
         accepted: list[int] = []
+        self.conflicts: list[str] = []  # glass step 5 notes for the floor: "sources disagree ..."
+        checked = False
         for result in self._search.query(task, self._max_pages * 2):
             if len(accepted) >= self._max_pages:
                 break
@@ -47,6 +50,17 @@ class Beacon:
                 self._audit.append("beacon", "glass_reject", {"url": page.final_url, "reasons": verdict.reasons},
                                    job_id)
                 continue
+            if not checked:  # at most one consistency check per task, only against another site's page
+                host = registrable_domain(page.final_url)
+                other = next((h for h in self._knowledge.search(task, limit=5, distinct=False)
+                              if h.source.startswith("http") and registrable_domain(h.source) != host), None)
+                if other is not None:
+                    checked = True
+                    point = self._glass.consistent(verdict.text, other.text, task, page.final_url, other.source)
+                    if point:
+                        self.conflicts.append(f"sources disagree with {other.source}: {point}")
+                        self._audit.append("beacon", "glass_conflict", {"url": page.final_url,
+                                                                        "other": other.source, "point": point}, job_id)
             doc_id = self._knowledge.add(verdict.text, page.final_url, page.title, trusted=False)
             self._audit.append("beacon", "glass_pass", {"url": page.final_url, "doc_id": doc_id,
                                                         "notes": verdict.reasons}, job_id)

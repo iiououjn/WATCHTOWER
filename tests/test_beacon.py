@@ -105,3 +105,47 @@ def test_cached_page_is_not_reused_through_a_glass_that_would_refuse_it(conn):
     glass2 = Glass(GlassRules("f2", deny_domains=(), allow_domains=("docs.python.org",)))
     assert Beacon(search, Exploding(), glass2, Knowledge(conn), audit).research("x", "j") == []
     assert "beacon_skip" in actions(audit)
+
+
+def _ask(conflict):
+    calls = []
+
+    def ask(prompt):
+        calls.append(prompt)
+        if "contradict" in prompt:
+            if conflict == "garbage":
+                from watchtower.engine.model_socket import BadModelOutput
+                raise BadModelOutput("x")
+            return {"contradiction": conflict, "point": "focal length of first-order lenses"}
+        return {"relevant": True}
+    return ask, calls
+
+
+def test_contradiction_with_another_site_becomes_a_note_not_a_reject(conn):
+    Knowledge(conn).add(TEXT.replace("long", "short"), "https://other.example/older")
+    ask, calls = _ask(True)
+    search = Search(provider=lambda q, n: [{"title": "t", "href": "https://a.example/x", "body": ""}])
+    beacon = Beacon(search, FakeFetcher({"https://a.example/x": page("https://a.example/x")}),
+                    Glass(GlassRules("f1", (), ()), ask), Knowledge(conn), AuditLog(conn))
+    assert len(beacon.research("fresnel lens lighthouse optics", "j")) == 1
+    assert sum("contradict" in c for c in calls) == 1
+    assert beacon.conflicts and "focal length" in beacon.conflicts[0] and "other.example" in beacon.conflicts[0]
+
+
+def test_no_other_site_on_the_task_means_no_consistency_call(conn):
+    ask, calls = _ask(True)
+    search = Search(provider=lambda q, n: [{"title": "t", "href": "https://a.example/x", "body": ""}])
+    beacon = Beacon(search, FakeFetcher({"https://a.example/x": page("https://a.example/x")}),
+                    Glass(GlassRules("f1", (), ()), ask), Knowledge(conn), AuditLog(conn))
+    beacon.research("fresnel lens lighthouse optics", "j")
+    assert not any("contradict" in c for c in calls) and beacon.conflicts == []
+
+
+@pytest.mark.parametrize("answer", [False, "garbage"])
+def test_agreement_or_garbage_leaves_no_note(conn, answer):
+    Knowledge(conn).add(TEXT, "https://other.example/older")
+    ask, calls = _ask(answer)
+    search = Search(provider=lambda q, n: [{"title": "t", "href": "https://a.example/x", "body": ""}])
+    beacon = Beacon(search, FakeFetcher({"https://a.example/x": page("https://a.example/x")}),
+                    Glass(GlassRules("f1", (), ()), ask), Knowledge(conn), AuditLog(conn))
+    assert len(beacon.research("fresnel lens lighthouse optics", "j")) == 1 and beacon.conflicts == []

@@ -380,9 +380,11 @@ class TowerPipeline:
             beacon = self._beacon_factory(lambda prompt: self._ask(r["glass.f1"], data, prompt), "f1")
 
         def context(task: str) -> str:
-            if beacon is not None:
-                beacon.research(task, data["job_id"])
-            return self._context(task)
+            if beacon is None:
+                return self._context(task)
+            beacon.research(task, data["job_id"])
+            conflicts = getattr(beacon, "conflicts", [])  # glass step 5: workers learn where sources disagree
+            return self._context(task) + ("\n" + untrusted("glass", "\n".join(conflicts[:3])) if conflicts else "")
 
         floor = Floor("f1", r["f1.lead"], r["f1.worker"], r["f1.hr"], ask=ask, context=context,
                       min_domains=self._g.min_source_domains if beacon is not None else 0)

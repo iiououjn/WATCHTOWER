@@ -878,3 +878,15 @@ def test_crash_lookup_reaches_build_hr(lookout_tower):
     hr = [p for c, p in zip(model.calls, model.prompts) if c == "f3.hr"]
     assert hr and "stackoverflow.com/q/f3" in hr[0]
     runner.close()
+
+
+def test_f1_workers_see_when_sources_disagree(online_tower, conn):
+    beacon = FakeBeacon(conn)
+    beacon.conflicts = ["sources disagree with https://b.example/2: lens weight"]
+    runner, model, job = online_tower(beacon, {
+        "f1.lead": [{"tasks": ["lens types"]}],
+        "f1.worker": [{"result": "Fresnel", "sources": ["https://a.example/1", "https://b.example/2"]}]})
+    runner.start(job.id, extra={"auto_approve": True})
+    worker = model.prompts[model.calls.index("f1.worker")]
+    assert "lens weight" in worker and '<untrusted source="glass">' in worker
+    runner.close()

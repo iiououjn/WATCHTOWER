@@ -38,6 +38,13 @@ RELEVANCE_PROMPT = (
 )
 
 
+CONSISTENCY_PROMPT = (
+    "Task:\n{task}\n\nNew page:\n{new}\n\nEarlier page from another site:\n{old}\n\n"
+    "Do the two pages contradict each other on a factual point about the task? Reply as JSON: "
+    '{{"contradiction": boolean, "point": string}}'
+)
+
+
 @dataclass(frozen=True)
 class GlassRules:
     name: str
@@ -134,6 +141,21 @@ class Glass:
             if not truthy(verdict.get("relevant")):
                 return self._reject(f"not relevant: {str(verdict.get('reason') or 'no reason given')[:200]}")
         return GlassVerdict(True, notes, clean)
+
+    def consistent(self, text: str, other: str, task: str, new_url: str, old_url: str) -> str:
+        """Glass step 5: the contradiction point between a new page and an earlier one, or ''. A note, never
+        a reject: Knowledge is never proof (the Beacon filled it). Model garbage or low memory → ''."""
+        if self._ask is None:
+            return ""
+        from watchtower.engine.advisory import ADVISORY_ERRORS
+        try:
+            out = self._ask(CONSISTENCY_PROMPT.format(task=task, new=untrusted(new_url, text[:1200]),
+                                                      old=untrusted(old_url, other[:1200])))
+        except ADVISORY_ERRORS:
+            return ""
+        if out.get("contradiction") is not True:
+            return ""
+        return " ".join(str(out.get("point") or "a factual point").split())[:200]
 
     @staticmethod
     def _reject(reason: str) -> GlassVerdict:
