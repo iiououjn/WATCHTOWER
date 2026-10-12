@@ -910,3 +910,49 @@ def test_tower_makes_room_before_every_sandbox_run(app_tower):
     assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
     assert seen == list(range(len(sandbox.calls))) and len(seen) >= 3
     runner.close()
+
+
+ONE = {"title": "Todo", "goal": "a todo app", "acceptance": ["users can add a todo"], "out_of_scope": []}
+
+
+def test_app_cpo_is_asked_once_more_when_the_spec_is_thin(app_tower, conn):
+    from watchtower.engine.governor.approvals import Approvals
+    runner, model, sandbox, job = app_tower({"cpo": [ONE, {"acceptance": ["the list page shows every added todo",
+                                                                         "an empty todo is refused with a message",
+                                                                         "users can add a todo"]}]})
+    out = runner.start(job.id)
+    spec = Approvals(conn).pending_for(job.id).summary
+    assert out.status == "paused" and model.calls.count("cpo") == 2
+    assert "an empty todo is refused" in spec and spec.count("users can add a todo") == 1 and "tower default" not in spec
+    reask = [p for c, p in zip(model.calls, model.prompts) if c == "cpo"][1]
+    assert '<untrusted source="cpo">' in reask
+    runner.close()
+
+
+def test_app_cpo_garbage_re_ask_gets_tower_defaults(app_tower, conn):
+    from watchtower.engine.governor.approvals import Approvals
+    runner, model, sandbox, job = app_tower({"cpo": [ONE, "not json at all", "still not json"]})
+    assert runner.start(job.id).status == "paused"
+    spec = Approvals(conn).pending_for(job.id).summary
+    assert spec.count("(tower default)") == 2 and "users can add a todo" in spec
+    runner.close()
+
+
+def test_app_spec_with_three_criteria_is_not_re_asked(app_tower):
+    three = {**ONE, "acceptance": ["a", "b", "c"]}
+    runner, model, sandbox, job = app_tower({"cpo": [three]})
+    runner.start(job.id)
+    assert model.calls.count("cpo") == 1
+    runner.close()
+
+
+def test_re_ask_criteria_are_capped_and_deduped(app_tower, conn):
+    from watchtower.engine.governor.approvals import Approvals
+    runner, model, sandbox, job = app_tower({"cpo": [ONE, {"acceptance": ["Users can add a todo", "x" * 300]
+                                                           + [f"c{i}" for i in range(9)]}]})
+    runner.start(job.id)
+    lines = [ln for ln in Approvals(conn).pending_for(job.id).summary.splitlines() if ln.startswith("  - ")]
+    acceptance = lines[:6]
+    assert len(acceptance) <= 6 and all(len(a) <= 204 for a in acceptance)
+    assert sum("add a todo" in a.lower() for a in acceptance) == 1
+    runner.close()
