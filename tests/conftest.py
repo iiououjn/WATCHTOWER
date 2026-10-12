@@ -59,7 +59,7 @@ APP_REPLIES = {
                                 {"path": "test_app.py", "purpose": "tests"}], "entry": "app.py",
                       "routes": [{"method": "GET", "path": "/", "shows": "the Todo list"}]}],
     "f2.coder": [{"files": [{"path": "app.py", "content": "import json\n"},
-                            {"path": "test_app.py", "content": "import unittest\n"}]}],
+                            {"path": "test_app.py", "content": "import unittest\nimport app\n"}]}],
     "f5.dev_gate": [{"pass": True, "reasons": []}],
     "f4.qa": [{"checks": [{"name": "home", "path": "/", "expect_text": "Todo"}]}],
     "f4.lead": [{"areas": ["home page"]}],

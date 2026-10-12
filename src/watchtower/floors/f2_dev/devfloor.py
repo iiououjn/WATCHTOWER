@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 from pathlib import PurePosixPath
@@ -72,6 +73,26 @@ def _compact_checks(checks: Sequence[dict]) -> str:
                 "expect_text": str(c.get("expect_text", ""))[:80]} for c in checks]
     text = json.dumps(trimmed)
     return text if len(text) <= QA_CHARS else text[:QA_CHARS] + " ...(more checks)"
+
+
+def app_is_tested(ws: Workspace) -> bool:
+    """At least one test file imports a module of the app itself (not only unittest or another test file):
+    a test that never touches the app proves nothing."""
+    py = [f for f in ws.files() if f.endswith(".py")]
+    tests = [f for f in py if PurePosixPath(f).name.startswith("test")]
+    app = {PurePosixPath(f).with_suffix("").as_posix().replace("/", ".") for f in py if f not in tests}
+    app |= {m.split(".")[0] for m in app}  # 'import store' counts for store/db.py
+    for name in tests:
+        try:
+            tree = ast.parse(ws.read(name))
+        except (SyntaxError, ValueError):
+            continue
+        for node in ast.walk(tree):
+            mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                    else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
+            if any(m in app for m in mods):
+                return True
+    return False
 
 
 def _plan_path(raw) -> str | None:
@@ -212,8 +233,10 @@ class DevFloor:
             summary = test_summary(result.stdout)
             real = (summary or {}).get("run", 0) - (summary or {}).get("skipped", 0)
             ran_tests = real >= 1
-            passed = (result.exit_code == 0 and has_tests and ran_tests and not problems and not result.timed_out
-                      and summary is not None and not summary.get("failures") and not summary.get("errors"))
+            imports_app = app_is_tested(self._ws)
+            passed = (result.exit_code == 0 and has_tests and real >= 2 and imports_app and not problems
+                      and not result.timed_out and summary is not None and not summary.get("failures")
+                      and not summary.get("errors"))
             checks.append({"check": "tests", "round": round_no, "pass": passed, "output": output[-300:]})
             if passed:
                 verdict = self._hr_review(spec, plan) if self._hr is not None and hr_asks < MAX_HR_ASKS else None
@@ -231,6 +254,11 @@ class DevFloor:
             elif not ran_tests:
                 notes.append("unittest found 0 tests: name test files test_*.py, put test classes in "
                              "unittest.TestCase subclasses, and name methods test_*.")
+            elif real < 2:
+                notes.append(f"unittest ran only {real} test: write at least 2 real tests of the app's behaviour.")
+            if has_tests and not imports_app:
+                notes.append("Your tests import nothing from the app: import the app's own functions or handler "
+                             "(e.g. from app import ...) and test what they do.")
             notes.append("Test output:\n" + untrusted("sandbox", (output or "(no output)")[-1200:]))
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"
                    f"Tests: {'PASS' if passed else 'FAIL'}\n{output[-800:]}")

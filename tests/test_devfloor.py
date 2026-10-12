@@ -9,7 +9,7 @@ ARCH = Role("f2.architect", "Architect", "f2", "work", (), "a")
 CODER = Role("f2.coder", "Coder", "f2", "work", (), "c")
 SPEC = {"title": "Todo", "goal": "todo app", "acceptance": ["lists todos"], "out_of_scope": []}
 APP = {"path": "app.py", "content": "import json\nprint('app')\n"}
-TEST = {"path": "test_app.py", "content": "import unittest\n"}
+TEST = {"path": "test_app.py", "content": "import unittest\nimport app\n"}
 
 
 class Script:
@@ -117,7 +117,7 @@ def test_gate_feedback_reaches_coder(tmp_path):
 
 
 def test_test_folders_become_packages_so_unittest_finds_them(tmp_path):
-    nested = {"path": "tests/test_app.py", "content": "import unittest\n"}
+    nested = {"path": "tests/test_app.py", "content": "import unittest\nimport app\n"}
     s = Script({"f2.architect": [{}], "f2.coder": [{"files": [APP, nested]}]})
     dev(tmp_path, s, Runner([OK]), rounds=1).build(SPEC, {"files": [], "entry": "app.py"}, [])
     assert (tmp_path / "tests" / "__init__.py").exists()
@@ -380,7 +380,7 @@ def test_garbage_unit_reply_costs_only_that_unit(tmp_path):
 
 def test_units_skip_files_that_already_exist(tmp_path):
     Workspace(tmp_path).write("app.py", "x = 1\n")
-    Workspace(tmp_path).write("test_app.py", "import unittest\n")
+    Workspace(tmp_path).write("test_app.py", "import unittest\nimport app\n")
     script = Script({"f2.coder": [{"files": [{"path": "store.py", "content": "S = 1\n"}]}]})
     dev(tmp_path, script, Runner([OK])).write_units(SPEC, PLAN3)
     assert len(script.prompts["f2.coder"]) == 1 and "store.py" in script.prompts["f2.coder"][0]
@@ -388,7 +388,7 @@ def test_units_skip_files_that_already_exist(tmp_path):
 
 def test_build_tests_first_when_units_just_wrote_the_files(tmp_path):
     Workspace(tmp_path).write("app.py", "x = 1\n")
-    Workspace(tmp_path).write("test_app.py", "import unittest\n")
+    Workspace(tmp_path).write("test_app.py", "import unittest\nimport app\n")
     script = Script({"f2.coder": [{"files": [APP]}]})
     package = dev(tmp_path, script, Runner([OK])).build(SPEC, PLAN3, [], test_first=True)
     assert package.checks_run[-1]["pass"] and script.prompts["f2.coder"] == []
@@ -459,3 +459,31 @@ def test_out_of_unit_rejection_is_dropped_once_the_owner_unit_wrote_it(tmp_path)
                                   {"files": [{"path": "store.py", "content": "S = 1\n"}]}]})
     notes = dev(tmp_path, script, Runner([OK])).write_units(SPEC, PLAN3)
     assert notes == [] and Workspace(tmp_path).read("store.py") == "S = 1\n"
+
+
+from watchtower.floors.f2_dev.devfloor import app_is_tested  # noqa: E402
+
+
+@pytest.mark.parametrize("files,ok", [
+    ({"app.py": "x = 1\n", "test_app.py": "import unittest\n"}, False),
+    ({"app.py": "x = 1\n", "test_app.py": "import unittest\nimport app\n"}, True),
+    ({"app.py": "x = 1\n", "test_app.py": "from app import *\n"}, True),
+    ({"store/db.py": "x = 1\n", "tests/test_db.py": "from store.db import x\n"}, True),
+    ({"app.py": "x = 1\n", "test_app.py": "import unittest, json\n"}, False),
+    ({"app.py": "x = 1\n", "test_app.py": "def broken(:\n"}, False),
+    ({"test_app.py": "import test_helpers\n", "test_helpers.py": "x = 1\n"}, False)])
+def test_tests_must_import_the_app(tmp_path, files, ok):
+    ws = Workspace(tmp_path)
+    for path, body in files.items():
+        ws.write(path, body)
+    assert app_is_tested(ws) is ok
+
+
+def test_one_test_or_tests_that_ignore_the_app_do_not_pass(tmp_path):
+    one = SandboxResult(0, 'WATCHTOWER_TESTS {"run": 1, "skipped": 0, "failures": 0, "errors": 0}\n', "", False)
+    script = Script({"f2.coder": [{"files": [APP, {"path": "test_app.py", "content": "import unittest\nimport app\n"}]}]})
+    pkg = dev(tmp_path, script, Runner([one]), rounds=2).build(SPEC, PLAN3, [])
+    assert not pkg.checks_run[-1]["pass"] and "at least 2" in script.prompts["f2.coder"][1]
+    script = Script({"f2.coder": [{"files": [APP, {"path": "test_app.py", "content": "import unittest\n"}]}]})
+    pkg = dev(tmp_path / "b", script, Runner([OK]), rounds=2).build(SPEC, PLAN3, [])
+    assert not pkg.checks_run[-1]["pass"] and "import" in script.prompts["f2.coder"][1]
