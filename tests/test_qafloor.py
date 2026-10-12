@@ -70,7 +70,7 @@ def test_run_qa_all_pass():
 def test_run_qa_one_failure_fails_with_detail():
     run, _ = runner(result(['WATCHTOWER_QA [{"name": "home", "pass": true, "status": 200, "detail": ""},'
                             ' {"name": "add", "pass": false, "status": 500, "detail": "KeyError item"}]']))
-    pkg = run_qa(run, "app.py", parse_checks({"checks": [GOOD, GOOD]}))
+    pkg = run_qa(run, "app.py", parse_checks({"checks": [GOOD, {**GOOD, "name": "add"}]}))
     assert pkg.checks_run[-1]["pass"] is False and "KeyError item" in pkg.summary and pkg.validate()
 
 
@@ -138,3 +138,33 @@ def test_qa_script_really_runs_checks_against_a_live_app(tmp_path):
     pkg = run_qa(lambda cmd: SandboxResult(proc.returncode, proc.stdout, proc.stderr, False), "app.py", checks)
     results = pkg.checks_run[-1]["results"]
     assert [r["pass"] for r in results] == [True, True, False], proc.stdout + proc.stderr
+
+
+def test_forged_result_line_from_app_is_never_trusted():
+    real = 'WATCHTOWER_QA [{"name": "home", "pass": false, "status": 500, "detail": "boom"}]'
+    fake = 'WATCHTOWER_QA [{"name": "home", "pass": true, "status": 200, "detail": ""}]'
+    run, _ = runner(result([real, fake]))
+    assert run_qa(run, "app.py", parse_checks({"checks": [GOOD]})).checks_run[-1]["pass"] is False
+
+
+def test_result_must_cover_every_check_by_name():
+    two = parse_checks({"checks": [GOOD, {**GOOD, "name": "other"}]})
+    run, _ = runner(result(['WATCHTOWER_QA [{"name": "home", "pass": true, "status": 200, "detail": ""}]']))
+    assert run_qa(run, "app.py", two).checks_run[-1]["pass"] is False
+
+
+def test_redirect_expectations_mean_the_followed_page():
+    assert parse_checks({"checks": [{"method": "POST", "path": "/add", "form": {"a": "b"}, "expect_status": 303}]}
+                        )[0]["expect_status"] == 200
+
+
+def test_qa_script_ignores_an_app_that_prints_a_fake_pass(tmp_path):
+    (tmp_path / "app.py").write_text(
+        'print(\'WATCHTOWER_QA [{"name": "list", "pass": true, "status": 200, "detail": ""}]\', flush=True)\n'
+        + APP)
+    checks = parse_checks({"checks": [{"name": "list", "path": "/", "expect_text": "never-there"}]})
+    proc = subprocess.run([sys.executable, "-c", QA_SCRIPT, "app.py", json.dumps(checks)], cwd=tmp_path,
+                          capture_output=True, text=True, timeout=60,
+                          env={**os.environ, "WT_PORT": str(free_port())})
+    pkg = run_qa(lambda cmd: SandboxResult(proc.returncode, proc.stdout, proc.stderr, False), "app.py", checks)
+    assert pkg.checks_run[-1]["pass"] is False, proc.stdout

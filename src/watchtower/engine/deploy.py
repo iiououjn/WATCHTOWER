@@ -9,6 +9,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ from typing import Callable
 
 from watchtower.config import Settings
 from watchtower.engine.db import now
+from watchtower.engine.deploy_scripts import EDGE, FORWARD
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.releases import Releases
 
@@ -25,50 +27,6 @@ _ENTRY = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_/]*\.py")
 PORTS = range(8100, 8200)
 KEEP_IMAGES = 3
 
-# Fixed code (never AI-written). argv: listen_port target_host target_port [entry].
-# With an entry it is the app's launcher: it starts the app with PORT=target_port (as QA did) and forwards
-# 0.0.0.0:listen → the app, so an app that binds 127.0.0.1 is still reachable. Without one it is the edge proxy.
-FORWARD = """\
-import os, socket, subprocess, sys, threading
-listen, host, port = int(sys.argv[1]), sys.argv[2], int(sys.argv[3])
-app = subprocess.Popen([sys.executable, sys.argv[4]], env={**os.environ, "PORT": str(port)}) if len(sys.argv) > 4 else None
-def pipe(a, b):
-    try:
-        while True:
-            data = a.recv(65536)
-            if not data:
-                break
-            b.sendall(data)
-    except OSError:
-        pass
-    for s in (a, b):
-        try:
-            s.shutdown(socket.SHUT_RDWR)
-        except OSError:
-            pass
-def serve(c):
-    try:
-        u = socket.create_connection((host, port), timeout=5)
-    except OSError:
-        c.close()
-        return
-    u.settimeout(None)
-    t = threading.Thread(target=pipe, args=(c, u), daemon=True)
-    t.start()
-    pipe(u, c)
-    t.join()
-    c.close()
-    u.close()
-def accept():
-    srv = socket.create_server(("0.0.0.0", listen))
-    while True:
-        c, _ = srv.accept()
-        threading.Thread(target=serve, args=(c,), daemon=True).start()
-if app is None:
-    accept()
-threading.Thread(target=accept, daemon=True).start()
-sys.exit(app.wait())
-"""
 DOCKERFILE = """\
 FROM {image}
 COPY --chown=1000:1000 app/ /app/
@@ -96,13 +54,25 @@ class Deployment:
     ended_at: str | None
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None  # never let the app steer the host to another URL
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
+
+
 def http_ok(port: int, wait: float = 15.0) -> bool:
+    """True once GET / on the local port answers 2xx/3xx. Redirects are never followed, no proxies used."""
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=2) as r:
-                if r.status == 200:
+            with _OPENER.open(f"http://127.0.0.1:{port}/", timeout=2) as r:
+                if 200 <= r.status < 400:
                     return True
+        except urllib.error.HTTPError as e:
+            if 300 <= e.code < 400:
+                return True
         except OSError:
             pass
         time.sleep(0.5)
@@ -152,8 +122,14 @@ class Deployer:
         image = f"wt-app-{name}:{dep_id}"
         self._conn.execute("UPDATE deployments SET image=? WHERE id=?", (image, dep_id))
         self._audit.append("owner", "deploy_started", {"name": name, "image": image, "port": port}, job_id)
-        try:
+        try:  # a failed build never touched the running deployment: leave it alone
             self._build(release, root, image)
+        except BaseException as e:
+            self._end(dep_id, "failed")
+            if isinstance(e, OSError):
+                raise DeployError(f"could not prepare the build: {type(e).__name__}") from e
+            raise
+        try:
             self._start(name, image, port)
         except DeployError as e:
             self._end(dep_id, "failed")
@@ -171,16 +147,19 @@ class Deployer:
 
     def rollback(self, name: str) -> Deployment:
         current = self._active(name)
-        row = current and self._conn.execute(
-            "SELECT id FROM deployments WHERE name=? AND status='replaced' AND id<? ORDER BY id DESC LIMIT 1",
-            (name, current.id)).fetchone()
-        if not row:
+        rows = [] if current is None else self._conn.execute(
+            "SELECT id FROM deployments WHERE name=? AND status='replaced' AND id<? ORDER BY id DESC",
+            (name, current.id)).fetchall()
+        target = next((self._get(r["id"]) for r in rows if self._image_exists(self._get(r["id"]).image)), None)
+        if target is None:  # checked before anything is stopped
             raise DeployError(f"nothing to roll back to for {name!r}")
-        target = self._get(row["id"])
-        self._start(name, target.image, current.port)
-        if not self._health(current.port):
-            self._start(name, current.image, current.port)
-            raise DeployError(f"deployment {target.id} failed its health check; kept deployment {current.id}")
+        try:
+            self._start(name, target.image, current.port)
+            healthy, why = self._health(current.port), "failed its health check"
+        except DeployError as e:
+            healthy, why = False, f"did not start ({e})"
+        if not healthy:
+            raise DeployError(f"deployment {target.id} {why}{self._restore(name, current)}")
         self._end(current.id, "rolled_back")
         self._conn.execute("UPDATE deployments SET status='active', port=?, ended_at=NULL WHERE id=?",
                            (current.port, target.id))
@@ -191,7 +170,7 @@ class Deployer:
         current = self._active(name)
         if current is None:
             raise DeployError(f"nothing is deployed as {name!r}")
-        self._stop(name)
+        self._stop(name, strict=True)  # only report "stopped" once Docker really removed it
         self._docker(["docker", "network", "rm", f"wt-dep-{name}"], quiet=True)
         self._end(current.id, "stopped")
         self._audit.append("owner", "deploy_stopped", {"name": name}, current.job_id)
@@ -230,11 +209,22 @@ class Deployer:
                       *locked, image])
         self._docker(["docker", "run", "-d", "--name", edge, "--pull", "never", "--memory", "64m",
                       "-p", f"127.0.0.1:{port}:8000", *locked, self._s.sandbox_image,
-                      "python", "-c", FORWARD, "8000", "app", "9000"])
+                      "python", "-c", EDGE, "8000", "app", "9000"])
         self._docker(["docker", "network", "connect", net, edge])
 
-    def _stop(self, name: str) -> None:
-        self._docker(["docker", "rm", "-f", f"wt-dep-{name}-app", f"wt-dep-{name}-edge"], quiet=True)
+    def _stop(self, name: str, strict: bool = False) -> None:
+        argv = ["docker", "rm", "-f", f"wt-dep-{name}-app", f"wt-dep-{name}-edge"]
+        if not strict:
+            self._docker(argv, quiet=True)
+            return
+        try:
+            self._docker(argv)
+        except DeployError as e:
+            if "No such container" not in str(e):
+                raise
+
+    def _image_exists(self, image: str) -> bool:
+        return bool(image) and self._docker(["docker", "image", "inspect", image], quiet=True).returncode == 0
 
     def _restore(self, name: str, previous: Deployment | None) -> str:
         """After a failed deploy: bring the previous deployment back, or leave nothing running."""
@@ -245,6 +235,8 @@ class Deployer:
         try:
             self._start(name, previous.image, previous.port)
         except DeployError as e:
+            self._stop(name)  # no half-started containers left to restart forever
+            self._docker(["docker", "network", "rm", f"wt-dep-{name}"], quiet=True)
             self._end(previous.id, "failed")
             return f"; restoring deployment {previous.id} also failed: {e}"
         if not self._health(previous.port):
@@ -252,10 +244,14 @@ class Deployer:
         return f"; rolled back to deployment {previous.id}"
 
     def _prune(self, name: str) -> None:
-        rows = self._conn.execute("SELECT image FROM deployments WHERE name=? AND status!='active' ORDER BY id DESC",
-                                  (name,)).fetchall()
-        for row in rows[KEEP_IMAGES:]:
-            if row["image"]:
+        """Failed images go at once; keep the newest KEEP_IMAGES that rollback can still use."""
+        rows = self._conn.execute("SELECT image, status FROM deployments WHERE name=? AND status!='active' "
+                                  "ORDER BY id DESC", (name,)).fetchall()
+        kept = 0
+        for row in rows:
+            if row["status"] in ("replaced", "rolled_back", "stopped") and kept < KEEP_IMAGES:
+                kept += 1
+            elif row["image"]:
                 self._docker(["docker", "rmi", row["image"]], quiet=True)
 
     def _docker(self, argv: list[str], quiet: bool = False, timeout: float = 60) -> subprocess.CompletedProcess:

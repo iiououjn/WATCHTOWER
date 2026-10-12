@@ -384,7 +384,8 @@ def deploy(job_id: str, name: str = typer.Option("app", "--name", help="Deployme
         raise typer.Exit(2)
     d = _deploy_call(make_deployer(settings, conn).deploy, job_id, name)
     typer.echo(f"Deployed job {job_id} as '{d.name}' (deployment {d.id}): http://127.0.0.1:{d.port}\n"
-               "Isolated: the app has no internet and is reachable only from this Mac.\n"
+               "Isolated: the app has no internet, is reachable only from this Mac, and its pages may only "
+               "talk to the app itself (strict CSP). Links you click can still open other sites.\n"
                f"Stop it: watchtower undeploy {d.name}    Previous version: watchtower rollback {d.name}")
 
 

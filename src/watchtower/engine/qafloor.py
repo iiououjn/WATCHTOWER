@@ -60,9 +60,11 @@ except Exception:
     p.kill()
 log.close()
 print("WATCHTOWER_QA " + json.dumps(results))
-print(open(log.name, "rb").read().decode(errors="replace")[-1000:])
+# the app's own output is JSON-encoded on one line, so nothing it prints can pose as a result line
+print("WATCHTOWER_LOG " + json.dumps(open(log.name, "rb").read().decode(errors="replace")[-1000:]))
 """
 _RESULT = re.compile(r"^WATCHTOWER_QA (.*)$", re.M)
+_LOG = re.compile(r"^WATCHTOWER_LOG (.*)$", re.M)
 
 
 def _str(value, cap: int) -> str | None:
@@ -83,6 +85,7 @@ def _check(raw) -> dict | None:
         return None
     status = raw.get("expect_status")
     status = status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else 200
+    status = 200 if 300 <= status < 400 else status  # the runner follows redirects, so 3xx means the page after
     return {"name": _str(raw.get("name"), 80) or path, "method": method, "path": path, "form": dict(form),
             "expect_status": status, "expect_text": _str(raw.get("expect_text"), 200) or ""}
 
@@ -100,17 +103,24 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
     output = (result.stdout or "") + (result.stderr or "")
     found = _RESULT.findall(output)
     try:
-        results = json.loads(found[-1]) if found else None
+        results = json.loads(found[0]) if len(found) == 1 else None  # a second line means someone forged one
     except ValueError:
         results = None
-    if not isinstance(results, list) or not results or not all(isinstance(r, dict) for r in results):
-        results = [{"name": "qa", "pass": False, "status": None, "detail": "QA runner produced no result"}]
+    if (not isinstance(results, list) or not all(isinstance(r, dict) for r in results)
+            or [r.get("name") for r in results] != [c["name"] for c in checks]):
+        results = [{"name": "qa", "pass": False, "status": None,
+                    "detail": "QA runner result missing, duplicated or incomplete"}]
+    logs = _LOG.findall(output)
+    try:
+        app_log = json.loads(logs[-1]) if logs else output
+    except ValueError:
+        app_log = output
     passed = not result.timed_out and all(r.get("pass") is True for r in results)
     lines = [f"- {r.get('name')}: {'PASS' if r.get('pass') is True else 'FAIL'} {str(r.get('detail') or '')[:300]}"
              for r in results]
     summary = f"QA checks {'passed' if passed else 'FAILED'}:\n" + "\n".join(lines)
     if not passed:
-        summary += f"\nApp output:\n{output[-800:]}"
+        summary += f"\nApp output:\n{str(app_log)[-800:]}"
     return WorkPackage("f4", summary, [entry], [], [{"check": "qa", "pass": passed, "results": results}],
                        [] if passed else ["QA checks failed"])
 
