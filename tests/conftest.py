@@ -77,9 +77,9 @@ APP_REPLIES = {
 class FakeSandbox:
     """Sandbox stand-in: unittest and smoke results are scripted."""
 
-    def __init__(self, root, test_ok=True, http="200", unavailable=False, qa_ok=True):
+    def __init__(self, root, test_ok=True, http="200", unavailable=False, qa_ok=True, probe=200):
         self.root, self.test_ok, self.http, self.unavailable, self.calls = root, test_ok, http, unavailable, []
-        self.qa_ok = qa_ok
+        self.qa_ok, self.probe = qa_ok, probe
 
     def workspace(self, job_id):
         path = self.root / job_id
@@ -100,4 +100,9 @@ class FakeSandbox:
             detail = "" if ok else "expected 200 with 'Todo', got 500: KeyError item"
             return SandboxResult(0, 'WATCHTOWER_QA [{"name": "home", "pass": %s, "status": 200, "detail": "%s"}]\n'
                                  % ("true" if ok else "false", detail), "", False)
+        if command[:2] == ["python", "-c"] and "WATCHTOWER_PROBE" in command[2]:
+            status = self.probe if isinstance(self.probe, int) else self.probe.pop(0)
+            results = [{"path": p, "status": status} for p in json.loads(command[4])]
+            return SandboxResult(0, "WATCHTOWER_PROBE " + json.dumps(results) + "\n"
+                                 'WATCHTOWER_LOG "KeyError: items"\n', "", False)
         return SandboxResult(0, f"SMOKE_STATUS {self.http}\n", "", False)

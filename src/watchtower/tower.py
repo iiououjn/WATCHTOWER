@@ -8,7 +8,7 @@ from typing import Callable
 from watchtower.beacon import glass as glass_mod
 from watchtower.beacon.beacon import Beacon
 from watchtower.floors.board import FLOORS, NAMES, Board
-from watchtower.floors.f3_build.buildfloor import smoke_test
+from watchtower.floors.f3_build.buildfloor import build_check
 from watchtower.engine.bus import Bus
 from watchtower.floors.f2_dev.devfloor import DevFloor
 from watchtower.floors.f1_research.office import Floor
@@ -119,11 +119,25 @@ class TowerPipeline:
         research, lessons = (data.get("f1") or {}).get("summary", ""), self._lessons(data)
         cto = CTO(r["cto"], ask)
         plan, feedback = self._approved_plan(data, dev, cto, research, lessons, []), []
+        units_due = True  # F2 workers write units on the first build and after each re-plan, never on a fix
         focus = oversight.focus(spec)
         checks = self._plan_qa(data, plan, qa_office)
         expect = f3_office.expect(spec, plan["routes"])
         for attempt in range(self._g.max_send_backs + 1):
-            package, f3, f4, sec, audit = dev.build(spec, plan, feedback, checks), None, None, None, ""
+            written: list[int] = []  # F2 workers write the missing planned files first (MVP unit first)
+
+            def on_unit(i: int, n: int, paths: list[str]) -> None:
+                written.append(i)
+                self._post(data, "f2", "doing", f"coder unit {i}/{n} written: {', '.join(paths)}")
+            unit_notes = dev.write_units(spec, plan, checks, on_unit=on_unit) if units_due else []
+            units_due = False
+            present = {p.lower() for p in ws.files()}
+            missing = [f["path"] for f in plan["files"] if f["path"].lower() not in present]
+            if written and missing:
+                unit_notes.append(f"planned files still missing: {', '.join(missing[:8])}; write them")
+            package = dev.build(spec, plan, unit_notes + list(feedback), checks,  # unit notes first: never cut
+                                test_first=bool(written) and not feedback and not missing)
+            f3, f4, sec, audit = None, None, None, ""
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
             self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "
                        f"after {len(package.checks_run)} round(s) (attempt {attempt + 1})")
@@ -135,7 +149,7 @@ class TowerPipeline:
                 package = WorkPackage("f2", package.summary, ws.files(), [], package.checks_run +
                                       [{"check": "entry", "pass": False}], feedback)
             elif package.checks_run and package.checks_run[-1].get("pass"):
-                f3 = smoke_test(run, plan["entry"], expect)
+                f3 = build_check(run, plan["entry"], expect, plan["routes"])  # MVP first, then the full app
                 self._handoff(data, "f3", attempt, f3.checks_run[-1]["pass"], f3.open_questions)
                 self._post(data, "f3", "done" if f3.checks_run[-1]["pass"] else "issue", f3.summary.splitlines()[0])
                 if f3.checks_run[-1]["pass"]:
@@ -186,7 +200,7 @@ class TowerPipeline:
             elif sec is not None and not sec.checks_run[-1]["pass"]:
                 feedback = feedback + ["Floor 5 security scan found problems; fix them:\n" + untrusted("security", sec.summary)]
             if verdict.route in ("design", "research"):
-                plan = self._approved_plan(data, dev, cto, research, lessons, feedback)
+                plan, units_due = self._approved_plan(data, dev, cto, research, lessons, feedback), True
                 checks = self._plan_qa(data, plan, qa_office)
                 expect = f3_office.expect(spec, plan["routes"])
         self._retro(data, oversight, passed=False)
@@ -388,6 +402,7 @@ def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:
     for c in checks:
         last[c.get("check")] = c
     tests, http, qa, sec = last.get("tests", {}), last.get("http", {}), last.get("qa", {}), last.get("security", {})
+    probe = last.get("routes", {}).get("results") or []
     results = qa.get("results") or []
     findings = sec.get("findings") or []
     serious = sum(_failing(f, fail_on) for f in findings)
@@ -401,6 +416,8 @@ def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:
     return "\n".join([
         f"- unit tests: {'pass' if tests.get('pass') else 'FAIL'}",
         f"- app answered HTTP {http.get('status')}",
+        *([f"- full app: {sum(isinstance(r.get('status'), int) and r['status'] < 500 and r['status'] != 404 for r in probe)}"
+           f"/{len(probe)} contract routes answered"] if probe else []),
         f"- QA: {qa_line}",
         f"- security scan: {scan}",
     ])

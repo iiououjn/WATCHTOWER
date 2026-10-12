@@ -753,3 +753,43 @@ def test_gate_prompt_fits_with_maximum_owner_rules(app_tower, settings):
     assert gate.index("Guardrails") < gate.index("Reply as JSON")  # the JSON instruction comes after the rules
     runner.close()
 
+
+
+def test_f2_unit_workers_write_before_the_test_loop(app_tower, conn):
+    from watchtower.floors.board import Board
+    runner, model, sandbox, job = app_tower()
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert model.calls.count("f2.coder") == 1  # one unit wrote both files; tests passed without a fix call
+    notes = [n["text"] for n in Board(Bus(AuditLog(conn))).notes(job.id) if n["floor"] == "f2"]
+    assert any("unit 1/1" in t for t in notes)
+    runner.close()
+
+
+def test_f3_probes_the_full_app_after_the_mvp(app_tower):
+    arch = {**APP_REPLIES["f2.architect"][0], "routes": APP_REPLIES["f2.architect"][0]["routes"]
+            + [{"method": "GET", "path": "/items", "shows": "items"}]}
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, probe=[500, 200])
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    probes = [c for c in sandbox.calls if "WATCHTOWER_PROBE" in c[2]]
+    assert len(probes) == 2  # failed once, the coder fixed it, then passed
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert any("GET /items" in p for p in coder)
+    runner.close()
+
+
+def test_units_are_not_rerun_on_a_code_send_back(app_tower):
+    arch = {**APP_REPLIES["f2.architect"][0], "files": APP_REPLIES["f2.architect"][0]["files"]
+            + [{"path": "static/style.css", "purpose": "css (the coder inlines it)"}]}
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f5.dev_gate": [
+        {"pass": False, "reasons": ["no delete"], "send_back_to": "code"}, {"pass": True, "reasons": []}]})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    units = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder" and "You are coder" in p]
+    assert len(units) == 2  # attempt 0 only: both units once, none on the send-back
+    runner.close()
+
+
+def test_evidence_shows_the_full_app_probe():
+    from watchtower.tower import _evidence
+    text = _evidence([{"check": "http", "pass": True, "status": "200"},
+                      {"check": "routes", "pass": True, "results": [{"path": "/a", "status": 200}] * 3}])
+    assert "full app: 3/3 contract routes answered" in text

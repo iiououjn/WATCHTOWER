@@ -141,8 +141,8 @@ Every step writes a checkpoint. On crash or restart, the Scheduler resumes each 
 | Floor | Input → Output | Objective checks (reality first) |
 |---|---|---|
 | **F1 Research** | Spec → research brief | Every claim has a source link; sources passed Glass 1 |
-| **F2 Dev** | Brief → architecture + code. Architect plans files + a routes contract (CTO approves); Coder writes/fixes files in a loop driven by real Sandbox test output; Dev HR reviews | Unit tests pass in Sandbox (runner's own summary, ≥1 real test); standard-library-only check |
-| **F3 Build** | Code → MVP → full app | App runs in Sandbox and answers HTTP 200; Build Lead's home-page expectation (soft); Build HR diagnoses crashes for the coder |
+| **F2 Dev** | Brief → architecture + code. Architect (Lead) plans files + a routes contract (CTO approves) and the plan is split into coder units (MVP unit first: entry + tests); Coder workers write one unit each, then fix in a loop driven by real Sandbox test output; Dev HR reviews the integrated code | Unit tests pass in Sandbox (runner's own summary, ≥1 real test); standard-library-only check |
+| **F3 Build** | Code → MVP → full app | MVP: app runs in Sandbox and GET / answers 200 (Build Lead's home-page text is a soft check); full app: probe workers GET every route of the contract (no 404/5xx/silence); Build HR diagnoses failures for the coder |
 | **F4 Deploy/QA** | App → deployed + QA report | QA model (other family) writes HTTP acceptance checks, run in Sandbox; pass → release (file hashes). Owner runs `watchtower deploy`: local Docker, internal network (no internet), 127.0.0.1 only, CSP edge; health check; auto-rollback. Playwright later (opt-in, ~1.5 GB). Vercel (free plan) later, owner-approved, token from Keychain |
 | **F5 Oversight** | Every package → verdict | `guardrails.yaml`; Bandit + secret patterns (offline; serious findings fail); Spec Auditor; cross-family model gate; retrospective lessons; CEO recommendation → owner sign-off before any release |
 
