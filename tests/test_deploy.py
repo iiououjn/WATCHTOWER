@@ -166,3 +166,12 @@ def test_forwarder_reaches_an_app_bound_to_localhost(tmp_path):
     finally:
         os.killpg(proc.pid, 9)
         proc.wait()
+
+
+def test_restore_waits_for_health_and_says_when_previous_is_not_answering(setup):
+    answers = [True, False, False]
+    dep, docker, _ = setup(health=lambda port: answers.pop(0))
+    first = dep.deploy("job1")
+    with pytest.raises(DeployError, match=f"restored deployment {first.id} is not answering"):
+        dep.deploy("job1")
+    assert answers == []

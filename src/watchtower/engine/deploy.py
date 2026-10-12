@@ -247,6 +247,8 @@ class Deployer:
         except DeployError as e:
             self._end(previous.id, "failed")
             return f"; restoring deployment {previous.id} also failed: {e}"
+        if not self._health(previous.port):
+            return f"; restored deployment {previous.id} is not answering yet: check http://127.0.0.1:{previous.port}"
         return f"; rolled back to deployment {previous.id}"
 
     def _prune(self, name: str) -> None:
