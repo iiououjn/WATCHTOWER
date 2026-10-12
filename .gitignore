@@ -5,3 +5,5 @@
 __pycache__/
 *.db
 .superpowers/
+.serena/
+.pytest_cache/
