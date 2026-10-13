@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import builtins
 import io
+import keyword
 import sys
 import tokenize
 import warnings
@@ -264,14 +265,9 @@ def repair_main(source: str) -> tuple[str, str | None]:
 
 
 def _top_names(tree: ast.Module) -> set[str]:
-    out: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            out.add(node.name)
-        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
-            for t in node.targets if isinstance(node, ast.Assign) else [node.target]:
-                out |= {n.id for n in ast.walk(t) if isinstance(n, ast.Name)}
-    return out
+    """Functions and classes a module defines at top level. Not variables: `from todo import items` would be a
+    copy that goes stale when todo rebinds it."""
+    return {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
 
 
 def _parse(source: str) -> ast.Module | None:
@@ -301,7 +297,8 @@ def repair_names(source: str, module: str, siblings: dict[str, str]) -> tuple[st
         return source, []
     owners: dict[str, list[str]] = {}
     for name, text in sorted(siblings.items()):
-        if (name == module or not name.isidentifier() or name.startswith("test") or name == "__main__"
+        if (name == module or not name.isidentifier() or keyword.iskeyword(name) or name.startswith("test")
+                or name == "__main__"
                 or name in sys.stdlib_module_names):
             continue
         other = _parse(text)

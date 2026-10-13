@@ -191,3 +191,15 @@ def test_repair_names_leaves_alone_what_it_cannot_be_sure_of():
     ]
     for source, siblings in cases:
         assert repair_names(source, "__main__", siblings) == (source, []), (source[:30], list(siblings))
+
+
+def test_repair_names_links_only_functions_and_classes_from_safe_modules():
+    from watchtower.floors.f2_dev.repair import repair_names
+    uses_items = "def f():\n    return items + list_items()\n"
+    cases = [
+        (MAIN_USES, {"class": TODO}),                                             # keyword: `from class import` breaks
+        (uses_items, {"todo": TODO + "items = []\n"}),                            # a variable: a stale copy
+        (uses_items, {"todo": TODO + "items: list\n"}),                           # annotation only: not defined
+    ]
+    for source, siblings in cases:
+        assert repair_names(source, "__main__", siblings) == (source, []), list(siblings)

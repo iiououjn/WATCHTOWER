@@ -64,11 +64,12 @@ except Exception:
 log.close()
 print("WATCHTOWER_QA " + json.dumps(results))
 # the app's own output is JSON-encoded on one line, so nothing it prints can pose as a result line
-print("WATCHTOWER_LOG " + json.dumps(open(log.name, "rb").read().decode(errors="replace")[-1000:]))
+print("WATCHTOWER_LOG " + json.dumps(open(log.name, "rb").read().decode(errors="replace")[-4000:]))
 """
 _RESULT = re.compile(r"^WATCHTOWER_QA (.*)$", re.M)
 _LOG = re.compile(r"^WATCHTOWER_LOG (.*)$", re.M)
 _FRAME = re.compile(r'^\s+File "([^"]+)", line (\d+), in (\S+)')
+_EXC_LINE = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception|Exit|Warning): ")
 
 
 def app_error(log: str) -> str:
@@ -76,8 +77,9 @@ def app_error(log: str) -> str:
     Run 11: a NameError in do_GET sat at the end of the log, past what the coder is shown."""
     text = str(log or "")
     start = text.rfind("Traceback (most recent call last):")
-    if start < 0:
-        return ""
+    if start < 0:  # the header fell off the kept tail: the last exception line alone still helps
+        last = [ln for ln in text.splitlines() if _EXC_LINE.match(ln)]
+        return f"App error: {last[-1].strip()[:200]}" if last else ""
     lines = text[start:].splitlines()[1:]
     at = next((i for i, ln in enumerate(lines) if ln.strip() and not ln[0].isspace()), None)
     if at is None:
@@ -87,7 +89,7 @@ def app_error(log: str) -> str:
     if frames:
         path, line_no, fn = _FRAME.match(lines[frames[-1]]).groups()
         source = lines[frames[-1] + 1].strip() if frames[-1] + 1 < at else ""
-        where = f" (at {path.rsplit('/', 1)[-1]} line {line_no} in {fn}: {source[:100]})"
+        where = f" (at {path.rsplit('/', 1)[-1][-60:]} line {line_no[:8]} in {fn[:60]}: {source[:100]})"
     return f"App error: {lines[at].strip()[:200]}{where}"
 
 

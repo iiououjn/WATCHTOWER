@@ -1,0 +1,27 @@
+127.0.0.1 - - [13/Oct/2026 06:00:05] "GET / HTTP/1.1" 200 -
+----------------------------------------
+Exception occurred during processing of request from ('127.0.0.1', 40380)
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.14/socketserver.py", line 697, in process_request_thread
+    self.finish_request(request, client_address)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.14/socketserver.py", line 362, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+    ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.14/socketserver.py", line 766, in __init__
+    self.handle()
+    ~~~~~~~~~~~^^
+  File "/usr/local/lib/python3.14/http/server.py", line 500, in handle
+    self.handle_one_request()
+    ~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/local/lib/python3.14/http/server.py", line 488, in handle_one_request
+    method()
+    ~~~~~~^^
+  File "/w/app.py", line 10, in do_GET
+    self.wfile.write(render().encode())
+                     ~~~~~~^^
+  File "/w/app.py", line 4, in render
+    return "".join(f"<li>{i}</li>" for i in list_items())
+                                            ^^^^^^^^^^
+NameError: name 'list_items' is not defined
+----------------------------------------
