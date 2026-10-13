@@ -169,3 +169,16 @@ def test_every_sandbox_script_runs_isolated_from_the_app_folder():
     run_qa(record, "app.py", [{"name": "h", "method": "GET", "path": "/", "form": {}, "expect_status": 200,
                                "expect_text": ""}])
     assert all(cmd[:3] == ["python", "-I", "-c"] for cmd in seen + [TEST_COMMAND]) and len(seen) == 3
+
+
+def test_app_that_exits_is_named_with_its_exit_code():
+    run, _ = runner(SandboxResult(0, "SMOKE_STATUS None\nSMOKE_EXIT 0\nSMOKE_TEXT no\n", "", False))
+    pkg = smoke_test(run, "app.py")
+    assert not pkg.checks_run[0]["pass"]
+    assert "exited with code 0 before answering" in pkg.summary and 'if __name__ == "__main__"' in pkg.summary
+    assert "SMOKE_EXIT" in SMOKE_SCRIPT
+
+
+def test_forged_exit_line_in_the_app_log_is_ignored():
+    run, _ = runner(SandboxResult(0, "SMOKE_STATUS None\nSMOKE_EXIT None\nSMOKE_TEXT no\nSMOKE_EXIT 0\n", "", False))
+    assert "exited with code" not in smoke_test(run, "app.py").summary

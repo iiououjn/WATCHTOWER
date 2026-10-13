@@ -25,6 +25,7 @@ for _ in range(40):
         if status:
             break
         time.sleep(0.25)
+code = p.poll() if status is None else None  # the app stopped by itself before it answered
 try:
     os.killpg(p.pid, 9)
 except Exception:
@@ -32,12 +33,17 @@ except Exception:
 log.close()
 out = open("/tmp/app.log", "rb").read().decode(errors="replace")[-1500:]
 print("SMOKE_STATUS", status)
+print("SMOKE_EXIT", code)
 expect = sys.argv[2] if len(sys.argv) > 2 else ""
 print("SMOKE_TEXT", "yes" if expect and expect in body else "no")
 print(out)
 """
 _STATUS = re.compile(r"SMOKE_STATUS (\S+)")
 _TEXT = re.compile(r"SMOKE_TEXT (yes|no)")
+_EXIT = re.compile(r"SMOKE_EXIT (-?\d+|None)")
+EXITED = ("App {entry} exited with code {code} before answering any request: it ran and stopped. When run as "
+          "`python {entry}` it must start its HTTP server and keep serving, e.g. end the file with "
+          "`if __name__ == \"__main__\":` and a call to the function that calls serve_forever().")
 
 
 def smoke_test(run: Callable[[list[str]], SandboxResult], entry: str, expect: str = "") -> WorkPackage:
@@ -48,8 +54,11 @@ def smoke_test(run: Callable[[list[str]], SandboxResult], entry: str, expect: st
     match = _STATUS.search(output)
     status = match.group(1) if match and match.group(1) != "None" else None
     passed = status == "200" and not result.timed_out
-    summary = (f"App {entry} {'answered HTTP 200 on GET /' if passed else f'did not answer HTTP 200 (got {status})'}"
-               f"\n{output[-1200:]}")
+    exited = _EXIT.search(output)  # first match: the tower's own line comes before the app's log
+    head = (f"App {entry} {'answered HTTP 200 on GET /' if passed else f'did not answer HTTP 200 (got {status})'}")
+    if not passed and exited and exited.group(1) != "None":
+        head = EXITED.format(entry=entry, code=exited.group(1))
+    summary = f"{head}\n{output[-1200:]}"
     text = _TEXT.search(output)
     questions = [] if passed else ["app did not answer HTTP 200"]
     if passed and expect and not (text and text.group(1) == "yes"):

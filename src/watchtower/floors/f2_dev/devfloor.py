@@ -15,7 +15,7 @@ from watchtower.engine.sandbox import SandboxResult
 from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_NOTE,  # noqa: F401 (re-export)
                                                _capped, _failure_note, _failure_rows, _problem_note, failures,
                                                stuck_note)
-from watchtower.floors.f2_dev.repair import repair_imports, repair_strings
+from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_strings
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
 from watchtower.roles import Role
@@ -252,7 +252,7 @@ class DevFloor:
             mine = [f for f in files if isinstance(f, dict) and f.get("path") in paths and f.get("delete") is not True]
             stray += [str(f.get("path"))[:100] for f in files if isinstance(f, dict) and f not in mine]
             before = set(self._ws.files())
-            notes += _format_notes(reply) + self._write(mine)
+            notes += _format_notes(reply) + self._write(mine, plan["entry"])
             if on_unit is not None and set(self._ws.files()) - before:
                 on_unit(i, len(todo), paths)
         written = {p.lower() for p in self._ws.files()}  # a stray file another unit then wrote is no news
@@ -292,7 +292,7 @@ class DevFloor:
                     notes = ["Your last reply had no usable files. Reply with one block per file: ### FILE: path, "
                              "then the complete file in a ``` fence."] + carry  # keep what HR said
                     continue
-                notes = _format_notes(reply) + self._write(reply.get("files"))
+                notes = _format_notes(reply) + self._write(reply.get("files"), plan["entry"])
             self._ensure_packages()
             problems = import_problems(self._ws) if self._stdlib_only else []
             has_tests = any(_is_test_file(f) for f in self._ws.files())
@@ -380,7 +380,7 @@ class DevFloor:
                 except WorkspaceError:
                     pass
 
-    def _write(self, files) -> list[str]:
+    def _write(self, files, entry: str = "") -> list[str]:
         notes, same, changed = [], [], False
         written = 0
         for f in (files if isinstance(files, list) else [])[:MAX_FILES_PER_ROUND + 5]:
@@ -407,6 +407,11 @@ class DevFloor:
                     if path.endswith(".py"):
                         content, lines = repair_strings(content)
                         content, added = repair_imports(content)
+                        if path == entry:  # run 10: run() defined, never called, the app exited at once
+                            content, started = repair_main(content)
+                            if started:
+                                notes.append(f"Auto-repaired: {path} never started its server; added "
+                                             f'`if __name__ == "__main__": {started}()` at the end.')
                     try:
                         before = self._ws.read(path)
                     except (WorkspaceError, OSError):

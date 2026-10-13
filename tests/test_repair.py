@@ -80,3 +80,39 @@ def test_attribute_check_never_imports_at_repair_time(monkeypatch):
     from watchtower.floors.f2_dev import repair
     monkeypatch.setattr(importlib, "import_module", lambda *a, **k: (_ for _ in ()).throw(AssertionError("import")))
     assert repair.repair_imports("u = uuid.uuid4()\n")[1] == ["uuid"]
+
+
+SERVES = '''import os
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+PORT = int(os.getenv("PORT", 8000))
+
+class H(BaseHTTPRequestHandler):
+    pass
+
+def run(server_class=HTTPServer, handler_class=H):
+    httpd = server_class(("127.0.0.1", PORT), handler_class)
+    httpd.serve_forever()
+'''
+
+
+def test_repair_main_adds_the_missing_start():
+    from watchtower.floors.f2_dev.repair import repair_main
+    text, name = repair_main(SERVES)
+    assert name == "run" and text.endswith('\n\nif __name__ == "__main__":\n    run()\n')
+    compile(text, "app.py", "exec")
+
+
+def test_repair_main_leaves_alone_what_it_cannot_be_sure_of():
+    from watchtower.floors.f2_dev.repair import repair_main
+    cases = [
+        SERVES + 'if __name__ == "__main__":\n    run()\n',          # already starts
+        SERVES + "run()\n",                                        # top-level call
+        SERVES.replace("def run(server_class", "def run(port, server_class"),  # needs an argument
+        SERVES + "\ndef main():\n    HTTPServer(('', 1), H).serve_forever()\n",  # two candidates
+        SERVES.replace("    httpd.serve_forever()", "    pass"),   # nothing serves
+        "def run(:\n",                                             # does not parse
+        SERVES + "while True:\n    pass\n",                        # top-level loop runs code
+    ]
+    for source in cases:
+        assert repair_main(source) == (source, None), source[-60:]

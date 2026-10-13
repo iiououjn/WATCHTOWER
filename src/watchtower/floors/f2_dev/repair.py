@@ -190,3 +190,36 @@ def repair_imports(source: str) -> tuple[str, list[str]]:
         lines[after - 1] += eol
     lines[after:after] = [f"import {m}{eol}" for m in added]
     return "".join(lines), added
+
+
+_DECLARE = (ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign, ast.FunctionDef, ast.AsyncFunctionDef,
+            ast.ClassDef, ast.Pass)
+
+
+def _no_required_args(fn: ast.FunctionDef) -> bool:
+    a = fn.args
+    positional = a.posonlyargs + a.args
+    return len(a.defaults) == len(positional) and all(d is not None for d in a.kw_defaults)
+
+
+def repair_main(source: str) -> tuple[str, str | None]:
+    """Run 10: an entry file that defines run() (which calls serve_forever()) but never calls it exits at once.
+    Add `if __name__ == "__main__": run()` only when nothing at top level runs code and exactly one top-level
+    function, callable with no arguments, calls .serve_forever(). Anything less certain is left alone."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree = ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return source, None
+    body = tree.body[1:] if ast.get_docstring(tree, clean=False) is not None else tree.body
+    if not all(isinstance(node, _DECLARE) for node in body):
+        return source, None  # a top-level call, loop, if (a __main__ block), with or try: it may already start
+    serving = [node for node in body if isinstance(node, ast.FunctionDef) and _no_required_args(node)
+               and any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                       and n.func.attr == "serve_forever" for n in ast.walk(node))]
+    if len(serving) != 1:
+        return source, None
+    name = serving[0].name
+    nl = "\r\n" if "\r\n" in source else "\n"
+    return source.rstrip("\r\n") + f'{nl}{nl}{nl}if __name__ == "__main__":{nl}    {name}(){nl}', name
