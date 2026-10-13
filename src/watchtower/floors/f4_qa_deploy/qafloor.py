@@ -54,7 +54,7 @@ for c in json.loads(sys.argv[2]):
     except Exception as e:
         detail = type(e).__name__ + ": " + str(e)[:200]
     want = c["expect_text"]  # escaped text renders the same in a browser: "Tom &amp; Jerry" shows "Tom & Jerry"
-    escaped_ok = not re.search(r"<[A-Za-z/!]", want)  # markup expected raw: an escaped tag is a broken page
+    escaped_ok = not re.search(r"<[A-Za-z/!?%]", want)  # markup expected raw: an escaped tag is a broken page
     ok = status == c["expect_status"] and (want in body or escaped_ok and (
         html.escape(want) in body or html.escape(want, quote=False) in body))
     if not ok and not detail:

@@ -381,3 +381,4 @@ def test_the_url_encoded_hint_reaches_the_head_of_the_summary():
     summary = run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py", checks).summary
     seen = ("Floor 4 QA checks failed:\n" + untrusted("sandbox", summary))[:600]
     assert "parse_qs" in seen and summary.splitlines()[0] == "QA checks FAILED:"
+    assert summary.splitlines()[1].startswith("Form data:")
