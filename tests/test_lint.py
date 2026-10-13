@@ -116,3 +116,47 @@ def test_a_big_handler_is_checked_quickly(tmp_path):
     start = time.monotonic()
     problems(tmp_path, HEAD + methods + handlers)
     assert time.monotonic() - start < 2
+
+
+def test_notes_name_fixture_tests_that_never_ran_and_self_patching(tmp_path):
+    from watchtower.floors.f2_dev.lint import idiom_notes
+    ws = Workspace(tmp_path)
+    ws.write("test_app.py", "from unittest.mock import patch\nfrom app import add_todo, get_todos\n\n"
+             "def test_request(path):\n    return path\n\ndef test_a():\n    assert test_request('/')\n\n"
+             "def test_updated_list(client):\n    assert client.get('/')\n\n"
+             "def test_add_item(client):\n    pass\n\n"
+             "@patch('app.add_todo')\ndef test_add_todo(mock_add):\n    add_todo('x')\n    mock_add.assert_called_once_with('x')\n\n"
+             "@patch('app.get_todos')\ndef test_ok(m):\n    import app\n    app.get_todos()\n")
+    notes = idiom_notes(ws)
+    assert len(notes) == 2 and all(len(n) <= 200 for n in notes)
+    assert "test_add_item, test_updated_list" in notes[0] and "never ran" in notes[0] and "test_request" not in notes[0]
+    assert "test_add_todo" in notes[1] and "app.add_todo" in notes[1] and "test_ok" not in notes[1]
+
+
+def test_the_coder_hears_about_tests_that_never_ran(tmp_path):
+    from test_devfloor import ARCH, CODER, FAILED, SPEC, Runner, Script  # noqa: I001
+    from watchtower.floors.f2_dev.devfloor import DevFloor
+    fixture = {"path": "test_app.py", "content": "from app import f\n\ndef test_a(client):\n    assert f()\n"}
+    s = Script({"f2.coder": [{"files": [{"path": "app.py", "content": "def f():\n    return 1\n"}, fixture]}]})
+    DevFloor(ARCH, CODER, ask=s, workspace=Workspace(tmp_path), run=Runner([FAILED]), max_rounds=2).build(
+        SPEC, {"files": [], "entry": "app.py"}, [])
+    assert "so they never ran" in s.prompts["f2.coder"][1]
+
+
+def test_patched_or_fixture_functions_get_no_never_ran_note(tmp_path):
+    from watchtower.floors.f2_dev.lint import idiom_notes
+    ws = Workspace(tmp_path)
+    ws.write("test_app.py", "import app, pytest\nfrom unittest import mock\nfrom unittest.mock import patch as mp\n\n"
+             "@mock.patch.object(app, 'save')\ndef test_a(m):\n    app.add('x')\n\n"
+             "@mp('app.save')\ndef test_b(m):\n    pass\n\n@pytest.fixture\ndef test_client(app):\n    return app\n")
+    assert idiom_notes(ws) == []
+
+
+def test_self_patch_note_keeps_its_advice_and_only_plain_names(tmp_path):
+    from watchtower.floors.f2_dev.lint import idiom_notes
+    ws = Workspace(tmp_path)
+    ws.write("test_app.py", "from unittest.mock import patch\nfrom app_module_name import add_todo_to_file_now\n\n"
+             "@patch('app_module_name.add_todo_to_file_now')\ndef test_add_todo_appends_item_to_the_file(m):\n"
+             "    add_todo_to_file_now('x')\n")
+    (note,) = idiom_notes(ws)
+    assert note.endswith("don't patch it.") and len(note) <= 200
