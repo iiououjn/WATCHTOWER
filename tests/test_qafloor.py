@@ -219,3 +219,10 @@ def test_test_first_text_strips_tags_and_route_descriptions():
     assert test_first_text("<li>milk</li>", set()) == "milk"
     assert test_first_text("The list is empty", set()) == "The list is empty"
     assert test_first_text("The  Todo list", {"the todo list"}) == ""
+
+
+def test_test_first_text_with_several_text_pieces_is_dropped_not_weakened():
+    from watchtower.floors.f4_qa_deploy.qafloor import test_first_text
+    for text in ("<li>milk</li><li>eggs</li>", "Total: <b>3</b>", "<span>2</span> items left", "<p>0</p>"):
+        assert test_first_text(text, set()) == "", text
+    assert test_first_text("<h2>Shopping list</h2>", set()) == "Shopping list"

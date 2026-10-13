@@ -395,9 +395,9 @@ class DevFloor:
                 written += 1
             try:
                 if f.get("delete") is True:
-                    gone = str(f.get("path", ""))
-                    changed = changed or gone in self._ws.files()  # deleting a missing file changes nothing
-                    self._ws.delete(gone)
+                    before_files = set(self._ws.files())
+                    self._ws.delete(str(f.get("path", "")))
+                    changed = changed or set(self._ws.files()) != before_files  # a missing file: no change
                 elif not isinstance(f.get("content"), str):
                     notes.append(f"File rejected: {str(f.get('path'))[:100]!r} has no content")
                 else:

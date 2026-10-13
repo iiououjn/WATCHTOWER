@@ -63,3 +63,20 @@ def test_class_style_use_is_not_a_missing_module_import():
 def test_unittest_mock_imports_the_submodule():
     fixed, added = repair_imports("@unittest.mock.patch('app.x')\ndef test_a(m):\n    pass\n")
     assert added == ["unittest.mock"] and fixed.startswith("import unittest.mock\n")
+
+
+def test_submodule_slips_are_repaired_even_when_the_package_is_imported():
+    src = "import unittest\n\n@unittest.mock.patch('app.x')\ndef test_a(m):\n    pass\n"
+    fixed, added = repair_imports(src)
+    assert added == ["unittest.mock"] and "import unittest.mock\n" in fixed
+    covered = "import unittest.mock\n\n@unittest.mock.patch('app.x')\ndef test_a(m):\n    pass\n"
+    assert repair_imports(covered) == (covered, [])
+    fixed, added = repair_imports("p = html.parser.HTMLParser()\n")
+    assert added == ["html.parser"]
+
+
+def test_attribute_check_never_imports_at_repair_time(monkeypatch):
+    import importlib
+    from watchtower.floors.f2_dev import repair
+    monkeypatch.setattr(importlib, "import_module", lambda *a, **k: (_ for _ in ()).throw(AssertionError("import")))
+    assert repair.repair_imports("u = uuid.uuid4()\n")[1] == ["uuid"]

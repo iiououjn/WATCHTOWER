@@ -982,3 +982,12 @@ def test_no_unchanged_note_when_writes_were_dropped_by_the_cap(tmp_path):
     script = Script({"f2.coder": [{"files": [APP]}, {"files": [APP, APP, APP] + extra}]})
     dev(tmp_path, script, Runner([FAILED, FAILED, FAILED]), rounds=3).build(SPEC, PLAN3, [])
     assert "back unchanged" not in script.prompts["f2.coder"][2]
+
+
+def test_a_normalised_delete_path_counts_as_a_change(tmp_path):
+    ws = Workspace(tmp_path)
+    ws.write(APP["path"], APP["content"])
+    ws.write("old.py", "x = 1\n")
+    script = Script({"f2.coder": [{"files": [APP]}, {"files": [APP, {"path": "./old.py", "delete": True}]}]})
+    dev(tmp_path, script, Runner([FAILED, FAILED, FAILED]), rounds=3).build(SPEC, PLAN3, [])
+    assert "old.py" not in ws.files() and "back unchanged" not in script.prompts["f2.coder"][2]

@@ -104,7 +104,10 @@ def test_first_text(text: str, shows: set[str]) -> str:
     """Test-first text (no code yet) is kept as written — the coder makes it appear — unless no page can show it:
     escaped markup, more than 12 words, or the architect's own route description copied word for word (run 8).
     The description regex is not applied here: 'The list is empty' is real page text."""
-    text = _unmarked(text)
+    if _MARKUP.search(text) or _ESCAPED.search(text):  # one real piece of text, or none: never a weaker check
+        pieces = [p for p in map(str.strip, _MARKUP.split(text)) if p]
+        text = pieces[0] if len(pieces) == 1 and not _ESCAPED.search(pieces[0]) and re.search(r"\w{2,}",
+                                                                                            pieces[0]) else ""
     return "" if len(text.split()) > MAX_TEXT_WORDS or " ".join(text.lower().split()) in shows else text
 
 

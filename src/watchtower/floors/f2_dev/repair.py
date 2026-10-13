@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import ast
-import importlib
 import io
+import sys
 import tokenize
 import warnings
+
+# The allow-listed modules, loaded once with the tower itself, so the attribute check below only reads
+# sys.modules: nothing is imported (or searched for on disk, where a workspace file could shadow it) at repair time.
+import datetime, html, html.parser, http.client, http.cookies, http.server, json, math, os, random  # noqa: E401,F401,I001
+import re, shutil, sqlite3, tempfile, time, unittest, unittest.mock, urllib.error, urllib.parse  # noqa: E401,F401,I001
+import urllib.request, uuid  # noqa: E401,F401,I001
 
 MAX_REPAIRS, MAX_SPAN, MAX_REPAIR_BYTES = 6, 4, 100_000
 _AFTER_CLOSE = set(")]},:+.% \t\r")
@@ -93,27 +99,35 @@ def repair_strings(source: str) -> tuple[str, list[int]]:
 # to set: importing the module there would turn a clear NameError into a confusing AttributeError.
 IMPORTABLE = {"os", "sys", "json", "re", "time", "datetime", "html", "sqlite3", "random", "math", "tempfile",
               "shutil", "uuid", "unittest", "io"}
-SUBMODULES = {"urllib": {"parse", "request", "error"}, "http": {"server", "client", "cookies"}, "unittest": {"mock"}}
+SUBMODULES = {"urllib": {"parse", "request", "error"}, "http": {"server", "client", "cookies"},
+              "unittest": {"mock"}, "html": {"parser"}}
 
 
 def _has(module: str, attr: str) -> bool:
-    """Does the host's own standard-library module have this attribute? (Never imports AI-written code: `module`
-    comes from the allow-list.) `datetime.now()` means the class, not the module: no import there."""
-    try:
-        return hasattr(importlib.import_module(module), attr)
-    except ImportError:
-        return False
+    """Does the stdlib module (loaded above) have this attribute? `datetime.now()` means the class, not the module:
+    no import there. Submodules a bare import does not load (html.parser, unittest.mock …) are in SUBMODULES and
+    handled first; the rest (os.path, json.decoder) come with the package."""
+    mod = sys.modules.get(module)
+    return mod is not None and hasattr(mod, attr)
 
 
-def _bound(tree: ast.AST) -> set[str] | None:
-    """Every name the file binds anywhere (None after a star import: anything may be bound)."""
+def _bound(tree: ast.AST) -> tuple[set[str], set[str], set[str]] | None:
+    """Every name the file binds anywhere, the packages bound only by a plain `import pkg…`, and the dotted
+    modules it imports (None after a star import: anything may be bound)."""
     names: set[str] = set()
+    plain: set[str] = set()
+    dotted: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             for a in node.names:
                 if a.name == "*":
                     return None
                 names.add(a.asname or a.name.split(".")[0])
+                if isinstance(node, ast.Import) and not a.asname:
+                    plain.add(a.name.split(".")[0])
+                    dotted.add(a.name)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    dotted.add(f"{node.module}.{a.name}")  # from unittest import mock: unittest.mock is loaded
         elif isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
             names.add(node.id)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
@@ -126,7 +140,7 @@ def _bound(tree: ast.AST) -> set[str] | None:
             names.update(node.names)
         elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
             names.add(node.name)
-    return names
+    return names, {p for p in plain if p in names}, dotted
 
 
 def repair_imports(source: str) -> tuple[str, list[str]]:
@@ -140,19 +154,22 @@ def repair_imports(source: str) -> tuple[str, list[str]]:
             tree = ast.parse(source)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         return source, []
-    bound = _bound(tree)
-    if bound is None:
+    found = _bound(tree)
+    if found is None:
         return source, []
+    bound, plain, dotted = found
     wanted: set[str] = set()
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)):
             continue
         name, attr = node.value.id, node.attr
-        if name in bound or name not in IMPORTABLE | set(SUBMODULES):
+        if attr in SUBMODULES.get(name, ()) and (name not in bound or name in plain):
+            if f"{name}.{attr}" not in dotted:  # import unittest, then unittest.mock.patch: mock is not loaded
+                wanted.add(f"{name}.{attr}")
             continue
-        if attr in SUBMODULES.get(name, ()):
-            wanted.add(f"{name}.{attr}")  # urllib.parse.quote → import urllib.parse
-        elif name in IMPORTABLE and _has(name, attr):
+        if name in bound or name not in IMPORTABLE:
+            continue
+        if _has(name, attr):
             wanted.add(name)
         else:
             return source, []  # a use that is not this module (datetime.now): leave the file alone
