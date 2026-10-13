@@ -77,6 +77,8 @@ def _str(value, cap: int) -> str | None:
 _DESCRIBES = re.compile(r"^(the|a|an)\s+(\w+\s+){0,2}(home ?page|page|form|list|field|input|button|table|screen)\b"
                        r"(\s+\S+){2,}|\b(input field|text field|text box|submit button)\b", re.IGNORECASE)
 MAX_TEXT_WORDS = 12
+_MARKUP = re.compile(r"<[^<>]*>|\\[nrt]")
+_ESCAPED = re.compile(r"[<>\\]|&(lt|gt);", re.IGNORECASE)
 
 
 def _page_text(text: str, known: str = "") -> str:
@@ -85,7 +87,23 @@ def _page_text(text: str, known: str = "") -> str:
     title or routes really contain it."""
     if text and text.lower() in known.lower():
         return text
+    text = _unmarked(text)
     return "" if len(text.split()) > MAX_TEXT_WORDS or _DESCRIBES.search(text) else text
+
+
+def _unmarked(text: str) -> str:
+    """'<li>milk</li>' → 'milk'. Escaped tags ('&lt;ul>') or a written '\\n' can never match the raw page."""
+    if not (_MARKUP.search(text) or _ESCAPED.search(text)):
+        return text
+    return max((p for p in map(str.strip, _MARKUP.split(text)) if not _ESCAPED.search(p)), key=len, default="")
+
+
+def test_first_text(text: str, shows: set[str]) -> str:
+    """Test-first text (no code yet) is kept as written — the coder makes it appear — unless no page can show it:
+    escaped markup, more than 12 words, or the architect's own route description copied word for word (run 8).
+    The description regex is not applied here: 'The list is empty' is real page text."""
+    text = _unmarked(text)
+    return "" if len(text.split()) > MAX_TEXT_WORDS or " ".join(text.lower().split()) in shows else text
 
 
 def _check(raw) -> dict | None:

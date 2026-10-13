@@ -129,3 +129,19 @@ def test_oversight_garbage_degrades():
     o, _ = oversight({"f5.lead": ["bad"], "f5.auditor": ["bad"]})
     assert o.focus(SPEC) == ["add a todo", "list todos"] and o.audit(SPEC, ["a"], "", "") == ""
     assert o.retro(SPEC, []) == []
+
+
+def test_test_first_checks_lose_descriptions_and_markup_but_keep_real_text():
+    desc = {"name": "d", "path": "/", "expect_text": "A form to add a new item and a list of all items."}
+    long = {"name": "p", "method": "POST", "path": "/add", "form": {"item": "x"},
+            "expect_text": "No direct response, but the page should update to show the new item in the list."}
+    markup = {"name": "m", "path": "/", "expect_text": "&lt;ul>\\n&lt;/ul>"}
+    empty = {"name": "e", "path": "/", "expect_text": "The list is empty"}
+    shows = {"name": "s", "path": "/", "expect_text": "The  TODO list"}  # the architect's own description
+    qa, _ = office({"f4.qa": [{"checks": [desc, long, markup]}, {"checks": [ADD, empty, shows]}]})
+    routes = parse_routes([{"method": "GET", "path": "/", "shows": "the todo list"},
+                           {"method": "POST", "path": "/add", "fields": ["item"],
+                            "shows": "A form to add a new item and a list of all items."}])
+    checks = {c["name"]: c["expect_text"] for c in qa.plan_checks(SPEC, routes)}
+    # 'A form to add…' is 12 words but copied from a route description; GET checks left with no text are dropped
+    assert checks == {"p": "", "add": "milk", "e": "The list is empty"}

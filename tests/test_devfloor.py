@@ -937,3 +937,30 @@ def test_deletes_do_not_use_up_the_file_cap(tmp_path):
     script = Script({"f2.coder": [{"files": files}]})
     dev(tmp_path, script, Runner([OK]), rounds=1).build(SPEC, PLAN3, [])
     assert sorted(Workspace(tmp_path).files()) == ["app.py", "store.py", "test_app.py"]
+
+
+def test_missing_standard_import_is_added_and_the_coder_told(tmp_path):
+    body = "import unittest\nfrom app import f\n\nclass T(unittest.TestCase):\n    def test_a(self):\n" \
+           "        self.assertTrue(os.getcwd())\n"
+    script = Script({"f2.coder": [{"files": [APP, {"path": "test_app.py", "content": body}]}]})
+    dev(tmp_path, script, Runner([FAILED]), rounds=2).build(SPEC, PLAN3, [])
+    assert Workspace(tmp_path).read("test_app.py") == "import os\n" + body
+    assert "added the missing import os to test_app.py" in script.prompts["f2.coder"][1]
+
+
+def test_a_reply_that_changes_nothing_is_called_out(tmp_path):
+    ws = Workspace(tmp_path)
+    ws.write(APP["path"], APP["content"])
+    ws.write(TEST["path"], TEST["content"])
+    script = Script({"f2.coder": [{"files": [APP, TEST]}, {"files": [APP, TEST]}]})
+    dev(tmp_path, script, Runner([FAILED, FAILED]), rounds=2).build(SPEC, PLAN3, [])
+    second = script.prompts["f2.coder"][1]
+    assert "sent app.py, test_app.py back unchanged" in second
+
+
+def test_a_reply_that_changes_one_file_is_not_called_unchanged(tmp_path):
+    ws = Workspace(tmp_path)
+    ws.write(APP["path"], APP["content"])
+    script = Script({"f2.coder": [{"files": [APP, TEST]}, {"files": [APP]}]})
+    dev(tmp_path, script, Runner([FAILED, FAILED]), rounds=2).build(SPEC, PLAN3, [])
+    assert "unchanged" not in script.prompts["f2.coder"][1]

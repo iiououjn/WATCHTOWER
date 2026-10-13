@@ -5,7 +5,7 @@ from typing import Callable
 
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.engine.model_socket import BadModelOutput
-from watchtower.floors.f4_qa_deploy.qafloor import MAX_CHECKS, has_page_text, parse_checks
+from watchtower.floors.f4_qa_deploy.qafloor import MAX_CHECKS, has_page_text, parse_checks, test_first_text
 from watchtower.floors.framework import strs, untrusted
 from watchtower.roles import Role
 
@@ -55,6 +55,9 @@ class QAOffice:
             except ADVISORY_ERRORS:
                 continue
             checks += parse_checks(out)[:3]  # test-first: the coder will make this text appear, keep it as written
+        shows = {" ".join(r["shows"].lower().split()) for r in routes if r["shows"].strip()}
+        for c in checks:  # …unless no page could ever show it
+            c["expect_text"] = test_first_text(c["expect_text"], shows)
         paths = {r["path"] for r in routes}
         checks = [c for c in checks if c["path"].split("?")[0] in paths
                   and (c["method"] == "POST" or c["expect_text"])][:MAX_CHECKS]
