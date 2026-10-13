@@ -4,7 +4,8 @@
 
 If you discover a security vulnerability in Watchtower, please **do not** open a public issue.
 
-Instead, please report it privately by emailing the maintainer. Include:
+Instead, report it privately through GitHub: open the repository's **Security** tab and choose
+**Report a vulnerability** (https://github.com/rishiupadhyaygithub/watchtower/security/advisories/new). Include:
 
 1. A description of the vulnerability
 2. Steps to reproduce
