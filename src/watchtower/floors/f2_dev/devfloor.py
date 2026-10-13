@@ -16,6 +16,7 @@ from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_N
                                                _capped, _failure_note, _failure_rows, _problem_note, failures,
                                                stuck_note)
 from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings
+from watchtower.floors.f2_dev.lint import handler_state_problems
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
 from watchtower.roles import Role
@@ -295,7 +296,7 @@ class DevFloor:
                 notes = _format_notes(reply) + self._write(reply.get("files"), plan["entry"])
             self._ensure_packages()
             notes += self._link_entry(plan["entry"])
-            problems = import_problems(self._ws) if self._stdlib_only else []
+            problems = handler_state_problems(self._ws) + (import_problems(self._ws) if self._stdlib_only else [])
             has_tests = any(_is_test_file(f) for f in self._ws.files())
             result = self._run(TEST_COMMAND)
             output = ((result.stdout or "") + (result.stderr or ""))[-2000:]
