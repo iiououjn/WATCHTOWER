@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import warnings
 from fnmatch import fnmatch
 from pathlib import PurePosixPath
 from typing import Callable, Sequence
@@ -17,17 +18,32 @@ from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceEr
 from watchtower.roles import Role
 
 TEST_RUNNER = """\
-import inspect, json, sys, unittest
+import fnmatch, inspect, json, os, sys, unittest
 class Fn(unittest.FunctionTestCase):  # pytest-style 'def test_x(): assert ...' runs too, named like a method
     def __str__(self):
         f = self._testFunc
         return f"{f.__name__} ({f.__module__}.{f.__name__})"
+def plain(fn):
+    if inspect.iscoroutinefunction(fn) or inspect.isgeneratorfunction(fn):
+        def refuse():
+            raise AssertionError("async/generator test functions are not run: use a plain def, or "
+                                 "unittest.IsolatedAsyncioTestCase")
+        refuse.__name__, refuse.__module__ = fn.__name__, fn.__module__
+        return refuse
+    return fn
+def no_args(fn):
+    return all(p.default is not p.empty or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+               for p in inspect.signature(fn).parameters.values())
 class Loader(unittest.TestLoader):
     def loadTestsFromModule(self, module, *args, **kwargs):
         suite = super().loadTestsFromModule(module, *args, **kwargs)
+        if not fnmatch.fnmatch(os.path.basename(getattr(module, "__file__", None) or ""), "test*.py"):
+            return suite  # app packages are not test files, even when discovery walks them
+        case = type("Fn", (Fn,), {"__module__": module.__name__})  # module fixtures wrap these tests too
         for name, fn in sorted(vars(module).items()):
-            if name.startswith("test") and inspect.isfunction(fn) and fn.__module__ == module.__name__:
-                suite.addTest(Fn(fn))
+            if (name.startswith("test") and inspect.isfunction(fn) and fn.__module__ == module.__name__
+                    and no_args(fn)):  # a helper that takes arguments is not a test
+                suite.addTest(case(plain(fn)))
         return suite
 suite = Loader().discover(".", pattern="test*.py")
 result = unittest.TextTestRunner(stream=sys.stderr, verbosity=1).run(suite)
@@ -197,37 +213,74 @@ TEST_DIAGNOSE_PROMPT = (
 )
 
 
-MAX_REPAIRS = 6
+MAX_REPAIRS, MAX_SPAN, MAX_REPAIR_BYTES = 6, 4, 100_000
+_AFTER_CLOSE = set(")]},:+.%# \t\r")
+
+
+def _syntax_error(text: str):
+    """compile() quietly: the SyntaxError, None when it compiles, or False when compile itself gives up."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # invalid escapes etc. must not spam the tower's stderr
+        try:
+            compile(text, "<coder>", "exec", dont_inherit=True)
+            return None
+        except SyntaxError as e:
+            return e
+        except (ValueError, RecursionError, MemoryError):
+            return False
+
+
+def _close_at(line: str, quote: str) -> int:
+    i = 0
+    while i < len(line):
+        if line[i] == "\\":
+            i += 2
+            continue
+        if line[i] == quote:
+            return i
+        i += 1
+    return -1
 
 
 def repair_strings(source: str) -> tuple[str, list[int]]:
-    """Undo the coder's most common JSON slip: '\\n' sent as a real line break, which splits a one-line string
-    ('unterminated string literal'). Each join turns that line break back into '\\n' and is kept only if the
-    error then moves past that line — so a genuinely broken quote is left for the coder, never 'closed'."""
-    text, fixed = source, []
+    """Undo the coder's most common JSON slip: '\\n' (or '\\r\\n') sent as a real line break, which splits a
+    one-line string ('unterminated string literal'). A join is kept only when the string's own quote closes on a
+    following line and is followed by what normally follows a string — ')', ',', ':', end of line … — never by
+    another quote or a word; and the error must then move past that line. A truly missing quote is left alone."""
+    if len(source) > MAX_REPAIR_BYTES:
+        return source, []
+    text, fixed, removed = source, [], 0
     for _ in range(MAX_REPAIRS):
-        try:
-            compile(text, "<coder>", "exec")
+        err = _syntax_error(text)
+        if not err or not (err.lineno and err.offset and "unterminated" in err.msg and "string" in err.msg
+                           and "triple" not in err.msg):
             break
-        except SyntaxError as e:
-            if not (e.lineno and "unterminated" in e.msg and "string" in e.msg and "triple" not in e.msg):
-                break
-            lines = text.split("\n")
-            at = e.lineno - 1
-            if at + 1 >= len(lines):
-                break
-            candidate = "\n".join(lines[:at] + [lines[at] + "\\n" + lines[at + 1]] + lines[at + 2:])
-            try:
-                compile(candidate, "<coder>", "exec")
-            except SyntaxError as after:
-                if not after.lineno or after.lineno <= e.lineno:
-                    break
-            except ValueError:
-                break
-            text = candidate
-            fixed.append(e.lineno + len(fixed))  # line numbers in the coder's own file
-        except ValueError:  # NUL bytes etc.: not this repair's business
+        lines = text.split("\n")
+        at = err.lineno - 1
+        quote = next((c for c in lines[at][err.offset - 1:] if c in "'\""), None) if at < len(lines) else None
+        if quote is None:
             break
+        joined, used = lines[at], 0
+        for k in range(1, MAX_SPAN + 1):
+            if at + k >= len(lines):
+                break
+            crlf = joined.endswith("\r")
+            joined = joined[:-1] + "\\r\\n" if crlf else joined + "\\n"
+            nxt, close = lines[at + k], _close_at(lines[at + k], quote)
+            joined += nxt
+            if close >= 0:
+                rest = nxt[close + 1:]
+                used = k if not rest or rest[0] in _AFTER_CLOSE else 0
+                break
+        if not used:
+            break
+        candidate = "\n".join(lines[:at] + [joined] + lines[at + used + 1:])
+        after = _syntax_error(candidate)
+        if after is False or (after is not None and (not after.lineno or after.lineno <= err.lineno)):
+            break
+        text = candidate
+        fixed.append(err.lineno + removed)  # the line number in the coder's own file
+        removed += used
     return text, fixed
 
 
@@ -248,7 +301,7 @@ def app_is_tested(ws: Workspace) -> bool:
     for name in tests:
         try:
             tree = ast.parse(ws.read(name))
-        except (SyntaxError, ValueError):
+        except (SyntaxError, ValueError, RecursionError, MemoryError):
             continue
         for node in ast.walk(tree):
             mods = ([a.name for a in node.names] if isinstance(node, ast.Import)

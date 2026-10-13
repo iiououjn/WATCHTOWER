@@ -847,3 +847,56 @@ def test_runner_accepts_pytest_style_test_functions(tmp_path):
     summary = test_summary(out.stdout)
     assert summary["run"] == 2 and summary["failures"] == 1
     assert [f["test"] for f in failures(out.stderr)] == ["test_bad"]
+
+
+@pytest.mark.parametrize("src", ['def render(page="home):\n    """Render\n    one page."""\n    return page\n',
+                                 'NAME = "app\nHELP = """\nusage\n"""\n'])
+def test_a_genuinely_missing_quote_is_never_repaired(src):
+    assert repair_strings(src) == (src, [])
+
+
+def test_strings_split_over_several_lines_and_crlf_are_repaired():
+    fixed, lines = repair_strings('print("Usage:\n  foo\n")\nx = 1\n')
+    compile(fixed, "a.py", "exec")
+    assert lines == [1] and 'print("Usage:\\n  foo\\n")' in fixed
+    fixed, lines = repair_strings('r = "HTTP/1.1 200 OK\r\n\r\n"\r\ny = 2\r\n')
+    compile(fixed, "a.py", "exec")
+    assert lines == [1] and '"HTTP/1.1 200 OK\\r\\n\\r\\n"' in fixed
+
+
+def test_repair_survives_absurd_sources_quietly(capfd):
+    deep = "x = " + "+".join(["1"] * 20000) + "\n"
+    assert repair_strings(deep) == (deep, [])
+    noisy = 'import re\np = re.compile("\\d+")\n'
+    assert repair_strings(noisy) == (noisy, []) and "SyntaxWarning" not in capfd.readouterr().err
+
+
+def _run_runner(tmp_path, files):
+    import subprocess
+    import sys
+    from watchtower.floors.f2_dev.devfloor import TEST_RUNNER, test_summary
+    for name, body in files.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(body)
+    out = subprocess.run([sys.executable, "-I", "-c", TEST_RUNNER], cwd=tmp_path, capture_output=True, text=True,
+                         timeout=60)
+    return test_summary(out.stdout), out.stderr
+
+
+def test_runner_skips_helpers_and_package_functions(tmp_path):
+    summary, err = _run_runner(tmp_path, {
+        "app.py": "def add(a, b):\n    return a + b\n",
+        "pkg/__init__.py": "def test_connection(dsn):\n    raise RuntimeError('not a test')\n",
+        "test_app.py": "import unittest\nfrom app import add\n\ndef test_request(path):\n    return add(1, 2)\n\n"
+                       "class T(unittest.TestCase):\n    def test_a(self):\n        self.assertEqual(test_request('/'), 3)\n"})
+    assert summary == {"run": 1, "skipped": 0, "failures": 0, "errors": 0}, err
+
+
+def test_function_tests_see_setupmodule_and_async_or_generator_tests_fail(tmp_path):
+    summary, err = _run_runner(tmp_path, {
+        "test_app.py": "STATE = {}\n\ndef setUpModule():\n    STATE['ready'] = True\n\n"
+                       "def test_state():\n    assert STATE.get('ready')\n\n"
+                       "async def test_async():\n    assert False\n\n"
+                       "def test_gen():\n    yield\n    assert False\n"})
+    assert summary["run"] == 3 and summary["failures"] + summary["errors"] == 2, err
+    assert "IsolatedAsyncioTestCase" in err or "not run" in err
