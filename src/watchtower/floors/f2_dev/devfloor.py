@@ -44,10 +44,10 @@ def no_args(fn):
     return all(p.default is not p.empty or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in sig.parameters.values())
 def hook(fn, arg):  # pytest's setup_module(module) / setup_function(function): the argument is optional
     try:
-        wants = len(inspect.signature(fn).parameters)
+        inspect.signature(fn).bind(arg)
     except (ValueError, TypeError):
-        wants = 0
-    return fn(arg) if wants else fn()
+        return fn()
+    return fn(arg)
 class Loader(unittest.TestLoader):
     def loadTestsFromModule(self, module, *args, **kwargs):
         suite = super().loadTestsFromModule(module, *args, **kwargs)

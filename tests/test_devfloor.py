@@ -1023,3 +1023,12 @@ def test_runner_honours_pytest_setup_and_teardown_names(tmp_path):
                        "def test_a():\n    assert LOG == ['m', 'test_a']\n\n"
                        "def test_b():\n    assert LOG == ['m', 'test_a', 'down', 'test_b']\n"})
     assert summary == {"run": 2, "skipped": 0, "failures": 0, "errors": 0}, err
+
+
+def test_runner_pytest_hooks_edge_cases(tmp_path):
+    summary, err = _run_runner(tmp_path, {
+        "test_a.py": "LOG = []\n\ndef setUpModule():\n    LOG.append('ut')\n\ndef setup_module():\n    LOG.append('py')\n\n"
+                     "def test_only_unittest_name_ran():\n    assert LOG == ['ut']\n",
+        "test_b.py": "def setup_module(*, verbose=False):\n    raise RuntimeError('boom')\n\ndef test_never():\n    pass\n"})
+    assert summary is not None and summary["run"] >= 1 and summary["errors"] == 1 and summary["failures"] == 0, err
+    assert "boom" in err

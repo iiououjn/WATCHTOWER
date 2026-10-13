@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import ast
+import re
 import warnings
 
 from watchtower.engine.workspace import Workspace, WorkspaceError
 
+_PLAIN = re.compile(r"[A-Za-z_][\w.]{0,80}")
 _MUTATORS = {"append", "extend", "insert", "update", "add", "setdefault", "pop", "remove", "clear", "discard"}
 MAX_LINT_BYTES = 100_000
 
@@ -125,18 +127,27 @@ def _patched(fn: ast.FunctionDef) -> list[str]:
     out = []
     for d in fn.decorator_list:
         if (isinstance(d, ast.Call) and ast.unparse(d.func).split(".")[-1] == "patch" and d.args
-                and isinstance(d.args[0], ast.Constant) and isinstance(d.args[0].value, str)):
+                and isinstance(d.args[0], ast.Constant) and isinstance(d.args[0].value, str)
+                and _PLAIN.fullmatch(d.args[0].value)):
             out.append(d.args[0].value)
     return out
+
+
+def _decorated(fn: ast.FunctionDef, aliases: set[str]) -> bool:
+    """Any patch (patch.object, `patch as mp`) or fixture decorator: something else supplies the arguments."""
+    words = ("patch", "fixture", "mock", *aliases)
+    return any(w in ast.unparse(d) for d in fn.decorator_list for w in words)
 
 
 def _test_file_notes(tree: ast.Module) -> tuple[list[str], list[tuple[str, str]]]:
     called = {n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
     imported = {a.asname or a.name: f"{n.module}.{a.name}" for n in tree.body if isinstance(n, ast.ImportFrom)
                 and n.module for a in n.names}
+    aliases = {a.asname for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) for a in n.names
+               if a.asname and a.name in ("patch", "fixture")}
     fixtures, self_patch = [], []
     for fn in (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name.startswith("test")):
-        if _required_args(fn) and not _patched(fn) and fn.name not in called:
+        if _required_args(fn) and not _decorated(fn, aliases) and fn.name not in called:
             fixtures.append(fn.name)  # a pytest fixture argument: nothing supplies it here, so it never ran
         calls = {n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
         for target in _patched(fn):
@@ -172,6 +183,6 @@ def idiom_notes(ws: Workspace) -> list[str]:
                      f"{names}. Make them take no arguments.")
     if self_patch:
         test, target = self_patch[0]
-        notes.append(f"{test[:40]} patches {target[:40]} but calls its own imported copy, so the real function runs "
+        notes.append(f"{test[:25]} patches {target[:25]} but calls its own imported copy, so the real function runs "
                      "and the mock is never called. Test the real function's result; don't patch it.")
     return [n[:200] for n in notes]
