@@ -25,7 +25,7 @@ TEXT_NOTE = ("\nYour last checks had no usable expect_text. expect_text must be 
 # Runs INSIDE the sandbox. argv: entry, checks-JSON. Starts the app, runs each check in order against it,
 # prints one WATCHTOWER_QA line with the results, then the app's log tail.
 QA_SCRIPT = """\
-import json, os, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+import html, json, os, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 port = os.environ.get("WT_PORT", "8000")
 base = "http://127.0.0.1:" + port
 log = open("/tmp/app.log", "wb")
@@ -53,9 +53,14 @@ for c in json.loads(sys.argv[2]):
         status, body = e.code, e.read(200000).decode(errors="replace")
     except Exception as e:
         detail = type(e).__name__ + ": " + str(e)[:200]
-    ok = status == c["expect_status"] and c["expect_text"] in body
+    want = c["expect_text"]  # escaped text renders the same in a browser: "Tom &amp; Jerry" shows "Tom & Jerry"
+    ok = status == c["expect_status"] and (want in body or html.escape(want) in body
+                                           or html.escape(want, quote=False) in body)
     if not ok and not detail:
-        detail = f"expected {c['expect_status']} with {c['expect_text']!r}, got {status}: {body[:300]}"
+        coded = [e for e in {urllib.parse.quote_plus(want), urllib.parse.quote(want)} if e != want and e in body]
+        hint = (f"the page shows it still URL-encoded ({coded[0][:60]!r}): decode form data with "
+                "urllib.parse.parse_qs; " if want and coded else "")
+        detail = f"{hint}expected {c['expect_status']} with {want!r}, got {status}: {body[:300]}"
     results.append({"name": c["name"], "pass": ok, "status": status, "detail": detail})
 try:
     os.killpg(p.pid, 9)
