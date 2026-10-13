@@ -116,3 +116,31 @@ def test_repair_main_leaves_alone_what_it_cannot_be_sure_of():
     ]
     for source in cases:
         assert repair_main(source) == (source, None), source[-60:]
+
+
+def test_repair_main_starts_the_root_that_reaches_the_server():
+    from watchtower.floors.f2_dev.repair import repair_main
+    source = SERVES.replace("def run(server_class", "def run(port, server_class") + (
+        "\ndef init_db():\n    pass\n\ndef main():\n    init_db()\n    run(8000)\n")
+    text, name = repair_main(source)
+    assert name == "main" and text.rstrip().endswith("main()")
+
+
+def test_repair_main_more_unsure_cases_are_left_alone():
+    from watchtower.floors.f2_dev.repair import repair_main
+    cases = [
+        SERVES + "\nrun = None\n",                                         # rebound after its def
+        SERVES + "\ndef a():\n    run()\n\ndef b():\n    run()\n",         # two roots
+        SERVES.replace("def run(", "async def run("),                      # async: not ours to start
+        SERVES.replace("def run(", "class S:\n  def run(self, ") .replace("handler_class=H):", "handler_class=H):"),
+        SERVES + 'if True:\n    pass\n',                                   # top-level if
+        "x = '" + "a" * 200_000 + "'\n" + SERVES,                          # too big to repair
+    ]
+    for source in cases:
+        assert repair_main(source) == (source, None), source[-60:]
+
+
+def test_repair_main_keeps_windows_newlines():
+    from watchtower.floors.f2_dev.repair import repair_main
+    text, name = repair_main(SERVES.replace("\n", "\r\n"))
+    assert name == "run" and text.endswith('\r\n\r\nif __name__ == "__main__":\r\n    run()\r\n') and "\n\n" not in text.replace("\r\n", "")

@@ -202,10 +202,17 @@ def _no_required_args(fn: ast.FunctionDef) -> bool:
     return len(a.defaults) == len(positional) and all(d is not None for d in a.kw_defaults)
 
 
+def _calls(fn: ast.FunctionDef) -> set[str]:
+    return {n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+
+
 def repair_main(source: str) -> tuple[str, str | None]:
     """Run 10: an entry file that defines run() (which calls serve_forever()) but never calls it exits at once.
-    Add `if __name__ == "__main__": run()` only when nothing at top level runs code and exactly one top-level
-    function, callable with no arguments, calls .serve_forever(). Anything less certain is left alone."""
+    Add `if __name__ == "__main__": root()` only when nothing at top level runs code, exactly one top-level
+    function calls .serve_forever(), and exactly one top-level function callable with no arguments reaches it
+    through direct calls while nothing else calls it (main() → init_db(); run() starts main). Else: alone."""
+    if len(source.encode("utf-8", "replace")) > MAX_REPAIR_BYTES:
+        return source, None
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -215,11 +222,30 @@ def repair_main(source: str) -> tuple[str, str | None]:
     body = tree.body[1:] if ast.get_docstring(tree, clean=False) is not None else tree.body
     if not all(isinstance(node, _DECLARE) for node in body):
         return source, None  # a top-level call, loop, if (a __main__ block), with or try: it may already start
-    serving = [node for node in body if isinstance(node, ast.FunctionDef) and _no_required_args(node)
-               and any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                       and n.func.attr == "serve_forever" for n in ast.walk(node))]
+    names = [t.id for node in body if isinstance(node, (ast.Assign, ast.AnnAssign))
+             for t in (node.targets if isinstance(node, ast.Assign) else [node.target]) for t in ast.walk(t)
+             if isinstance(t, ast.Name)]
+    names += [node.name for node in body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+    fns = {node.name: node for node in body if isinstance(node, ast.FunctionDef) and names.count(node.name) == 1}
+    serving = [name for name, fn in fns.items() if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                                                      and n.func.attr == "serve_forever" for n in ast.walk(fn))]
     if len(serving) != 1:
         return source, None
-    name = serving[0].name
+    calls = {name: _calls(fn) & set(fns) for name, fn in fns.items()}
+
+    def reaches(name: str) -> bool:  # breadth-first: linear in the call graph, cycles end it
+        seen, todo = {name}, [name]
+        while todo:
+            current = todo.pop()
+            if current == serving[0]:
+                return True
+            todo += [c for c in calls[current] - seen]
+            seen |= calls[current]
+        return False
+    called = set().union(*calls.values())
+    roots = [name for name in fns if name not in called and _no_required_args(fns[name]) and reaches(name)]
+    if len(roots) != 1:
+        return source, None
+    name = roots[0]
     nl = "\r\n" if "\r\n" in source else "\n"
     return source.rstrip("\r\n") + f'{nl}{nl}{nl}if __name__ == "__main__":{nl}    {name}(){nl}', name

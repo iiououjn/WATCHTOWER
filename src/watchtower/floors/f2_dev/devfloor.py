@@ -407,7 +407,7 @@ class DevFloor:
                     if path.endswith(".py"):
                         content, lines = repair_strings(content)
                         content, added = repair_imports(content)
-                        if path == entry:  # run 10: run() defined, never called, the app exited at once
+                        if str(PurePosixPath(path.strip())) == entry:  # run 10: run() defined, never called, the app exited at once
                             content, started = repair_main(content)
                             if started:
                                 notes.append(f"Auto-repaired: {path} never started its server; added "
