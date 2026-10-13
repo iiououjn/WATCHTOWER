@@ -142,6 +142,9 @@ def test_first_text(text: str, shows: set[str]) -> str:
     return "" if len(text.split()) > MAX_TEXT_WORDS or " ".join(text.lower().split()) in shows else text
 
 
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
 def _check(raw) -> dict | None:
     if not isinstance(raw, dict):
         return None
@@ -157,7 +160,10 @@ def _check(raw) -> dict | None:
     status = raw.get("expect_status")
     status = status if isinstance(status, int) and not isinstance(status, bool) and 100 <= status <= 599 else 200
     status = 200 if 300 <= status < 400 else status  # the runner follows redirects, so 3xx means the page after
-    return {"name": _str(raw.get("name"), 80) or path, "method": method, "path": path, "form": dict(form),
+    if status < 400 and form and all(not v.strip() for v in form.values()):
+        return None  # run 17: nothing but blanks must succeed — no correct app passes it; 4xx is a real check
+    name = _CONTROL.sub("", _str(raw.get("name"), 80) or "")
+    return {"name": name or path, "method": method, "path": path, "form": dict(form),
             "expect_status": status, "expect_text": _str(raw.get("expect_text"), 200) or ""}
 
 

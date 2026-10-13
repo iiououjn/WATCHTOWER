@@ -382,3 +382,28 @@ def test_the_url_encoded_hint_reaches_the_head_of_the_summary():
     seen = ("Floor 4 QA checks failed:\n" + untrusted("sandbox", summary))[:600]
     assert "parse_qs" in seen and summary.splitlines()[0] == "QA checks FAILED:"
     assert summary.splitlines()[1].startswith("Form data:")
+
+
+def _post(form, status=200, name="add"):
+    return {"checks": [{"name": name, "method": "POST", "path": "/add", "form": form, "expect_status": status,
+                        "expect_text": "added"}]}
+
+
+def test_empty_form_value_expecting_success_is_dropped():  # run 17: POST item="" expecting "added successfully"
+    assert parse_checks(_post({"item": ""})) == []
+    assert parse_checks(_post({"item": "  \t"})) == []
+
+
+def test_empty_form_value_expecting_an_error_is_kept():  # a real validation check
+    (c,) = parse_checks(_post({"item": ""}, status=400))
+    assert c["form"] == {"item": ""} and c["expect_status"] == 400
+
+
+def test_control_characters_leave_check_names():
+    (c,) = parse_checks(_post({"item": "milk"}, name="add\x1b[31m\nitem"))
+    assert c["name"] == "add[31mitem"
+
+
+def test_a_blank_optional_field_keeps_the_check():  # 6s review r1 #3: a later GET depends on this POST
+    (c,) = parse_checks(_post({"item": "milk", "note": ""}))
+    assert c["form"] == {"item": "milk", "note": ""}

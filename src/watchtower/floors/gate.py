@@ -9,7 +9,7 @@ from watchtower.roles import Role
 GATE_PROMPT = (
     "Spec acceptance criteria:\n{acceptance}\n\nOut of scope:\n{out_of_scope}\n\n"
     "Work package from {floor}:\n{summary}\n\nSources: {sources}\nOpen questions: {questions}\n\n"
-    "{rules}"
+    "{notes}{rules}"
     'Does the package satisfy the criteria? Reply as JSON: {{"pass": boolean, "reasons": [string]}}'
 )
 
@@ -33,7 +33,9 @@ class Gate:
         self._reviewer = reviewer
         self._rules = rules
 
-    def check(self, spec: dict, package: WorkPackage, routes: tuple[str, ...] = ()) -> Verdict:
+    def check(self, spec: dict, package: WorkPackage, routes: tuple[str, ...] = (),
+              notes: tuple[str, ...] = ()) -> Verdict:
+        """`notes` are the tower's own trusted facts about the package (never model or app text)."""
         default_route = routes[-1] if routes else None
         problems = package.validate()
         if problems:
@@ -43,6 +45,7 @@ class Gate:
             out_of_scope=_bullets(spec.get("out_of_scope", [])),
             floor=package.floor, summary=untrusted_code(package.floor, package.summary),
             sources=", ".join(package.sources) or "(none)",
+            notes=("Tower notes:\n" + "\n".join(f"- {n}" for n in notes) + "\n\n") if notes else "",
             rules=("Guardrails:\n" + "\n".join(f"- {r}" for r in self._rules) + "\n\n") if self._rules else "",
             questions=untrusted("open-questions", "; ".join(package.open_questions)) if package.open_questions
             else "(none)",

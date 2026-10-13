@@ -50,7 +50,7 @@ def load_settings() -> Settings:
     return Settings(
         home=home,
         tiers=tiers,
-        min_free_ram_pct=int(os.environ.get("WATCHTOWER_MIN_FREE_RAM_PCT", 20)),
+        min_free_ram_pct=int(os.environ.get("WATCHTOWER_MIN_FREE_RAM_PCT", "20")),
         sandbox_image=os.environ.get("WATCHTOWER_SANDBOX_IMAGE", "python:latest"),
         online=os.environ.get("WATCHTOWER_OFFLINE") != "1",
     )

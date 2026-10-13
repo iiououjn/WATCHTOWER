@@ -25,6 +25,7 @@ from watchtower.floors.f5_oversight.office import OversightOffice
 from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
 from watchtower.floors.f5_oversight.oversight import is_failing as _failing, security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
+from watchtower.floors.f2_dev.handoff import board_line, f2_handoff, for_gate, static_feedback
 from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.beacon.glass import INJECTION, normalize
@@ -152,18 +153,16 @@ class TowerPipeline:
                 unit_notes.append(f"planned files still missing: {', '.join(missing[:8])}; write them")
             package = dev.build(spec, plan, unit_notes + list(feedback), qa_round.coder_checks,  # unit notes first: never cut
                                 test_first=bool(written) and not feedback and not missing)
-            f3, f4, sec, audit = None, None, None, ""
+            f3, f4, sec, audit, notes = None, None, None, "", ()
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
-            self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "
-                       f"after {len(package.checks_run)} round(s) (attempt {attempt + 1})")
-            self._handoff(data, "f2", attempt, tests_ok and plan["entry"] in ws.files(),
-                          ["unit tests do not pass"] if not tests_ok else
-                          [] if plan["entry"] in ws.files() else [f"planned entry file {plan['entry']} missing"])
-            if package.checks_run and package.checks_run[-1].get("pass") and plan["entry"] not in ws.files():
+            go, reasons = f2_handoff(package.checks_run, plan["entry"], ws.files())  # the tower's checks decide
+            self._post(data, "f2", "doing", board_line(package.checks_run, attempt, go, reasons))
+            self._handoff(data, "f2", attempt, go, reasons)
+            if package.checks_run and plan["entry"] not in ws.files():
                 feedback = [f"the planned entry file {plan['entry']} does not exist; create it"]
                 package = WorkPackage("f2", package.summary, ws.files(), [], package.checks_run +
                                       [{"check": "entry", "pass": False}], feedback)
-            elif package.checks_run and package.checks_run[-1].get("pass"):
+            elif go:
                 f3 = build_check(run, plan["entry"], expect, plan["routes"])  # MVP first, then the full app
                 self._handoff(data, "f3", attempt, f3.checks_run[-1]["pass"], f3.open_questions)
                 self._post(data, "f3", "done" if f3.checks_run[-1]["pass"] else "issue", f3.summary.splitlines()[0])
@@ -181,12 +180,13 @@ class TowerPipeline:
                     if sec.checks_run[-1]["pass"]:
                         audit = oversight.audit(spec, focus, ws.snapshot(3000), f4.summary)
                 later = [p for p in (f3, f4, sec) if p is not None]
-                package = WorkPackage("dev", "\n\n".join([package.summary] + [p.summary for p in later]
+                f2_summary, f2_questions, notes = for_gate(package.summary, package.open_questions, tests_ok)
+                package = WorkPackage("dev", "\n\n".join([f2_summary] + [p.summary for p in later]
                                                          + ([f"Oversight audit:\n{audit}"] if audit else []))
                                       + f"\n\nCode:\n{ws.snapshot(3000)}", ws.files(), [],
                                       package.checks_run + [c for p in later for c in p.checks_run],
-                                      package.open_questions + [q for p in later for q in p.open_questions])
-            verdict = gate.check(spec, package, DEV_ROUTES)
+                                      f2_questions + [q for p in later for q in p.open_questions])
+            verdict = gate.check(spec, package, DEV_ROUTES, notes)
             self._bus.publish("gate.verdict", {"floor": "dev", "attempt": attempt, "passed": verdict.passed,
                                                "reasons": verdict.reasons, "route": verdict.route}, job_id)
             self._post(data, "f5", "done" if verdict.passed else "issue", "gate passed the app" if verdict.passed
@@ -201,10 +201,13 @@ class TowerPipeline:
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
                                    "Note: written by a local AI and tested only inside the sandbox — untested on "
                                    "your Mac. Read the code before running it.\n"
-                                   f"Run it: cd {shlex.quote(str(ws.root))} && python {shlex.quote(plan['entry'])}"
+                                   + ("" if tests_ok else "Note: the coder's own unit tests fail (advisory); "
+                                      "the tower's start, QA and security checks passed.\n")
+                                   + f"Run it: cd {shlex.quote(str(ws.root))} && python {shlex.quote(plan['entry'])}"
                                    "  (then open http://127.0.0.1:8000)\n"
                                    f"Safer — deploy it isolated, with no internet: watchtower deploy {job_id}")}
             feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]
+            feedback = feedback + static_feedback(go, reasons, plan["entry"], ws.files())
             if f3 is not None and not f3.checks_run[-1]["pass"]:  # show the coder the app's real error
                 feedback = feedback + ["Floor 3 started the app and it failed:\n" + untrusted("sandbox", f3.summary)]
                 crash = crash_query(f3.summary)
@@ -466,7 +469,7 @@ def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:
     qa_line = (f"{sum(r.get('pass') is True for r in results)}/{len(results)} checks passed" if results
                else "no QA checks ran")
     return "\n".join([
-        f"- unit tests: {'pass' if tests.get('pass') else 'FAIL'}",
+        f"- coder unit tests (advisory): {'pass' if tests.get('pass') else 'FAIL'}",
         f"- app answered HTTP {http.get('status')}",
         *([f"- full app: {sum(isinstance(r.get('status'), int) and r['status'] < 500 and r['status'] != 404 for r in probe)}"
            f"/{len(probe)} contract routes answered"] if probe else []),
