@@ -1,4 +1,3 @@
-import pytest
 
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import Workspace
