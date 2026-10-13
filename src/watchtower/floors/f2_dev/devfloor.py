@@ -404,14 +404,12 @@ class DevFloor:
                     path, content = str(f.get("path", "")), str(f.get("content", ""))
                     lines: list[int] = []
                     added: list[str] = []
+                    started = None
                     if path.endswith(".py"):
                         content, lines = repair_strings(content)
                         content, added = repair_imports(content)
                         if str(PurePosixPath(path.strip())) == entry:  # run 10: run() defined, never called, the app exited at once
                             content, started = repair_main(content)
-                            if started:
-                                notes.append(f"Auto-repaired: {path} never started its server; added "
-                                             f'`if __name__ == "__main__": {started}()` at the end.')
                     try:
                         before = self._ws.read(path)
                     except (WorkspaceError, OSError):
@@ -426,6 +424,9 @@ class DevFloor:
                                      "break inside a one-line string was joined as \\n. Keep one-line strings on one line.")
                     if added:
                         notes.append(f"Auto-repaired: added the missing import {', '.join(added)} to {path}.")
+                    if started:  # after the write: a rejected file was not repaired
+                        notes.append(f"Auto-repaired: {path} never started its server; added "
+                                     f'`if __name__ == "__main__": {started}()` at the end.')
             except WorkspaceError as e:
                 notes.append(f"File rejected: {e}")
         if same and not changed:  # run 8: the 7B copied the files it was shown, 16 rounds in a row

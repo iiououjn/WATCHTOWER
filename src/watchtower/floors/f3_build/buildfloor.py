@@ -56,8 +56,10 @@ def smoke_test(run: Callable[[list[str]], SandboxResult], entry: str, expect: st
     passed = status == "200" and not result.timed_out
     exited = _EXIT.search(output)  # first match: the tower's own line comes before the app's log
     head = (f"App {entry} {'answered HTTP 200 on GET /' if passed else f'did not answer HTTP 200 (got {status})'}")
-    if not passed and exited and exited.group(1) != "None":
-        head = EXITED.format(entry=entry, code=exited.group(1))
+    if not passed and exited and exited.group(1) == "0":  # it ran to the end: nothing started the server
+        head = EXITED.format(entry=entry, code=0)
+    elif not passed and exited and exited.group(1) != "None":  # a crash: short head, the error below stays seen
+        head = f"App {entry} crashed (exit code {exited.group(1)}) before answering any request; its error is below."
     summary = f"{head}\n{output[-1200:]}"
     text = _TEXT.search(output)
     questions = [] if passed else ["app did not answer HTTP 200"]

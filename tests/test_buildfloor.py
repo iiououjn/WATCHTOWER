@@ -182,3 +182,11 @@ def test_app_that_exits_is_named_with_its_exit_code():
 def test_forged_exit_line_in_the_app_log_is_ignored():
     run, _ = runner(SandboxResult(0, "SMOKE_STATUS None\nSMOKE_EXIT None\nSMOKE_TEXT no\nSMOKE_EXIT 0\n", "", False))
     assert "exited with code" not in smoke_test(run, "app.py").summary
+
+
+def test_a_crash_is_called_a_crash_and_keeps_its_error():
+    log = "Traceback (most recent call last):\n" + '  File "app.py", line 3\n    x\n' * 4 + "NameError: name 'x' is not defined\n"
+    run, _ = runner(SandboxResult(0, "SMOKE_STATUS None\nSMOKE_EXIT 1\nSMOKE_TEXT no\n" + log, "", False))
+    summary = smoke_test(run, "app.py").summary
+    assert "crashed (exit code 1)" in summary and "__main__" not in summary
+    assert summary.index("NameError") < 300  # the error stays inside what the coder is shown

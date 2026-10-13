@@ -144,3 +144,22 @@ def test_repair_main_keeps_windows_newlines():
     from watchtower.floors.f2_dev.repair import repair_main
     text, name = repair_main(SERVES.replace("\n", "\r\n"))
     assert name == "run" and text.endswith('\r\n\r\nif __name__ == "__main__":\r\n    run()\r\n') and "\n\n" not in text.replace("\r\n", "")
+
+
+def test_repair_main_counts_a_function_passed_as_a_value():
+    from watchtower.floors.f2_dev.repair import repair_main
+    source = SERVES + ("\ndef init_db():\n    pass\n\ndef main():\n    init_db()\n"
+                       "    threading.Thread(target=run).start()\n")
+    assert repair_main(source)[1] == "main"
+
+
+def test_repair_main_sees_an_import_rebinding_the_name():
+    from watchtower.floors.f2_dev.repair import repair_main
+    source = SERVES + "from helpers import run\n"
+    assert repair_main(source) == (source, None)
+
+
+def test_repair_main_never_grows_a_file_past_the_limit():
+    from watchtower.floors.f2_dev.repair import MAX_REPAIR_BYTES, repair_main
+    source = SERVES + "X = '" + "a" * (MAX_REPAIR_BYTES - len(SERVES) - 10) + "'\n"
+    assert repair_main(source) == (source, None)

@@ -203,7 +203,8 @@ def _no_required_args(fn: ast.FunctionDef) -> bool:
 
 
 def _calls(fn: ast.FunctionDef) -> set[str]:
-    return {n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    """Every name the function reads: a call, or a function passed on (Thread(target=run)) both count."""
+    return {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
 
 
 def repair_main(source: str) -> tuple[str, str | None]:
@@ -226,6 +227,8 @@ def repair_main(source: str) -> tuple[str, str | None]:
              for t in (node.targets if isinstance(node, ast.Assign) else [node.target]) for t in ast.walk(t)
              if isinstance(t, ast.Name)]
     names += [node.name for node in body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+    names += [(a.asname or a.name).split(".")[0] for node in body if isinstance(node, (ast.Import, ast.ImportFrom))
+              for a in node.names]  # from helpers import run: a second run
     fns = {node.name: node for node in body if isinstance(node, ast.FunctionDef) and names.count(node.name) == 1}
     serving = [name for name, fn in fns.items() if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                                                       and n.func.attr == "serve_forever" for n in ast.walk(fn))]
@@ -248,4 +251,7 @@ def repair_main(source: str) -> tuple[str, str | None]:
         return source, None
     name = roots[0]
     nl = "\r\n" if "\r\n" in source else "\n"
-    return source.rstrip("\r\n") + f'{nl}{nl}{nl}if __name__ == "__main__":{nl}    {name}(){nl}', name
+    text = source.rstrip("\r\n") + f'{nl}{nl}{nl}if __name__ == "__main__":{nl}    {name}(){nl}'
+    if len(text.encode("utf-8", "replace")) > MAX_REPAIR_BYTES:  # never grow a file past what Workspace takes
+        return source, None
+    return text, name
