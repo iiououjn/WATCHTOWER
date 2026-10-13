@@ -160,3 +160,28 @@ def test_self_patch_note_keeps_its_advice_and_only_plain_names(tmp_path):
              "    add_todo_to_file_now('x')\n")
     (note,) = idiom_notes(ws)
     assert note.endswith("don't patch it.") and len(note) <= 200
+
+
+RUN16_TEST = ("import unittest\nfrom todo import add_todo, list_todos\n\nclass T(unittest.TestCase):\n"
+              "    def setUp(self):\n        global todos\n        todos = []\n\n"
+              "    def test_a(self):\n        add_todo('x')\n")
+
+
+def test_a_reset_of_the_tests_own_copy_is_named(tmp_path):
+    from watchtower.floors.f2_dev.lint import idiom_notes
+    ws = Workspace(tmp_path)
+    ws.write("todo.py", "todos = []\n\ndef add_todo(i):\n    todos.append(i)\n\ndef list_todos():\n    return todos\n")
+    ws.write("test_todo.py", RUN16_TEST)
+    (note,) = idiom_notes(ws)
+    assert "todo.todos" in note and "test_todo" in note and "todo.todos.clear()" in note and len(note) <= 200
+
+
+def test_a_global_the_test_really_owns_is_left_alone(tmp_path):
+    from watchtower.floors.f2_dev.lint import idiom_notes
+    ws = Workspace(tmp_path)
+    ws.write("todo.py", "todos = []\n\ndef add_todo(i):\n    todos.append(i)\n\ndef list_todos():\n    return todos\n")
+    ws.write("other.py", "seen = []\n")
+    ws.write("test_todo.py", "todos = None\n" + RUN16_TEST)                             # its own top-level name
+    ws.write("test_b.py", RUN16_TEST.replace("from todo import", "from other import seen  #").replace(
+        "global todos\n        todos", "global seen2\n        seen2"))                   # nothing binds seen2
+    assert idiom_notes(ws) == []

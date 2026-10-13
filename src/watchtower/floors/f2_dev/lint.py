@@ -157,25 +157,62 @@ def _test_file_notes(tree: ast.Module) -> tuple[list[str], list[tuple[str, str]]
     return fixtures, self_patch
 
 
+def _top_bound(tree: ast.Module) -> set[str]:
+    out: set[str] = set()
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(n.name)
+        elif isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            for t in n.targets if isinstance(n, ast.Assign) else [n.target]:
+                out |= {x.id for x in ast.walk(t) if isinstance(x, ast.Name)}
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            out |= {(a.asname or a.name).split(".")[0] for a in n.names}
+    return out
+
+
+def _global_resets(tree: ast.Module, apps: dict[str, set[str]]) -> list[tuple[str, str]]:
+    """Run 16: setUp did `global todos; todos = []` after `from todo import ...`: that binds a new todos in the
+    test module; todo.todos is never reset. (name, module) pairs: the test's own top level does not bind the name,
+    and a module it imports from binds it at top level."""
+    own = _top_bound(tree)
+    sources = [n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module and not n.level]
+    sources += [a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]
+    out = []
+    for fn in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
+        declared = {g for n in ast.walk(fn) if isinstance(n, ast.Global) for g in n.names}
+        assigned = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+        for name in sorted((declared & assigned) - own):
+            mod = next((m for m in sources if name in apps.get(m, set())), None)
+            if mod and (name, mod) not in out:
+                out.append((name, mod))
+    return out
+
+
 def idiom_notes(ws: Workspace) -> list[str]:
     """Run 15: pytest idioms that silently did nothing. Test functions that take arguments (pytest fixtures such as
     `client`) never ran; a test that patches the very function it imported and calls tests nothing (the real one
     runs). Non-blocking notes, at most 2, each within 200 chars."""
-    fixtures, self_patch = [], []
+    fixtures, self_patch, resets = [], [], []
+    trees: dict[str, ast.Module] = {}
     for name in ws.files():
-        if not (name.endswith(".py") and name.rsplit("/", 1)[-1].startswith("test")):
+        if not name.endswith(".py"):
             continue
         try:
             source = ws.read(name)
-            if len(source) > MAX_LINT_BYTES:
-                continue
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                f, p = _test_file_notes(ast.parse(source))
+            if len(source) <= MAX_LINT_BYTES:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    trees[name] = ast.parse(source)
         except (SyntaxError, ValueError, RecursionError, MemoryError, OSError, WorkspaceError):
             continue
-        fixtures += f
-        self_patch += p
+    apps = {n[:-3].replace("/", ".").removesuffix(".__init__"): _top_bound(t) for n, t in trees.items()
+            if not n.rsplit("/", 1)[-1].startswith("test")}
+    for name, tree in trees.items():
+        if name.rsplit("/", 1)[-1].startswith("test"):
+            resets += [(name[:-3].replace("/", "."), g, m) for g, m in _global_resets(tree, apps)]
+            f, p = _test_file_notes(tree)
+            fixtures += f
+            self_patch += p
     notes = []
     if fixtures:
         names = ", ".join(sorted(set(fixtures)))[:70]
@@ -185,4 +222,8 @@ def idiom_notes(ws: Workspace) -> list[str]:
         test, target = self_patch[0]
         notes.append(f"{test[:25]} patches {target[:25]} but calls its own imported copy, so the real function runs "
                      "and the mock is never called. Test the real function's result; don't patch it.")
+    if resets:
+        test, var, mod = (x[:25] for x in resets[0])
+        notes.append(f"{test} resets its own {var}, not {mod}.{var}: `global {var}` makes a new name in the test. "
+                     f"Reset the app's with `import {mod}` and `{mod}.{var}.clear()` in setUp.")
     return [n[:200] for n in notes]
