@@ -808,3 +808,42 @@ def test_syntax_error_first_marked_and_counted_right(tmp_path):
     note = _problem_note(probs + ["z.py has a syntax error on line 3: '(' was never closed"], ws, True)
     assert note.index("z.py has a syntax error") < note.index("m0.py") and "(+2 more)" in note
     assert ">   3| if (" in note
+
+
+from watchtower.floors.f2_dev.devfloor import repair_strings  # noqa: E402
+
+
+def test_a_line_break_lost_inside_a_string_is_repaired():
+    src = "html = f'<body>\n{x}</body>'\nprint(f'Starting...\n')\n"
+    fixed, lines = repair_strings(src)
+    compile(fixed, "a.py", "exec")
+    assert lines == [1, 3] and "f'<body>\\n{x}</body>'" in fixed
+
+
+def test_repair_keeps_progress_but_never_invents_a_close():
+    src = "a = f'one\ntwo'\nb = bytes(a, \"utf8')\nc = 1\n"
+    fixed, lines = repair_strings(src)
+    assert lines == [1] and "f'one\\ntwo'" in fixed and "\"utf8')" in fixed  # the quote mismatch is the coder's job
+    assert repair_strings("x = 1\n") == ("x = 1\n", [])
+    assert repair_strings("s = '''never\nclosed\n")[1] == []  # triple-quoted: not this repair
+
+
+def test_written_python_files_are_repaired_with_a_note(tmp_path):
+    script = Script({"f2.coder": [{"files": [{"path": "app.py", "content": "x = 'a\nb'\n"}, TEST]}]})
+    d = dev(tmp_path, script, Runner([OK]), rounds=2)
+    d.build(SPEC, PLAN3, [])
+    assert Workspace(tmp_path).read("app.py") == "x = 'a\\nb'\n"
+
+
+def test_runner_accepts_pytest_style_test_functions(tmp_path):
+    import subprocess
+    import sys
+    from watchtower.floors.f2_dev.devfloor import TEST_RUNNER, failures, test_summary
+    (tmp_path / "app.py").write_text("def add(a, b):\n    return a + b\n")
+    (tmp_path / "test_app.py").write_text("from app import add\n\ndef test_ok():\n    assert add(1, 2) == 3\n\n"
+                                         "def test_bad():\n    assert add(1, 1) == 3\n")
+    out = subprocess.run([sys.executable, "-I", "-c", TEST_RUNNER], cwd=tmp_path, capture_output=True, text=True,
+                         timeout=60)
+    summary = test_summary(out.stdout)
+    assert summary["run"] == 2 and summary["failures"] == 1
+    assert [f["test"] for f in failures(out.stderr)] == ["test_bad"]

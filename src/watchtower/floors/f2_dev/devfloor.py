@@ -17,8 +17,19 @@ from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceEr
 from watchtower.roles import Role
 
 TEST_RUNNER = """\
-import json, sys, unittest
-suite = unittest.defaultTestLoader.discover(".", pattern="test*.py")
+import inspect, json, sys, unittest
+class Fn(unittest.FunctionTestCase):  # pytest-style 'def test_x(): assert ...' runs too, named like a method
+    def __str__(self):
+        f = self._testFunc
+        return f"{f.__name__} ({f.__module__}.{f.__name__})"
+class Loader(unittest.TestLoader):
+    def loadTestsFromModule(self, module, *args, **kwargs):
+        suite = super().loadTestsFromModule(module, *args, **kwargs)
+        for name, fn in sorted(vars(module).items()):
+            if name.startswith("test") and inspect.isfunction(fn) and fn.__module__ == module.__name__:
+                suite.addTest(Fn(fn))
+        return suite
+suite = Loader().discover(".", pattern="test*.py")
 result = unittest.TextTestRunner(stream=sys.stderr, verbosity=1).run(suite)
 print("WATCHTOWER_TESTS " + json.dumps({"run": result.testsRun, "skipped": len(result.skipped),
       "failures": len(result.failures), "errors": len(result.errors)}), flush=True)
@@ -184,6 +195,40 @@ TEST_DIAGNOSE_PROMPT = (
     "sentences: is the test wrong or the code, and what exactly should change? Reply as JSON: "
     '{{"diagnosis": string}}'
 )
+
+
+MAX_REPAIRS = 6
+
+
+def repair_strings(source: str) -> tuple[str, list[int]]:
+    """Undo the coder's most common JSON slip: '\\n' sent as a real line break, which splits a one-line string
+    ('unterminated string literal'). Each join turns that line break back into '\\n' and is kept only if the
+    error then moves past that line — so a genuinely broken quote is left for the coder, never 'closed'."""
+    text, fixed = source, []
+    for _ in range(MAX_REPAIRS):
+        try:
+            compile(text, "<coder>", "exec")
+            break
+        except SyntaxError as e:
+            if not (e.lineno and "unterminated" in e.msg and "string" in e.msg and "triple" not in e.msg):
+                break
+            lines = text.split("\n")
+            at = e.lineno - 1
+            if at + 1 >= len(lines):
+                break
+            candidate = "\n".join(lines[:at] + [lines[at] + "\\n" + lines[at + 1]] + lines[at + 2:])
+            try:
+                compile(candidate, "<coder>", "exec")
+            except SyntaxError as after:
+                if not after.lineno or after.lineno <= e.lineno:
+                    break
+            except ValueError:
+                break
+            text = candidate
+            fixed.append(e.lineno + len(fixed))  # line numbers in the coder's own file
+        except ValueError:  # NUL bytes etc.: not this repair's business
+            break
+    return text, fixed
 
 
 def _is_test_file(path: str) -> bool:
@@ -452,7 +497,14 @@ class DevFloor:
                 elif not isinstance(f.get("content"), str):
                     notes.append(f"File rejected: {str(f.get('path'))[:100]!r} has no content")
                 else:
-                    self._ws.write(str(f.get("path", "")), str(f.get("content", "")))
+                    path, content = str(f.get("path", "")), str(f.get("content", ""))
+                    lines: list[int] = []
+                    if path.endswith(".py"):
+                        content, lines = repair_strings(content)
+                    self._ws.write(path, content)
+                    if lines:
+                        notes.append(f"Auto-repaired {path} line(s) {', '.join(map(str, lines))}: a line break inside "
+                                     "a string became \\n (JSON escaping). Write \\n as \\\\n inside JSON strings.")
             except WorkspaceError as e:
                 notes.append(f"File rejected: {e}")
         return notes
