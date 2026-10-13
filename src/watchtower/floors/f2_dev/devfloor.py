@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import ast
-import io
 import json
 import re
-import tokenize
-import warnings
 from fnmatch import fnmatch
 from pathlib import PurePosixPath
 from typing import Callable, Sequence
@@ -15,6 +12,9 @@ from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.engine.model_socket import BadModelOutput
 from watchtower.floors.f4_qa_deploy.qafloor import parse_routes
 from watchtower.engine.sandbox import SandboxResult
+from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_NOTE,  # noqa: F401 (re-export)
+                                               _capped, _failure_note, _failure_rows, _problem_note, failures)
+from watchtower.floors.f2_dev.repair import repair_imports, repair_strings
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
 from watchtower.roles import Role
@@ -111,108 +111,6 @@ def _compact_checks(checks: Sequence[dict]) -> str:
     return text if len(text) <= QA_CHARS else text[:QA_CHARS] + " ...(more checks)"
 
 
-_BLOCK = re.compile(r"^(FAIL|ERROR): (\w+) \(([^)\n]*)\)(?: \([^\n]*\))?\n(?:(?!-{20,}\n)[^\n]*\n)?-{20,}\n"
-                    r"(.*?)(?=^={20,}$|^-{20,}$|\Z)", re.M | re.S)  # optional docstring line before the dashes
-_EXC = re.compile(r"^[A-Za-z_][\w.]*(: |$)")  # an unindented 'Name: message' line ends a traceback
-_FRAME = re.compile(r'^\s+File "([^"]+)", line (\d+), in (\S+)')
-MAX_FAILURES, MAX_PARSED, NOTE_CHARS = 5, 20, 1000
-NOTE_CAP = 2000  # any one note, after escaping: the newest note is never trimmed, so it must stay small
-
-
-def _capped(source: str, text: str, cap: int = NOTE_CAP // 2, code: bool = False) -> str:
-    """Wrap text as untrusted and keep the result within cap characters (escaping can quadruple a '<')."""
-    wrap = untrusted_code if code else untrusted
-    body = str(text)
-    while body and len(wrap(source, body)) > cap:
-        body = body[:int(len(body) * 0.8)]
-    return wrap(source, body)
-
-
-def failures(output: str) -> list[dict]:
-    """unittest's own FAIL/ERROR report as a compact list. Only the FINAL traceback of a block counts (chained
-    inner errors and loader frames are noise): its first exception line is the cause; assertion failures keep a
-    few diff lines, errors keep where they were raised. Import errors first, then FAIL, then ERROR."""
-    out = []
-    for kind, test, where, body in _BLOCK.findall(output or ""):
-        lines = body.rstrip().splitlines()
-        start = max((i for i, ln in enumerate(lines) if ln.startswith("Traceback (most recent call last)")),
-                    default=-1)
-        tail = lines[start + 1:]
-        at = next((i for i, ln in enumerate(tail) if _EXC.match(ln)), None)
-        if at is None:
-            at = max((i for i, ln in enumerate(tail) if ln.strip()), default=None)
-        if at is None:
-            continue
-        frames = [i for i, ln in enumerate(tail[:at]) if _FRAME.match(ln)]
-        where_raised = ""
-        if frames:
-            path, line_no, fn = _FRAME.match(tail[frames[-1]]).groups()
-            source = tail[frames[-1] + 1].strip() if frames[-1] + 1 < at else ""
-            where_raised = f"at {PurePosixPath(path).name} line {line_no} in {fn}: {source}"[:200]
-        rest = tail[at + 1:]
-        assertion = tail[at].startswith("AssertionError")
-        minus = "".join(ln[2:] for ln in rest if ln.startswith("- "))
-        plus = "".join(ln[2:] for ln in rest if ln.startswith("+ "))
-        space_only = bool(minus or plus) and minus != plus and re.sub(r"\s", "", minus) == re.sub(r"\s", "", plus)
-        out.append({"test": test, "id": where[:150], "kind": kind, "line": tail[at].strip()[:200],
-                    "diff": ("\n".join(rest[:6])[:400] if assertion else where_raised), "whitespace": space_only})
-    out.sort(key=lambda f: (0 if "_FailedTest" in f["id"] else 1 if f["kind"] == "FAIL" else 2))
-    return out[:MAX_PARSED]
-
-
-def _failure_rows(found: list[dict]) -> str:
-    """The failures as text, bounded: at most 5 rows, which shrink (diffs first) instead of disappearing."""
-    shown, more = found[:MAX_FAILURES], len(found) - MAX_FAILURES
-    for diff_cap in (400, 150, 0):
-        rows = "\n".join(f"- {f['test'][:60]} ({f['kind']}): {f['line'][:200]}"
-                         + (f"\n{f['diff'][:diff_cap]}" if f["diff"] and diff_cap else "") for f in shown)
-        rows += f"\n(+{more} more failing)" if more > 0 else ""
-        if len(rows) <= NOTE_CHARS:
-            return rows
-    return rows[:NOTE_CHARS]
-
-
-def _failure_note(found: list[dict], stuck: str = "", diagnosis: str = "") -> str:
-    """One note (so prompt trimming keeps or drops it whole): the failures, whitespace hints, and — when the
-    coder is stuck — the stuck note and Floor 2 HR's diagnosis."""
-    hints = [f"{f['test'][:60]}: the two sides differ only in spaces or indentation — make them identical, or "
-             "compare without exact whitespace" for f in found[:MAX_FAILURES] if f["whitespace"]][:2]
-    # the coder's own test output: HTML kept readable (untrusted_code escapes only <untrusted tags), then bounded
-    return ("Failing tests (unittest's own report):\n" + _capped("sandbox", _failure_rows(found), NOTE_CHARS + 100, code=True)
-            + ("\n" + "\n".join(hints) if hints else "") + (f"\n{stuck[:250]}" if stuck else "")
-            + ("\nFloor 2 HR diagnosis:\n" + _capped("f2.hr", diagnosis, 300) if diagnosis else ""))
-
-
-_SYNTAX = re.compile(r"^(.+?) has a syntax error on line (\d+):")
-LINE_CHARS = 160
-
-
-def _problem_note(problems: list[str], ws: Workspace, tests_ok: bool) -> str:
-    """Problems the test run cannot show (syntax errors in files the tests never import, banned imports),
-    with the lines around a syntax error. When the tests already pass, say this is all that is left."""
-    parts, shown = [], False
-    ordered = sorted(problems, key=lambda p: not _SYNTAX.match(p))  # syntax errors first: they get the excerpt
-    for p in ordered[:3]:
-        parts.append(p[:200])
-        match = None if shown else _SYNTAX.match(p)  # one excerpt: the snapshot shows the rest of the code
-        try:
-            lines = re.split(r"\r\n|\r|\n", ws.read(match.group(1))) if match else []  # Python's own line count
-        except (WorkspaceError, OSError):
-            lines = []
-        if lines:
-            shown, n = True, int(match.group(2))
-            excerpt = "\n".join(f"{'>' if i + 1 == n else ' '}{i + 1:4}| {lines[i][:LINE_CHARS]}"  # error line marked
-                                 for i in range(max(0, min(n, len(lines)) - 3), min(len(lines), n + 2)))
-            parts.append(untrusted_code(match.group(1), excerpt))
-    if len(problems) > 3:
-        parts.append(f"(+{len(problems) - 3} more)")
-    head = "Your unit tests pass; this is the only thing left to fix:" if tests_ok else "Also fix these problems:"
-    return head + "\n" + "\n".join(parts)  # bounded by its parts (≤ 3 × 200 + one 5-line excerpt); never cut
-
-
-STUCK_NOTE = ("The same tests failed again after your last change: {names}. Before changing the app again, check "
-              "each failing test itself: tests run in alphabetical order and share module-level state (reset it "
-              "in setUp), and a test's own expected value can be wrong — fix the test when it is.")
 TEST_DIAGNOSE_PROMPT = (
     "The coder's unit tests keep failing the same way. unittest's report:\n{report}\n\nIn one or two plain "
     "sentences: is the test wrong or the code, and what exactly should change? Reply as JSON: "
@@ -220,87 +118,6 @@ TEST_DIAGNOSE_PROMPT = (
 )
 
 
-MAX_REPAIRS, MAX_SPAN, MAX_REPAIR_BYTES = 6, 4, 100_000
-_AFTER_CLOSE = set(")]},:+.% \t\r")
-
-
-def _stands_alone(line: str) -> bool:
-    """A line that tokenizes cleanly on its own (`bg = "#000"`, a comment) is a normal line, never the tail of
-    a string split by a lost line break — a real tail (`world")`) leaves a quote open and cannot."""
-    try:
-        for tok in tokenize.generate_tokens(io.StringIO(line.strip() + "\n").readline):
-            if tok.type == tokenize.ERRORTOKEN:
-                return False
-        return True
-    except (tokenize.TokenError, SyntaxError):
-        return False
-
-
-def _syntax_error(text: str):
-    """compile() quietly: the SyntaxError, None when it compiles, or False when compile itself gives up."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")  # invalid escapes etc. must not spam the tower's stderr
-        try:
-            compile(text, "<coder>", "exec", dont_inherit=True)
-            return None
-        except SyntaxError as e:
-            return e
-        except (ValueError, RecursionError, MemoryError):
-            return False
-
-
-def _close_at(line: str, quote: str) -> int:
-    i = 0
-    while i < len(line):
-        if line[i] == "\\":
-            i += 2
-            continue
-        if line[i] == quote:
-            return i
-        i += 1
-    return -1
-
-
-def repair_strings(source: str) -> tuple[str, list[int]]:
-    """Undo the coder's most common JSON slip: '\\n' (or '\\r\\n') sent as a real line break, which splits a
-    one-line string ('unterminated string literal'). A join is kept only when the string's own quote closes on a
-    following line and is followed by what normally follows a string — ')', ',', ':', end of line … — never by
-    another quote or a word; and the error must then move past that line. A truly missing quote is left alone."""
-    if len(source) > MAX_REPAIR_BYTES:
-        return source, []
-    text, fixed, removed = source, [], 0
-    for _ in range(MAX_REPAIRS):
-        err = _syntax_error(text)
-        if not err or not (err.lineno and err.offset and "unterminated" in err.msg and "string" in err.msg
-                           and "triple" not in err.msg):
-            break
-        lines = text.split("\n")
-        at = err.lineno - 1
-        quote = next((c for c in lines[at][err.offset - 1:] if c in "'\""), None) if at < len(lines) else None
-        if quote is None:
-            break
-        joined, used = lines[at], 0
-        for k in range(1, MAX_SPAN + 1):
-            if at + k >= len(lines):
-                break
-            crlf = joined.endswith("\r")
-            joined = joined[:-1] + "\\r\\n" if crlf else joined + "\\n"
-            nxt, close = lines[at + k], _close_at(lines[at + k], quote)
-            joined += nxt
-            if close >= 0:
-                rest = nxt[close + 1:]
-                used = k if (not rest or rest[0] in _AFTER_CLOSE) and not _stands_alone(nxt) else 0
-                break
-        if not used:
-            break
-        candidate = "\n".join(lines[:at] + [joined] + lines[at + used + 1:])
-        after = _syntax_error(candidate)
-        if after is False or (after is not None and (not after.lineno or after.lineno <= err.lineno)):
-            break
-        text = candidate
-        fixed.append(err.lineno + removed)  # the line number in the coder's own file
-        removed += used
-    return text, fixed
 
 
 def _format_notes(reply: dict) -> list[str]:
@@ -564,31 +381,48 @@ class DevFloor:
                     pass
 
     def _write(self, files) -> list[str]:
-        notes = []
+        notes, same, changed = [], [], False
         written = 0
         for f in (files if isinstance(files, list) else [])[:MAX_FILES_PER_ROUND + 5]:
             if not isinstance(f, dict):
                 continue
             if f.get("delete") is not True:
                 if written >= MAX_FILES_PER_ROUND:  # deletes don't use up the cap; writes beyond it are dropped
+                    changed = True  # it sent more than was written: never tell it "unchanged"
                     notes.append(f"File {str(f.get('path'))[:100]!r} not written: at most {MAX_FILES_PER_ROUND} "
                                  "files per reply")
                     continue
                 written += 1
             try:
                 if f.get("delete") is True:
+                    before_files = set(self._ws.files())
                     self._ws.delete(str(f.get("path", "")))
+                    changed = changed or set(self._ws.files()) != before_files  # a missing file: no change
                 elif not isinstance(f.get("content"), str):
                     notes.append(f"File rejected: {str(f.get('path'))[:100]!r} has no content")
                 else:
                     path, content = str(f.get("path", "")), str(f.get("content", ""))
                     lines: list[int] = []
+                    added: list[str] = []
                     if path.endswith(".py"):
                         content, lines = repair_strings(content)
+                        content, added = repair_imports(content)
+                    try:
+                        before = self._ws.read(path)
+                    except (WorkspaceError, OSError):
+                        before = None
                     self._ws.write(path, content)
+                    if before == content.replace("\r\n", "\n").replace("\r", "\n"):  # read() gives \n only
+                        same.append(path)
+                    else:
+                        changed = True
                     if lines:
                         notes.append(f"Auto-repaired {path} line(s) {', '.join(map(str, lines))} of what you sent: a line "
                                      "break inside a one-line string was joined as \\n. Keep one-line strings on one line.")
+                    if added:
+                        notes.append(f"Auto-repaired: added the missing import {', '.join(added)} to {path}.")
             except WorkspaceError as e:
                 notes.append(f"File rejected: {e}")
+        if same and not changed:  # run 8: the 7B copied the files it was shown, 16 rounds in a row
+            notes.append(UNCHANGED_NOTE.format(names=", ".join(same)[:200]))
         return notes
