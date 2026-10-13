@@ -271,3 +271,9 @@ def test_app_error_where_is_bounded():
     log = ('Traceback (most recent call last):\n  File "/' + "p" * 900 + '.py", line 1, in ' + "f" * 900
            + "\n    x()\nValueError: v\n")
     assert len(app_error(log)) < 400
+
+
+def test_a_big_non_ascii_log_cannot_push_the_result_line_out():
+    # the sandbox keeps the output's tail: the result line goes last, and the log is not \u-escaped (6x growth)
+    assert QA_SCRIPT.index('print("WATCHTOWER_LOG ') < QA_SCRIPT.index('print("WATCHTOWER_QA ')
+    assert "ensure_ascii=False" in QA_SCRIPT

@@ -62,9 +62,10 @@ try:
 except Exception:
     p.kill()
 log.close()
+# the app's own output is JSON-encoded on one line, so nothing it prints can pose as a result line; it goes first
+# and unescaped (escaping grows non-ASCII text 6x) so the sandbox's output tail always keeps the result line
+print("WATCHTOWER_LOG " + json.dumps(open(log.name, "rb").read().decode(errors="replace")[-4000:], ensure_ascii=False))
 print("WATCHTOWER_QA " + json.dumps(results))
-# the app's own output is JSON-encoded on one line, so nothing it prints can pose as a result line
-print("WATCHTOWER_LOG " + json.dumps(open(log.name, "rb").read().decode(errors="replace")[-4000:]))
 """
 _RESULT = re.compile(r"^WATCHTOWER_QA (.*)$", re.M)
 _LOG = re.compile(r"^WATCHTOWER_LOG (.*)$", re.M)

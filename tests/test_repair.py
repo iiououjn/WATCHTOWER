@@ -203,3 +203,18 @@ def test_repair_names_links_only_functions_and_classes_from_safe_modules():
     ]
     for source, siblings in cases:
         assert repair_names(source, "__main__", siblings) == (source, []), list(siblings)
+
+
+def test_repair_names_never_imports_a_sibling_that_does_things_at_import():
+    from watchtower.floors.f2_dev.repair import repair_names
+    quiet_main = '\nif __name__ == "__main__":\n    run()\n'
+    loud = [
+        TODO + "httpd = HTTPServer(('', 8000), H)\n",        # binds the port at import
+        TODO + "HTTPServer(('', 8000), H).serve_forever()\n",  # serves at import
+        TODO + "unittest.main()\n",                            # a harness: runs and exits
+        TODO + "for i in range(3):\n    print(i)\n",          # runs code
+    ]
+    for sibling in loud:
+        assert repair_names(MAIN_USES, "__main__", {"todo": sibling}) == (MAIN_USES, []), sibling[-40:]
+    ok = TODO + "import os\nPORT = int(os.getenv('PORT', 8000))\n" + quiet_main
+    assert repair_names(MAIN_USES, "__main__", {"todo": ok})[1] == ["from todo import add_item, list_items"]

@@ -270,6 +270,29 @@ def _top_names(tree: ast.Module) -> set[str]:
     return {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
 
 
+_SERVES = re.compile(r"serve|server", re.I)
+
+
+def _quiet(tree: ast.Module) -> bool:
+    """Importing this module does nothing but define things: no top-level call that serves or runs, no loop,
+    no harness. A `__main__` block is fine (it does not run on import)."""
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+                             ast.Pass)):
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            continue  # a docstring or a bare constant
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and \
+                ast.unparse(node.test).replace("'", '"') == '__name__ == "__main__"':
+            continue
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and not any(
+                isinstance(n, ast.Call) and _SERVES.search(ast.unparse(n.func))
+                for n in ast.walk(node.value if node.value is not None else ast.Pass())):
+            continue  # PORT = int(os.getenv(...)) is fine; httpd = HTTPServer(...) binds the port
+        return False
+    return True
+
+
 def _parse(source: str) -> ast.Module | None:
     if len(source) > MAX_REPAIR_BYTES:
         return None
@@ -302,8 +325,8 @@ def repair_names(source: str, module: str, siblings: dict[str, str]) -> tuple[st
                 or name in sys.stdlib_module_names):
             continue
         other = _parse(text)
-        if other is None:
-            continue
+        if other is None or not _quiet(other):
+            continue  # importing it would bind a port, serve, or run a harness: never link it
         imports_back = any(isinstance(n, ast.Import) and any(a.name.split(".")[0] == module for a in n.names)
                            or isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == module
                            for n in ast.walk(other))
