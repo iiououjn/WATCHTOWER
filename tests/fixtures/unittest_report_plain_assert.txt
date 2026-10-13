@@ -1,0 +1,32 @@
+======================================================================
+FAIL: test_add_todo (test_todo.test_add_todo)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/w/test_todo.py", line 6, in test_add_todo
+    assert len(todos) == 1, f"Expected 1 todo item but got {len(todos)}"
+           ^^^^^^^^^^^^^^^
+AssertionError: Expected 1 todo item but got 8
+
+======================================================================
+FAIL: test_bare (test_todo.test_bare)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/w/test_todo.py", line 12, in test_bare
+    assert list_todos() == []
+           ^^^^^^^^^^^^^^^^^^
+AssertionError
+
+======================================================================
+FAIL: test_list_todos (test_todo.test_list_todos)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/w/test_todo.py", line 9, in test_list_todos
+    assert "" == list_todos(), "Expected an empty string of todos"
+           ^^^^^^^^^^^^^^^^^^
+AssertionError: Expected an empty string of todos
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.001s
+
+WATCHTOWER_TESTS {"run": 3, "skipped": 0, "failures": 3, "errors": 0}
+FAILED (failures=3)
