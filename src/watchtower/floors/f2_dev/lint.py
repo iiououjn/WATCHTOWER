@@ -172,8 +172,8 @@ def _top_bound(tree: ast.Module, containers: bool = False) -> set[str]:
             if containers and not (isinstance(value, (ast.List, ast.Dict, ast.Set)) or isinstance(value, ast.Call)
                                    and ast.unparse(value.func).split(".")[-1] in _CONTAINERS):
                 continue
-            for t in n.targets if isinstance(n, ast.Assign) else [n.target]:
-                out |= {x.id for x in ast.walk(t) if isinstance(x, ast.Name)}
+            for t in n.targets if isinstance(n, ast.Assign) else [n.target]:  # app.config = {} binds no name
+                out |= {x.id for x in ast.walk(t) if isinstance(x, ast.Name) and isinstance(x.ctx, ast.Store)}
     return out
 
 
@@ -199,7 +199,7 @@ def _global_resets(tree: ast.Module, apps: dict[str, set[str]]) -> list[tuple[st
         nodes = list(_scope(fn))
         declared = {g for n in nodes if isinstance(n, ast.Global) for g in n.names}
         assigned = {n.id for n in nodes if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
-        touched = {ast.unparse(n) for n in nodes if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)}
+        touched = {ast.unparse(n) for n in nodes if isinstance(n, ast.Attribute)}  # app.models.todos too
         for name in sorted((declared & assigned) - own):
             mod = next((m for m in sources if name in apps.get(m, set())), None)
             if mod and f"{mod}.{name}" not in touched and (name, mod) not in out:

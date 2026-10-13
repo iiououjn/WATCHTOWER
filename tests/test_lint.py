@@ -216,3 +216,11 @@ def test_global_reset_note_keeps_its_advice_with_long_names(tmp_path):
              "def setUp():\n    global users_list\n    users_list = {}\n")
     (n,) = idiom_notes(ws)
     assert n.endswith("`myapp.store.users_list.clear()`.") and len(n) <= 200
+
+
+def test_an_attribute_or_item_assignment_is_not_a_container_binding(tmp_path):
+    from watchtower.floors.f2_dev.lint import idiom_notes
+    ws = Workspace(tmp_path)
+    ws.write("todo.py", "app = object()\napp.config = {}\nCACHE = {}\nCACHE['x'] = []\n")
+    ws.write("test_todo.py", "from todo import app\ndef setUp():\n    global app\n    app = object()\n")
+    assert idiom_notes(ws) == []
