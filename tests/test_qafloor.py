@@ -319,3 +319,66 @@ def test_a_real_add_twice_is_not_told_to_show_both_texts():
               {"name": checks[1]["name"], "pass": False, "status": 200, "detail": "expected x"}]
         assert "same request" not in run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py",
                                             checks).summary
+
+
+ECHO_APP = '''import html, os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+ITEMS = []
+class H(BaseHTTPRequestHandler):
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers["Content-Length"])).decode()
+        ITEMS.append(raw.split("=", 1)[1])  # MODE
+        self.do_GET()
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(("<ul>" + "".join(f"<li>{i}</li>" for i in ITEMS) + "</ul>").encode())
+    def log_message(self, *a):
+        pass
+HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
+'''
+
+
+def _live(tmp_path, app, checks):
+    (tmp_path / "app.py").write_text(app)
+    proc = subprocess.run([sys.executable, "-c", QA_SCRIPT, "app.py", json.dumps(checks)], cwd=tmp_path,
+                          capture_output=True, text=True, timeout=60, env={**os.environ, "WT_PORT": str(free_port())})
+    return run_qa(lambda cmd: SandboxResult(proc.returncode, proc.stdout, proc.stderr, False), "app.py", checks)
+
+
+def test_a_form_value_shown_still_url_encoded_is_named(tmp_path):
+    checks = parse_checks({"checks": [
+        {"name": "add", "method": "POST", "path": "/add", "form": {"item": "New todo & more"}, "expect_text": ""},
+        {"name": "list", "path": "/", "expect_text": "New todo & more"}]})
+    pkg = _live(tmp_path, ECHO_APP, checks)
+    line = next(ln for ln in pkg.summary.splitlines() if ln.startswith("- list:"))
+    assert "URL-encoded" in line and "parse_qs" in line and line.index("URL-encoded") < 120
+
+
+def test_html_escaped_text_counts_as_shown(tmp_path):
+    app = ECHO_APP.replace('ITEMS.append(raw.split("=", 1)[1])  # MODE',
+                           'from urllib.parse import parse_qs\n        ITEMS.append(html.escape(parse_qs(raw)["item"][0]))')
+    checks = parse_checks({"checks": [
+        {"name": "add", "method": "POST", "path": "/add", "form": {"item": "Tom & Jerry <3"}, "expect_text": ""},
+        {"name": "list", "path": "/", "expect_text": "Tom & Jerry <3"}]})
+    assert _live(tmp_path, app, checks).checks_run[-1]["pass"] is True
+
+
+def test_escaped_markup_does_not_pass_a_markup_check(tmp_path):
+    app = ECHO_APP.replace('self.wfile.write(("<ul>"', 'self.wfile.write(html.escape("<ul>"')  # escapes its own markup
+    checks = parse_checks({"checks": [
+        {"name": "add", "method": "POST", "path": "/add", "form": {"item": "milk"}, "expect_text": ""},
+        {"name": "list", "path": "/", "expect_text": "<li>milk</li>"}]})
+    assert _live(tmp_path, app, checks).checks_run[-1]["pass"] is False
+
+
+def test_the_url_encoded_hint_reaches_the_head_of_the_summary():
+    checks = [_c("bogus", {}, 200, "Test item Todo list", "GET", "/"), _c("list", {}, 200, "New todo", "GET", "/")]
+    qa = [{"name": "bogus", "pass": False, "status": 200, "detail": "expected 200 with 'x', got 200: " + "<li>a</li>" * 30},
+          {"name": "list", "pass": False, "status": 200,
+           "detail": "the page shows it still URL-encoded ('New+todo'): decode form data with urllib.parse.parse_qs; x"}]
+    from watchtower.floors.framework import untrusted
+    summary = run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py", checks).summary
+    seen = ("Floor 4 QA checks failed:\n" + untrusted("sandbox", summary))[:600]
+    assert "parse_qs" in seen and summary.splitlines()[0] == "QA checks FAILED:"
+    assert summary.splitlines()[1].startswith("Form data:")
