@@ -192,18 +192,32 @@ def _request(c: dict) -> tuple:
     return c["method"], c["path"], tuple(sorted((str(k), str(v)) for k, v in (c.get("form") or {}).items()))
 
 
+def _same_request_hints(checks: list[dict], results: list[dict]) -> dict[int, str]:
+    """Run 13: two checks sent one request (no other POST between them, so nothing changed) and wanted different
+    texts; the coder saw one failure at a time and flip-flopped. Name the pair once, on its first failing check,
+    right after FAIL (the coder sees only the head of this summary). By position: names may repeat."""
+    if [r.get("name") for r in results] != [c["name"] for c in checks]:
+        return {}
+    hints, paired = {}, set()
+    for j, r in enumerate(results):
+        if r.get("pass") is True or j in paired:
+            continue
+        for i, c in enumerate(checks):
+            between = checks[min(i, j) + 1:max(i, j)]
+            if (i != j and _request(c) == _request(checks[j]) and c["expect_text"]
+                    and c["expect_text"] != checks[j]["expect_text"] and not any(b["method"] == "POST" for b in between)):
+                hints[j] = f" [same request as {c['name'][:30]!r}: show both texts]"
+                paired |= {i, j}
+                break
+    return hints
+
+
 def parse_checks(reply, known: str | None = None) -> list[dict]:
     """Keep only checks that are safe to run: local relative paths, small forms, sane values; names made
     unique. With `known` (checks written from existing code), description-like expected text is dropped
     unless the code really contains it; test-first checks (no code yet) keep their text as written."""
     raw = reply.get("checks") if isinstance(reply, dict) else None
-    checks, seen, status = [], {}, {}
-    for c in (c for c in map(_check, raw if isinstance(raw, list) else []) if c):
-        key = _request(c)
-        if status.setdefault(key, c["expect_status"]) != c["expect_status"]:
-            continue  # the same request cannot answer two statuses: the later check could never pass
-        checks.append(c)
-    checks = checks[:MAX_CHECKS]
+    checks, seen = [c for c in map(_check, raw if isinstance(raw, list) else []) if c][:MAX_CHECKS], {}
     for c in checks:
         if known is not None:
             c["expect_text"] = _page_text(c["expect_text"], known)
@@ -235,15 +249,9 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
     except ValueError:
         app_log = output
     passed = not result.timed_out and all(r.get("pass") is True for r in results)
-    by_name = {c["name"]: _request(c) for c in checks}
-
-    def same(r: dict) -> str:  # run 13: two checks sent one request and wanted different texts
-        if r.get("pass") is True or r.get("name") not in by_name:
-            return ""
-        other = next((c["name"] for c in checks if c["name"] != r["name"] and _request(c) == by_name[r["name"]]), None)
-        return f" (same request as {str(other)[:40]!r}: if both are right, one response must show both texts)" if other else ""
-    lines = [f"- {r.get('name')}: {'PASS' if r.get('pass') is True else 'FAIL'} {str(r.get('detail') or '')[:300]}"
-             f"{same(r)}" for r in results]
+    hints = _same_request_hints(checks, results)
+    lines = [f"- {r.get('name')}: {'PASS' if r.get('pass') is True else 'FAIL'}{hints.get(i, '')} "
+             f"{str(r.get('detail') or '')[:300]}" for i, r in enumerate(results)]
     error = "" if passed else app_error(str(app_log))  # first: the coder sees only the head of this summary
     summary = f"QA checks {'passed' if passed else 'FAILED'}:\n" + (error + "\n" if error else "") + "\n".join(lines)
     if not passed:

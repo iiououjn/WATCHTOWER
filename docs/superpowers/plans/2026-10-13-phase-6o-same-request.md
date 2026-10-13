@@ -20,7 +20,8 @@ texts. Nothing said so: the coder saw one failure at a time and kept switching b
 3. **A stateful app** may answer the same request differently the second time (a duplicate add). Counter: the hint
    says "if both are right, show both texts" and keeps both checks, so a correct app can still pass.
 
-## Rulings
+## Rulings (after review 1)
+0. No status drop: a stateful app may rightly answer GET /item/1 with 404, then 200 after a POST. Hint only.
 1. Same request = same method, path and form (form compared as sorted key/value pairs).
 2. The hint is added to the failing check's line, ≤ 120 chars, naming the other check.
 
