@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ast
+import io
 import json
 import re
+import tokenize
 import warnings
 from fnmatch import fnmatch
 from pathlib import PurePosixPath
@@ -22,7 +24,8 @@ import fnmatch, inspect, json, os, sys, unittest
 class Fn(unittest.FunctionTestCase):  # pytest-style 'def test_x(): assert ...' runs too, named like a method
     def __str__(self):
         f = self._testFunc
-        return f"{f.__name__} ({f.__module__}.{f.__name__})"
+        name = getattr(f, "__name__", str(f))
+        return f"{name} ({getattr(f, '__module__', '?')}.{name})"
 def plain(fn):
     if inspect.iscoroutinefunction(fn) or inspect.isgeneratorfunction(fn):
         def refuse():
@@ -32,8 +35,11 @@ def plain(fn):
         return refuse
     return fn
 def no_args(fn):
-    return all(p.default is not p.empty or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
-               for p in inspect.signature(fn).parameters.values())
+    try:  # mock.patch injects its own arguments: judge the wrapper, not the wrapped function
+        sig = inspect.signature(fn, follow_wrapped=not hasattr(fn, "patchings"))
+    except (ValueError, TypeError):
+        return False
+    return all(p.default is not p.empty or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in sig.parameters.values())
 class Loader(unittest.TestLoader):
     def loadTestsFromModule(self, module, *args, **kwargs):
         suite = super().loadTestsFromModule(module, *args, **kwargs)
@@ -41,7 +47,8 @@ class Loader(unittest.TestLoader):
             return suite  # app packages are not test files, even when discovery walks them
         case = type("Fn", (Fn,), {"__module__": module.__name__})  # module fixtures wrap these tests too
         for name, fn in sorted(vars(module).items()):
-            if (name.startswith("test") and inspect.isfunction(fn) and fn.__module__ == module.__name__
+            if (name.startswith("test") and name != "test_main" and inspect.isfunction(fn)  # test_main: legacy
+                    and fn.__name__ != "<lambda>" and fn.__module__ == module.__name__
                     and no_args(fn)):  # a helper that takes arguments is not a test
                 suite.addTest(case(plain(fn)))
         return suite
@@ -214,7 +221,19 @@ TEST_DIAGNOSE_PROMPT = (
 
 
 MAX_REPAIRS, MAX_SPAN, MAX_REPAIR_BYTES = 6, 4, 100_000
-_AFTER_CLOSE = set(")]},:+.%# \t\r")
+_AFTER_CLOSE = set(")]},:+.% \t\r")
+
+
+def _stands_alone(line: str) -> bool:
+    """A line that tokenizes cleanly on its own (`bg = "#000"`, a comment) is a normal line, never the tail of
+    a string split by a lost line break — a real tail (`world")`) leaves a quote open and cannot."""
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(line.strip() + "\n").readline):
+            if tok.type == tokenize.ERRORTOKEN:
+                return False
+        return True
+    except (tokenize.TokenError, SyntaxError):
+        return False
 
 
 def _syntax_error(text: str):
@@ -270,7 +289,7 @@ def repair_strings(source: str) -> tuple[str, list[int]]:
             joined += nxt
             if close >= 0:
                 rest = nxt[close + 1:]
-                used = k if not rest or rest[0] in _AFTER_CLOSE else 0
+                used = k if (not rest or rest[0] in _AFTER_CLOSE) and not _stands_alone(nxt) else 0
                 break
         if not used:
             break
@@ -556,7 +575,8 @@ class DevFloor:
                         content, lines = repair_strings(content)
                     self._ws.write(path, content)
                     if lines:
-                        notes.append(f"Auto-repaired {path} line(s) {', '.join(map(str, lines))}: a line break inside "
+                        notes.append(f"Auto-repaired {path} line(s) {', '.join(map(str, lines))} of what you sent: a line "
+                                     "break inside "
                                      "a string became \\n (JSON escaping). Write \\n as \\\\n inside JSON strings.")
             except WorkspaceError as e:
                 notes.append(f"File rejected: {e}")

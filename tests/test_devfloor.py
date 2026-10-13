@@ -850,7 +850,9 @@ def test_runner_accepts_pytest_style_test_functions(tmp_path):
 
 
 @pytest.mark.parametrize("src", ['def render(page="home):\n    """Render\n    one page."""\n    return page\n',
-                                 'NAME = "app\nHELP = """\nusage\n"""\n'])
+                                 'NAME = "app\nHELP = """\nusage\n"""\n',
+                                 'color = "#ff0000\nbg = "#000000"\n', "h = '# Title\nsub = '## Sub'\n",
+                                 "name = 'abc\n# keep the users'\nx = 1\n", "name = 'abc\n# the users', so\n"])
 def test_a_genuinely_missing_quote_is_never_repaired(src):
     assert repair_strings(src) == (src, [])
 
@@ -900,3 +902,22 @@ def test_function_tests_see_setupmodule_and_async_or_generator_tests_fail(tmp_pa
                        "def test_gen():\n    yield\n    assert False\n"})
     assert summary["run"] == 3 and summary["failures"] + summary["errors"] == 2, err
     assert "IsolatedAsyncioTestCase" in err or "not run" in err
+
+
+def test_runner_ignores_the_legacy_test_main_idiom_and_odd_functions(tmp_path):
+    summary, err = _run_runner(tmp_path, {
+        "app.py": "def add(a, b):\n    return a + b\n",
+        "test_app.py": "import unittest\nfrom unittest import mock\nfrom app import add\n\n"
+                       "class T(unittest.TestCase):\n    def test_a(self):\n        self.assertEqual(add(1, 2), 3)\n\n"
+                       "def test_main():\n    unittest.main()\n\n"
+                       "test_lam = lambda: None\n\n"
+                       "def test_sig():\n    pass\ntest_sig.__signature__ = 'nope'\n\n"
+                       "@mock.patch('app.add', return_value=5)\ndef test_patched(m):\n    import app\n"
+                       "    assert app.add(1, 1) == 5\n"})
+    assert summary == {"run": 2, "skipped": 0, "failures": 0, "errors": 0}, err
+
+
+def test_repair_note_says_the_lines_are_in_what_the_coder_sent(tmp_path):
+    script = Script({"f2.coder": [{"files": [{"path": "app.py", "content": "x = 'a\nb'\n"}, TEST]}]})
+    dev(tmp_path, script, Runner([FAILED]), rounds=2).build(SPEC, PLAN3, [])
+    assert "line(s) 1 of what you sent" in script.prompts["f2.coder"][1]
