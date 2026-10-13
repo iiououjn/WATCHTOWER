@@ -998,3 +998,12 @@ def test_the_coder_can_reply_in_file_blocks_end_to_end(app_tower):
     ws = sandbox.workspace(job.id)
     assert (ws / "app.py").read_text() == "import json\nprint('<b>\\n</b>')\n"
     runner.close()
+
+
+def test_failing_coder_tests_still_reach_the_tower_checks(app_tower):  # phase 6s, run 17
+    runner, model, sandbox, job = app_tower(test_ok=False)
+    out = runner.start(job.id, extra={"auto_approve": True})
+    scripts = [c[2] for c in sandbox.calls if c[:2] == ["python", "-c"]]
+    assert any("SMOKE_STATUS" in s for s in scripts) and any("WATCHTOWER_QA" in s for s in scripts)
+    assert out.status == "done"
+    runner.close()
