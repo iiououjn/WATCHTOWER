@@ -299,15 +299,16 @@ class DevFloor:
                     reply = self._ask(self._coder, CODE_PROMPT.format(
                         files=untrusted_code("workspace", self._ws.snapshot(room)), **parts))
                 except BadModelOutput:  # a garbled reply costs this round, not the whole job
-                    checks.append({"check": "tests", "round": round_no, "pass": False,
-                                   "output": "coder reply had no usable files"})
+                    checks.append({"check": "tests", "round": round_no, "pass": False,  # files on disk still judged
+                                   "output": "coder reply had no usable files",
+                                   "problems": [str(p)[:200] for p in self._problems()]})
                     notes = ["Your last reply had no usable files. Reply with one block per file: ### FILE: path, "
                              "then the complete file in a ``` fence."] + carry  # keep what HR said
                     continue
                 notes = _format_notes(reply) + self._write(reply.get("files"), plan["entry"])
             self._ensure_packages()
             notes += self._link_entry(plan["entry"])
-            problems = handler_state_problems(self._ws) + (import_problems(self._ws) if self._stdlib_only else [])
+            problems = self._problems()
             has_tests = any(_is_test_file(f) for f in self._ws.files())
             result = self._run(TEST_COMMAND)
             output = ((result.stdout or "") + (result.stderr or ""))[-2000:]
@@ -363,6 +364,10 @@ class DevFloor:
         questions = [] if passed else [f"tests still failing after {len(checks)} round(s)"]
         questions += [hr_question] if hr_question else []
         return WorkPackage("f2", summary, self._ws.files(), [], checks, questions)
+
+    def _problems(self) -> list[str]:
+        """The tower's own static checks on the files on disk: they block the F2 handoff (phase 6s)."""
+        return handler_state_problems(self._ws) + (import_problems(self._ws) if self._stdlib_only else [])
 
     def _diagnose_tests(self, report: str) -> str:
         """Floor 2 HR, only when the coder is stuck: plain words on why the same tests keep failing. Advisory."""

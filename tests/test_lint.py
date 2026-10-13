@@ -242,3 +242,22 @@ def test_f2_rounds_record_the_tower_problems(tmp_path):
     last = pkg.checks_run[-1]
     assert last["pass"] is False and any("requests" in p for p in last["problems"])
     assert all(len(p) <= 200 for p in last["problems"])
+
+
+def test_a_garbled_last_round_still_records_the_tower_problems(tmp_path):  # 6s review r1 #1
+    from watchtower.engine.model_socket import BadModelOutput
+    from watchtower.engine.sandbox import SandboxResult
+    from watchtower.engine.workspace import Workspace
+    from watchtower.floors.f2_dev.devfloor import DevFloor
+    from watchtower.roles import Role
+    ws = Workspace(tmp_path)
+    ws.write("app.py", "import requests\n")
+    ws.write("test_app.py", "import unittest\nimport app\n")
+
+    def ask(role, prompt):
+        raise BadModelOutput("garbled")
+    floor = DevFloor(Role("f2.architect", "A", "f2", "work", (), "a"), Role("f2.coder", "C", "f2", "work", (), "c"),
+                     ask=ask, workspace=ws, run=lambda cmd: SandboxResult(0, "", "", False), max_rounds=1)
+    pkg = floor.build({"title": "T", "goal": "g", "acceptance": [], "out_of_scope": []},
+                      {"files": [], "entry": "app.py"}, [])
+    assert any("requests" in p for p in pkg.checks_run[-1]["problems"])

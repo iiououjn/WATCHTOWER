@@ -382,3 +382,22 @@ def test_failing_coder_tests_still_reach_the_tower_checks(app_tower):  # phase 6
     assert any("SMOKE_STATUS" in s for s in scripts) and any("WATCHTOWER_QA" in s for s in scripts)
     assert out.status == "done"
     runner.close()
+
+
+def test_gate_is_told_the_coder_tests_are_advisory(app_tower):  # 6s review r1 #2
+    runner, model, sandbox, job = app_tower(test_ok=False)
+    runner.start(job.id, extra={"auto_approve": True})
+    gate = [p for c, p in zip(model.calls, model.prompts) if c == "f5.dev_gate"]
+    assert gate and "advisory" in gate[0] and "tests still failing" not in gate[0]
+    runner.close()
+
+
+def test_static_problems_reach_the_coder_by_name(app_tower):  # 6s review r1 #4
+    bad = {"files": [{"path": "app.py", "content": "import requests\n"},
+                     {"path": "test_app.py", "content": "import unittest\nimport app\n"}]}
+    runner, model, sandbox, job = app_tower({"f2.coder": [bad]})
+    runner.start(job.id, extra={"auto_approve": True})
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    later = [p for p in coder[1:] if "requests" in p and "reality check failed" in p]
+    assert later and "Floor 2 static checks failed" in later[0]
+    runner.close()

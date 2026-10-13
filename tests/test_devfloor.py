@@ -257,7 +257,8 @@ def test_a_broken_coder_reply_costs_a_round_not_the_job(tmp_path):
     pkg = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([OK])).build(
         SPEC, {"files": [], "entry": "app.py"}, [])
     assert pkg.checks_run[-1]["pass"] and "no usable files" in prompts[1] and "### FILE:" in prompts[1]
-    assert pkg.checks_run[0] == {"check": "tests", "round": 0, "pass": False, "output": "coder reply had no usable files"}
+    assert pkg.checks_run[0] == {"check": "tests", "round": 0, "pass": False, "output": "coder reply had no usable files",
+                                 "problems": []}
 
 
 def test_coder_that_never_returns_json_fails_the_build_after_its_rounds(tmp_path):

@@ -15,3 +15,20 @@ def f2_handoff(checks_run: list[dict], entry: str, files: list[str]) -> tuple[bo
     if problems:
         return False, problems
     return True, [] if last.get("pass") else [ADVISORY]
+
+
+GATE_NOTE = ("F2 note: the coder's own unit tests are advisory, not blocking; "
+             "the F3 start, F4 QA and F5 scan results below decide.\n")
+
+
+def for_gate(summary: str, questions: list[str], tests_ok: bool) -> tuple[str, list[str]]:
+    """F2's part of the package the model gate reads: failing coder tests are labelled advisory (6s review r1)."""
+    if tests_ok:
+        return summary, questions
+    return (GATE_NOTE + summary.replace("Tests: FAIL", "Coder unit tests (advisory): FAIL", 1),
+            [q for q in questions if not q.startswith("tests still failing")])
+
+
+def static_feedback(go: bool, reasons: list[str], entry: str, files: list[str]) -> list[str]:
+    """When the tower's static checks block F2, the coder hears which ones (6s review r1)."""
+    return [] if go or entry not in files else ["Floor 2 static checks failed: " + "; ".join(reasons)[:600]]

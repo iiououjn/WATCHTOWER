@@ -25,7 +25,7 @@ from watchtower.floors.f5_oversight.office import OversightOffice
 from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
 from watchtower.floors.f5_oversight.oversight import is_failing as _failing, security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
-from watchtower.floors.f2_dev.handoff import f2_handoff
+from watchtower.floors.f2_dev.handoff import f2_handoff, for_gate, static_feedback
 from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.beacon.glass import INJECTION, normalize
@@ -181,11 +181,12 @@ class TowerPipeline:
                     if sec.checks_run[-1]["pass"]:
                         audit = oversight.audit(spec, focus, ws.snapshot(3000), f4.summary)
                 later = [p for p in (f3, f4, sec) if p is not None]
-                package = WorkPackage("dev", "\n\n".join([package.summary] + [p.summary for p in later]
+                f2_summary, f2_questions = for_gate(package.summary, package.open_questions, tests_ok)
+                package = WorkPackage("dev", "\n\n".join([f2_summary] + [p.summary for p in later]
                                                          + ([f"Oversight audit:\n{audit}"] if audit else []))
                                       + f"\n\nCode:\n{ws.snapshot(3000)}", ws.files(), [],
                                       package.checks_run + [c for p in later for c in p.checks_run],
-                                      package.open_questions + [q for p in later for q in p.open_questions])
+                                      f2_questions + [q for p in later for q in p.open_questions])
             verdict = gate.check(spec, package, DEV_ROUTES)
             self._bus.publish("gate.verdict", {"floor": "dev", "attempt": attempt, "passed": verdict.passed,
                                                "reasons": verdict.reasons, "route": verdict.route}, job_id)
@@ -205,6 +206,7 @@ class TowerPipeline:
                                    "  (then open http://127.0.0.1:8000)\n"
                                    f"Safer — deploy it isolated, with no internet: watchtower deploy {job_id}")}
             feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]
+            feedback = feedback + static_feedback(go, reasons, plan["entry"], ws.files())
             if f3 is not None and not f3.checks_run[-1]["pass"]:  # show the coder the app's real error
                 feedback = feedback + ["Floor 3 started the app and it failed:\n" + untrusted("sandbox", f3.summary)]
                 crash = crash_query(f3.summary)

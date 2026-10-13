@@ -392,7 +392,6 @@ def _post(form, status=200, name="add"):
 def test_empty_form_value_expecting_success_is_dropped():  # run 17: POST item="" expecting "added successfully"
     assert parse_checks(_post({"item": ""})) == []
     assert parse_checks(_post({"item": "  \t"})) == []
-    assert parse_checks(_post({"item": "milk", "note": ""})) == []
 
 
 def test_empty_form_value_expecting_an_error_is_kept():  # a real validation check
@@ -403,3 +402,8 @@ def test_empty_form_value_expecting_an_error_is_kept():  # a real validation che
 def test_control_characters_leave_check_names():
     (c,) = parse_checks(_post({"item": "milk"}, name="add\x1b[31m\nitem"))
     assert c["name"] == "add[31mitem"
+
+
+def test_a_blank_optional_field_keeps_the_check():  # 6s review r1 #3: a later GET depends on this POST
+    (c,) = parse_checks(_post({"item": "milk", "note": ""}))
+    assert c["form"] == {"item": "milk", "note": ""}
