@@ -277,3 +277,25 @@ def test_a_big_non_ascii_log_cannot_push_the_result_line_out():
     # the sandbox keeps the output's tail: the result line goes last, and the log is not \u-escaped (6x growth)
     assert QA_SCRIPT.index('print("WATCHTOWER_LOG ') < QA_SCRIPT.index('print("WATCHTOWER_QA ')
     assert "ensure_ascii=False" in QA_SCRIPT
+
+
+def _c(name, form, status, text, method="POST", path="/add"):
+    return {"name": name, "method": method, "path": path, "form": form, "expect_status": status, "expect_text": text}
+
+
+def test_same_request_with_a_different_status_keeps_only_the_first():
+    out = parse_checks({"checks": [_c("a", {"item": "x"}, 404, ""), _c("b", {"item": "x"}, 200, "Added"),
+                                   _c("c", {"item": "y"}, 200, "Added")]})
+    assert [c["name"] for c in out] == ["a", "c"]
+
+
+def test_a_failing_check_that_shares_its_request_says_so():
+    checks = [_c("Check 1", {"item": ""}, 200, "Welcome"), _c("ADD", {"item": ""}, 200, "Confirmation"),
+              _c("other", {"item": "z"}, 200, "z")]
+    qa = [{"name": "Check 1", "pass": True, "status": 200, "detail": ""},
+          {"name": "ADD", "pass": False, "status": 200, "detail": "expected 200 with 'Confirmation', got 200: Welcome"},
+          {"name": "other", "pass": True, "status": 200, "detail": ""}]
+    summary = run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py", checks).summary
+    line = next(ln for ln in summary.splitlines() if ln.startswith("- ADD:"))
+    assert "same request as 'Check 1'" in line and "show both" in line
+    assert "same request" not in next(ln for ln in summary.splitlines() if ln.startswith("- other:"))
