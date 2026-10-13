@@ -80,15 +80,15 @@ PLAN_PROMPT = (
 )
 CODE_PROMPT = (
     "Spec:\n{spec}\n\nFile plan and routes contract:\n{plan}\n\nCurrent files:\n{files}\n{qa}{feedback}\n"
-    "Write or fix up to 3 files so the unittest tests pass and the spec is met. To remove a stale file, "
-    'send {{"path": string, "delete": true}}. Reply as JSON: {{"files": [{{"path": string, "content": string}}]}}'
+    "Write or fix up to 3 files so the unittest tests pass and the spec is met. Reply with one block per file "
+    "(### FILE: path, then the complete file in a ``` fence); to remove a stale file write ### DELETE: path."
 )
 
 
 UNIT_PROMPT = (
     "Spec:\n{spec}\n\nFile plan and routes contract:\n{plan}\n\nFiles already written:\n{files}\n{qa}\n"
     "You are coder {i} of {n} on this floor. Write ONLY these files, complete and working:\n{unit}\n"
-    'Reply as JSON: {{"files": [{{"path": string, "content": string}}]}}'
+    "Reply with one block per file: ### FILE: path, then the complete file in a ``` fence."
 )
 MAX_UNITS, UNIT_FILES = 4, 3
 HR_PROMPT = (
@@ -303,6 +303,11 @@ def repair_strings(source: str) -> tuple[str, list[int]]:
     return text, fixed
 
 
+def _format_notes(reply: dict) -> list[str]:
+    """What the file-block reader could not use (a block left open, cut off …): the coder must hear it."""
+    return [str(n)[:200] for n in (reply.get("notes") if isinstance(reply.get("notes"), list) else [])][:3]
+
+
 def _is_test_file(path: str) -> bool:
     """Exactly what the runner discovers: test*.py anywhere (_ensure_packages makes every folder a package)."""
     return fnmatch(PurePosixPath(path).name, "test*.py")
@@ -429,7 +434,7 @@ class DevFloor:
             mine = [f for f in files if isinstance(f, dict) and f.get("path") in paths and f.get("delete") is not True]
             stray += [str(f.get("path"))[:100] for f in files if isinstance(f, dict) and f not in mine]
             before = set(self._ws.files())
-            notes += self._write(mine)
+            notes += _format_notes(reply) + self._write(mine)
             if on_unit is not None and set(self._ws.files()) - before:
                 on_unit(i, len(todo), paths)
         written = {p.lower() for p in self._ws.files()}  # a stray file another unit then wrote is no news
@@ -465,11 +470,11 @@ class DevFloor:
                         files=untrusted_code("workspace", self._ws.snapshot(room)), **parts))
                 except BadModelOutput:  # a garbled reply costs this round, not the whole job
                     checks.append({"check": "tests", "round": round_no, "pass": False,
-                                   "output": "coder reply was not valid JSON"})
-                    notes = ["Your last reply was not valid JSON. Reply with one JSON object; escape every double "
-                             "quote and newline inside file contents (\\\" and \\n)."] + carry  # keep what HR said
+                                   "output": "coder reply had no usable files"})
+                    notes = ["Your last reply had no usable files. Reply with one block per file: ### FILE: path, "
+                             "then the complete file in a ``` fence."] + carry  # keep what HR said
                     continue
-                notes = self._write(reply.get("files"))
+                notes = _format_notes(reply) + self._write(reply.get("files"))
             self._ensure_packages()
             problems = import_problems(self._ws) if self._stdlib_only else []
             has_tests = any(_is_test_file(f) for f in self._ws.files())
@@ -560,9 +565,16 @@ class DevFloor:
 
     def _write(self, files) -> list[str]:
         notes = []
-        for f in (files if isinstance(files, list) else [])[:MAX_FILES_PER_ROUND]:
+        written = 0
+        for f in (files if isinstance(files, list) else [])[:MAX_FILES_PER_ROUND + 5]:
             if not isinstance(f, dict):
                 continue
+            if f.get("delete") is not True:
+                if written >= MAX_FILES_PER_ROUND:  # deletes don't use up the cap; writes beyond it are dropped
+                    notes.append(f"File {str(f.get('path'))[:100]!r} not written: at most {MAX_FILES_PER_ROUND} "
+                                 "files per reply")
+                    continue
+                written += 1
             try:
                 if f.get("delete") is True:
                     self._ws.delete(str(f.get("path", "")))
@@ -576,8 +588,7 @@ class DevFloor:
                     self._ws.write(path, content)
                     if lines:
                         notes.append(f"Auto-repaired {path} line(s) {', '.join(map(str, lines))} of what you sent: a line "
-                                     "break inside "
-                                     "a string became \\n (JSON escaping). Write \\n as \\\\n inside JSON strings.")
+                                     "break inside a one-line string was joined as \\n. Keep one-line strings on one line.")
             except WorkspaceError as e:
                 notes.append(f"File rejected: {e}")
         return notes

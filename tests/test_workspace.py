@@ -60,7 +60,7 @@ def test_snapshot_is_truncated(ws):
     ws.write("a.py", "a" * 5000)
     ws.write("b.py", "b" * 5000)
     snap = ws.snapshot(max_chars=3000)
-    assert "### a.py" in snap and len(snap) <= 3200 and "(truncated)" in snap
+    assert "### FILE: a.py" in snap and len(snap) <= 3200 and "(truncated)" in snap
 
 
 def test_delete_is_validated(ws):

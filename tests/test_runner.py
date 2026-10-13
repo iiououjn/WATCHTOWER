@@ -988,3 +988,13 @@ def test_a_failing_qa_check_is_never_weakened_so_a_failing_app_cannot_pass(app_t
     runner, model, sandbox, job = app_tower(qa_ok=False)
     assert runner.start(job.id, extra={"auto_approve": True}).status == "paused"
     runner.close()
+
+
+def test_the_coder_can_reply_in_file_blocks_end_to_end(app_tower):
+    blocks = ("### FILE: app.py\n```python\nimport json\nprint('<b>\\n</b>')\n```\n"
+              "### FILE: test_app.py\n```python\nimport unittest\nimport app\n```\n")
+    runner, model, sandbox, job = app_tower({"f2.coder": [blocks]})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    ws = sandbox.workspace(job.id)
+    assert (ws / "app.py").read_text() == "import json\nprint('<b>\\n</b>')\n"
+    runner.close()

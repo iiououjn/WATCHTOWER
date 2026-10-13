@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -57,6 +58,81 @@ class Reply:
     completion_tokens: int
     seconds: float
     usd: float
+
+
+_MARK = r"^[ \t]*(?:[-*][ \t]+|\d+[.)][ \t]*)?(?:#{2,4}|\*\*)[ \t]*(?:\*\*)?[ \t]*"  # '### ', '**', '1. ###' …
+_HEADER = re.compile(_MARK + r"(FILE|DELETE)[ \t]*(?:\*\*)?[ \t]*:[ \t]*(?:\*\*)?[ \t]*(.+?)[ \t]*(?:\*\*)?[ \t]*$",
+                     re.I)
+_MEMO = re.compile(r"^[ \t]*(?:(?:#{2,4}|\*\*)[ \t]*(?:\*\*)?[ \t]*)?MEMO[ \t]+(f\d)[ \t]*(?:\*\*)?[ \t]*:"
+                   r"[ \t]*(?:\*\*)?[ \t]*(\S.*?)[ \t]*$", re.I)
+_FENCE = re.compile(r"^([ \t]*)(`{3,}|~{3,})")
+_PATH_OK = re.compile(r"[\w.-]+(?:/[\w.-]+)*\.\w+")
+FILES_NOTE = ("\n\nYour previous reply had no usable files. Reply with one block per file, exactly like this:\n"
+              "### FILE: app.py\n```python\n<the complete file>\n```")
+
+
+def _clean_path(raw: str) -> str:
+    path = raw.strip().strip("`*'\"").strip().replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return path
+
+
+def _header(line: str) -> tuple[str, str] | None:
+    """A file header only when clearly marked ('##'/'###'/'**', optional list number) and naming a real file —
+    so a code comment ('# File: app.py') or a template ('### FILE: {name}') is never one."""
+    m = _HEADER.match(line)
+    path = _clean_path(m.group(2)) if m else ""
+    return (m.group(1).upper(), path) if m and _PATH_OK.fullmatch(path) else None
+
+
+def parse_files(text: str) -> dict:
+    """Code as plain fenced blocks ('### FILE: path' + a fence), so no character ever needs escaping — the
+    coder's JSON escaping of newlines and quotes was the commonest cause of broken files. A file starts at a
+    marked header followed by a fence and ends at the LAST closing fence before the next file (so ``` lines
+    inside code never cut it short); a block with no closing fence is rejected with a note, never written half.
+    DELETE / MEMO lines count only outside code; the model's own order is kept."""
+    lines = (text or "").replace("\r\n", "\n").split("\n")
+    starts = []  # (header line, fence line, path)
+    for i, line in enumerate(lines):
+        head = _header(line)
+        if head and head[0] == "FILE":
+            j = next((k for k in range(i + 1, len(lines)) if lines[k].strip()), None)
+            if j is not None and _FENCE.match(lines[j]):
+                starts.append((i, j, head[1]))
+    entries, notes, outside = [], [], []  # entries: (line number, file dict)
+    first = starts[0][0] if starts else len(lines)
+    outside += list(range(first))
+    for n, (head_at, open_at, path) in enumerate(starts):
+        end = starts[n + 1][0] if n + 1 < len(starts) else len(lines)
+        indent, fence = _FENCE.match(lines[open_at]).groups()
+        closes = [k for k in range(open_at + 1, end)
+                  if lines[k].strip() and set(lines[k].strip()) == {fence[0]} and len(lines[k].strip()) >= len(fence)]
+        if not closes:
+            last = n + 1 == len(starts)
+            notes.append(f"File {path} was cut off (no closing fence); send it again, shorter" if last else
+                         f"File {path} was not closed with a fence before the next file; it was not written")
+            continue
+        body = [ln[len(indent):] if indent and ln.startswith(indent) else ln for ln in lines[open_at + 1:closes[-1]]]
+        entries.append((head_at, {"path": path, "content": "\n".join(body) + ("\n" if body else "")}))
+        outside += list(range(closes[-1] + 1, end))
+    memo = None
+    for k in outside:  # text outside every code block: deletes, a memo, headers that never got a fence
+        head = _header(lines[k])
+        if head and head[0] == "DELETE":
+            entries.append((k, {"path": head[1], "delete": True}))
+        elif head:
+            notes.append(f"File {head[1]} had no ``` fence after its header; send it again as a block")
+        elif memo is None and (m := _MEMO.match(lines[k])):
+            question = m.group(2).strip()
+            if re.sub(r"[^a-z ]", "", question.lower()).strip() != "your question":
+                memo = {"to": m.group(1).lower(), "question": question}
+    out: dict = {"files": [entry for _, entry in sorted(entries, key=lambda e: e[0])]}
+    if notes:
+        out["notes"] = notes
+    if memo:  # '### MEMO f3: question' — the same memo the JSON roles send
+        out["memo"] = memo
+    return out
 
 
 def _litellm_completion(**kw):
@@ -152,6 +228,29 @@ class ModelSocket:
             {"model": model, "tokens": pt + ct, "seconds": round(seconds, 3), "usd": usd}, job_id,
         )
         return Reply(text, model, pt, ct, seconds, usd)
+
+    def ask_files(self, tier: str, messages: list[dict], job_id: str, retries: int = 1) -> dict:
+        """Ask for files as fenced blocks (plain text, no JSON escaping). A JSON {"files": [...]} reply is still
+        accepted; nothing usable → ask once more with the format shown, then BadModelOutput."""
+        convo = list(messages)
+        out: dict = {"files": []}
+        for attempt in range(retries + 1):
+            reply = self.ask(tier, convo, job_id)
+            out = parse_files(reply.text)
+            if not out["files"] and not out.get("memo"):
+                try:
+                    data = parse_json(reply.text)
+                    if (isinstance(data.get("files"), list) and data["files"]) or isinstance(data.get("memo"), dict):
+                        out = {**data, "files": data.get("files") if isinstance(data.get("files"), list) else []}
+                except ValueError:
+                    pass
+            if out["files"] or out.get("memo"):
+                return out
+            if out.get("notes") and attempt == retries:  # last try: the coder still hears what went wrong
+                return out
+            self._audit.append("model_socket", "bad_files", {"model": reply.model}, job_id)
+            convo = list(messages[:-1]) + [{**messages[-1], "content": messages[-1]["content"] + FILES_NOTE}]
+        raise BadModelOutput(f"{self._s.tiers[tier]} returned no usable files after {retries + 1} tries")
 
     def ask_json(self, tier: str, messages: list[dict], job_id: str, retries: int = 1) -> dict:
         """Ask for a JSON object; on unparseable output, ask again with the error noted. The broken reply is NOT
