@@ -25,7 +25,7 @@ from watchtower.floors.f5_oversight.office import OversightOffice
 from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
 from watchtower.floors.f5_oversight.oversight import is_failing as _failing, security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
-from watchtower.floors.f2_dev.handoff import f2_handoff, for_gate, static_feedback
+from watchtower.floors.f2_dev.handoff import board_line, f2_handoff, for_gate, static_feedback
 from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.beacon.glass import INJECTION, normalize
@@ -153,11 +153,10 @@ class TowerPipeline:
                 unit_notes.append(f"planned files still missing: {', '.join(missing[:8])}; write them")
             package = dev.build(spec, plan, unit_notes + list(feedback), qa_round.coder_checks,  # unit notes first: never cut
                                 test_first=bool(written) and not feedback and not missing)
-            f3, f4, sec, audit = None, None, None, ""
+            f3, f4, sec, audit, notes = None, None, None, "", ()
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
-            self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "
-                       f"after {len(package.checks_run)} round(s) (attempt {attempt + 1})")
             go, reasons = f2_handoff(package.checks_run, plan["entry"], ws.files())  # the tower's checks decide
+            self._post(data, "f2", "doing", board_line(package.checks_run, attempt, go, reasons))
             self._handoff(data, "f2", attempt, go, reasons)
             if package.checks_run and plan["entry"] not in ws.files():
                 feedback = [f"the planned entry file {plan['entry']} does not exist; create it"]
@@ -181,13 +180,13 @@ class TowerPipeline:
                     if sec.checks_run[-1]["pass"]:
                         audit = oversight.audit(spec, focus, ws.snapshot(3000), f4.summary)
                 later = [p for p in (f3, f4, sec) if p is not None]
-                f2_summary, f2_questions = for_gate(package.summary, package.open_questions, tests_ok)
+                f2_summary, f2_questions, notes = for_gate(package.summary, package.open_questions, tests_ok)
                 package = WorkPackage("dev", "\n\n".join([f2_summary] + [p.summary for p in later]
                                                          + ([f"Oversight audit:\n{audit}"] if audit else []))
                                       + f"\n\nCode:\n{ws.snapshot(3000)}", ws.files(), [],
                                       package.checks_run + [c for p in later for c in p.checks_run],
                                       f2_questions + [q for p in later for q in p.open_questions])
-            verdict = gate.check(spec, package, DEV_ROUTES)
+            verdict = gate.check(spec, package, DEV_ROUTES, notes)
             self._bus.publish("gate.verdict", {"floor": "dev", "attempt": attempt, "passed": verdict.passed,
                                                "reasons": verdict.reasons, "route": verdict.route}, job_id)
             self._post(data, "f5", "done" if verdict.passed else "issue", "gate passed the app" if verdict.passed
@@ -202,7 +201,9 @@ class TowerPipeline:
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
                                    "Note: written by a local AI and tested only inside the sandbox — untested on "
                                    "your Mac. Read the code before running it.\n"
-                                   f"Run it: cd {shlex.quote(str(ws.root))} && python {shlex.quote(plan['entry'])}"
+                                   + ("" if tests_ok else "Note: the coder's own unit tests fail (advisory); "
+                                      "the tower's start, QA and security checks passed.\n")
+                                   + f"Run it: cd {shlex.quote(str(ws.root))} && python {shlex.quote(plan['entry'])}"
                                    "  (then open http://127.0.0.1:8000)\n"
                                    f"Safer — deploy it isolated, with no internet: watchtower deploy {job_id}")}
             feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]

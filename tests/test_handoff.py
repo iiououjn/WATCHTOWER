@@ -34,3 +34,25 @@ def test_no_round_ran_blocks():
 def test_sign_off_evidence_marks_coder_tests_advisory():
     from watchtower.tower import _evidence
     assert "- coder unit tests (advisory): FAIL" in _evidence([{"check": "tests", "pass": False}])
+
+
+def test_missing_entry_reaches_the_coder():  # 6s review r2 #3: the gate's verdict replaced the entry message
+    from watchtower.floors.f2_dev.handoff import static_feedback
+    assert static_feedback(False, ["planned entry file app.py missing"], "app.py", ["main.py"]) == [
+        "the planned entry file app.py does not exist; create it"]
+
+
+def test_static_feedback_fits_one_feedback_item():  # 6s review r2 #6
+    from watchtower.floors.f2_dev.devfloor import FEEDBACK_ITEM
+    from watchtower.floors.f2_dev.handoff import static_feedback
+    (item,) = static_feedback(False, ["x" * 200] * 5, "app.py", ["app.py"])
+    assert len(item) <= FEEDBACK_ITEM
+
+
+def test_board_line_tells_tests_apart_from_static_problems():  # 6s review r2 #4
+    from watchtower.floors.f2_dev.handoff import board_line
+    checks = [{"check": "tests", "pass": False, "clean": True, "problems": ["imports requests"]}]
+    line = board_line(checks, 0, False, ["imports requests"])
+    assert line.startswith("unit tests pass after 1 round(s) (attempt 1)") and "blocked: imports requests" in line
+    assert board_line([{"check": "tests", "pass": False, "problems": []}], 1, True, ["x"]).startswith(
+        "unit tests still fail after 1 round(s) (attempt 2)")

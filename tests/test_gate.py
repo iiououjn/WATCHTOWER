@@ -102,3 +102,15 @@ def test_gate_prompt_lists_the_guardrails():
     gate.check({"acceptance": ["a"], "out_of_scope": []},
                WorkPackage("dev", "s", [], [], [{"check": "tests", "pass": True}], []))
     assert "Guardrails:\n- No unrequested features.\n- No secrets." in prompts[0]
+
+
+def test_tower_notes_are_trusted_text_outside_the_package():  # 6s review r2 #1
+    from watchtower.floors.framework import WorkPackage
+    from watchtower.floors.gate import Gate
+    from watchtower.roles import Role
+    seen = []
+    gate = Gate(lambda role, prompt: seen.append(prompt) or {"pass": True, "reasons": []},
+                Role("f5.dev_gate", "G", "f5", "work", (), "g"))
+    pkg = WorkPackage("dev", "summary", ["app.py"], [], [{"check": "qa", "pass": True}], [])
+    gate.check({"acceptance": ["a"]}, pkg, notes=("coder tests are advisory",))
+    assert seen[0].rindex("</untrusted>") < seen[0].index("Tower notes:\n- coder tests are advisory")

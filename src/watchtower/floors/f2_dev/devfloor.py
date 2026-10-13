@@ -320,7 +320,7 @@ class DevFloor:
                      and summary is not None and not summary.get("failures") and not summary.get("errors"))
             passed = clean and not problems
             checks.append({"check": "tests", "round": round_no, "pass": passed, "output": output[-300:],
-                           "problems": [str(p)[:200] for p in problems]})
+                           "problems": [str(p)[:200] for p in problems], "clean": clean})
             if passed:
                 last_failing, carry, diagnosis, diagnosed_for = None, [], "", None  # a pass ends any stuck set
                 verdict = self._hr_review(spec, plan) if self._hr is not None and hr_asks < MAX_HR_ASKS else None

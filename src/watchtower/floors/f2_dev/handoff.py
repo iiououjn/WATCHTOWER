@@ -17,18 +17,33 @@ def f2_handoff(checks_run: list[dict], entry: str, files: list[str]) -> tuple[bo
     return True, [] if last.get("pass") else [ADVISORY]
 
 
-GATE_NOTE = ("F2 note: the coder's own unit tests are advisory, not blocking; "
-             "the F3 start, F4 QA and F5 scan results below decide.\n")
+GATE_NOTE = ("the coder's own unit tests are advisory, not blocking: judge the app on the F3 start, "
+             "F4 QA and F5 scan results")
+STATIC = "Floor 2 static checks failed: "
+ITEM = 600  # devfloor FEEDBACK_ITEM: one coder feedback item
 
 
-def for_gate(summary: str, questions: list[str], tests_ok: bool) -> tuple[str, list[str]]:
-    """F2's part of the package the model gate reads: failing coder tests are labelled advisory (6s review r1)."""
+def for_gate(summary: str, questions: list[str], tests_ok: bool) -> tuple[str, list[str], tuple[str, ...]]:
+    """F2's part of the package the model gate reads, plus trusted tower notes for the gate's own prompt.
+    The package summary is untrusted text, so the advisory note goes outside it (6s reviews r1, r2)."""
     if tests_ok:
-        return summary, questions
-    return (GATE_NOTE + summary.replace("Tests: FAIL", "Coder unit tests (advisory): FAIL", 1),
-            [q for q in questions if not q.startswith("tests still failing")])
+        return summary, questions, ()
+    return (summary.replace("Tests: FAIL", "Coder unit tests (advisory): FAIL", 1),
+            [q for q in questions if not q.startswith("tests still failing")], (GATE_NOTE,))
 
 
 def static_feedback(go: bool, reasons: list[str], entry: str, files: list[str]) -> list[str]:
-    """When the tower's static checks block F2, the coder hears which ones (6s review r1)."""
-    return [] if go or entry not in files else ["Floor 2 static checks failed: " + "; ".join(reasons)[:600]]
+    """What the coder hears when F2 blocks: the gate's verdict replaces earlier feedback (6s reviews r1, r2)."""
+    if go:
+        return []
+    if entry not in files:
+        return [f"the planned entry file {entry} does not exist; create it"]
+    return [STATIC + "; ".join(reasons)[:ITEM - len(STATIC)]]
+
+
+def board_line(checks_run: list[dict], attempt: int, go: bool, reasons: list[str]) -> str:
+    """The board's F2 line: the coder's tests and the tower's blocking problems, told apart."""
+    last = checks_run[-1] if checks_run else {}
+    clean = last.get("clean", last.get("pass"))
+    line = f"unit tests {'pass' if clean else 'still fail'} after {len(checks_run)} round(s) (attempt {attempt + 1})"
+    return line if go else f"{line}; blocked: {'; '.join(reasons)[:200]}"
