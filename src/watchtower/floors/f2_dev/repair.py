@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import importlib
 import io
 import tokenize
 import warnings
@@ -92,7 +93,16 @@ def repair_strings(source: str) -> tuple[str, list[int]]:
 # to set: importing the module there would turn a clear NameError into a confusing AttributeError.
 IMPORTABLE = {"os", "sys", "json", "re", "time", "datetime", "html", "sqlite3", "random", "math", "tempfile",
               "shutil", "uuid", "unittest", "io"}
-SUBMODULES = {"urllib": {"parse", "request", "error"}, "http": {"server", "client", "cookies"}}
+SUBMODULES = {"urllib": {"parse", "request", "error"}, "http": {"server", "client", "cookies"}, "unittest": {"mock"}}
+
+
+def _has(module: str, attr: str) -> bool:
+    """Does the host's own standard-library module have this attribute? (Never imports AI-written code: `module`
+    comes from the allow-list.) `datetime.now()` means the class, not the module: no import there."""
+    try:
+        return hasattr(importlib.import_module(module), attr)
+    except ImportError:
+        return False
 
 
 def _bound(tree: ast.AST) -> set[str] | None:
@@ -135,14 +145,17 @@ def repair_imports(source: str) -> tuple[str, list[str]]:
         return source, []
     wanted: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id not in bound:
-            name = node.value.id
-            if name in IMPORTABLE:
-                wanted.add(name)
-        elif (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute)
-              and isinstance(node.value.value, ast.Name) and node.value.value.id in SUBMODULES
-              and node.value.value.id not in bound and node.value.attr in SUBMODULES[node.value.value.id]):
-            wanted.add(f"{node.value.value.id}.{node.value.attr}")
+        if not (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)):
+            continue
+        name, attr = node.value.id, node.attr
+        if name in bound or name not in IMPORTABLE | set(SUBMODULES):
+            continue
+        if attr in SUBMODULES.get(name, ()):
+            wanted.add(f"{name}.{attr}")  # urllib.parse.quote → import urllib.parse
+        elif name in IMPORTABLE and _has(name, attr):
+            wanted.add(name)
+        else:
+            return source, []  # a use that is not this module (datetime.now): leave the file alone
     if not wanted:
         return source, []
     after = 0  # insert after a module docstring and any __future__ imports

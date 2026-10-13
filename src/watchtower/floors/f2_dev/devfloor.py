@@ -388,14 +388,16 @@ class DevFloor:
                 continue
             if f.get("delete") is not True:
                 if written >= MAX_FILES_PER_ROUND:  # deletes don't use up the cap; writes beyond it are dropped
+                    changed = True  # it sent more than was written: never tell it "unchanged"
                     notes.append(f"File {str(f.get('path'))[:100]!r} not written: at most {MAX_FILES_PER_ROUND} "
                                  "files per reply")
                     continue
                 written += 1
             try:
                 if f.get("delete") is True:
-                    self._ws.delete(str(f.get("path", "")))
-                    changed = True
+                    gone = str(f.get("path", ""))
+                    changed = changed or gone in self._ws.files()  # deleting a missing file changes nothing
+                    self._ws.delete(gone)
                 elif not isinstance(f.get("content"), str):
                     notes.append(f"File rejected: {str(f.get('path'))[:100]!r} has no content")
                 else:
@@ -410,7 +412,7 @@ class DevFloor:
                     except (WorkspaceError, OSError):
                         before = None
                     self._ws.write(path, content)
-                    if before == content:
+                    if before == content.replace("\r\n", "\n").replace("\r", "\n"):  # read() gives \n only
                         same.append(path)
                     else:
                         changed = True

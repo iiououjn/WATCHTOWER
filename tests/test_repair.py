@@ -40,7 +40,7 @@ def test_unparsable_source_left_alone():
 
 
 def test_several_modules_once_each_sorted():
-    fixed, added = repair_imports("os.x\njson.y\nos.z\n")
+    fixed, added = repair_imports("os.getcwd()\njson.dumps(1)\nos.sep\n")
     assert added == ["json", "os"] and fixed.startswith("import json\nimport os\n")
 
 
@@ -53,3 +53,13 @@ def test_odd_line_separators_inside_docstring_keep_placement():
     src = '"""a b\x0cc"""\nx = os.getcwd()\n'
     fixed, added = repair_imports(src)
     assert added == ["os"] and fixed == '"""a b\x0cc"""\nimport os\nx = os.getcwd()\n'
+
+
+def test_class_style_use_is_not_a_missing_module_import():
+    for src in ("x = datetime.now()\n", "d = datetime.strptime('1', '%d')\n", "os.nothing_like_this()\n"):
+        assert repair_imports(src) == (src, []), src
+
+
+def test_unittest_mock_imports_the_submodule():
+    fixed, added = repair_imports("@unittest.mock.patch('app.x')\ndef test_a(m):\n    pass\n")
+    assert added == ["unittest.mock"] and fixed.startswith("import unittest.mock\n")

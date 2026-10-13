@@ -964,3 +964,21 @@ def test_a_reply_that_changes_one_file_is_not_called_unchanged(tmp_path):
     script = Script({"f2.coder": [{"files": [APP, TEST]}, {"files": [APP]}]})
     dev(tmp_path, script, Runner([FAILED, FAILED]), rounds=2).build(SPEC, PLAN3, [])
     assert "unchanged" not in script.prompts["f2.coder"][1]
+
+
+def test_crlf_resend_is_still_unchanged_and_a_missing_delete_is_no_change(tmp_path):
+    ws = Workspace(tmp_path)
+    ws.write(APP["path"], APP["content"])
+    crlf = {"path": APP["path"], "content": APP["content"].replace("\n", "\r\n")}
+    script = Script({"f2.coder": [{"files": [APP]}, {"files": [crlf, {"path": "nope.py", "delete": True}]}]})
+    dev(tmp_path, script, Runner([FAILED, FAILED, FAILED]), rounds=3).build(SPEC, PLAN3, [])
+    assert "back unchanged" in script.prompts["f2.coder"][2]
+
+
+def test_no_unchanged_note_when_writes_were_dropped_by_the_cap(tmp_path):
+    ws = Workspace(tmp_path)
+    ws.write(APP["path"], APP["content"])
+    extra = [{"path": f"m{i}.py", "content": f"X = {i}\n"} for i in range(3)]
+    script = Script({"f2.coder": [{"files": [APP]}, {"files": [APP, APP, APP] + extra}]})
+    dev(tmp_path, script, Runner([FAILED, FAILED, FAILED]), rounds=3).build(SPEC, PLAN3, [])
+    assert "back unchanged" not in script.prompts["f2.coder"][2]

@@ -182,8 +182,8 @@ def test_qa_script_ignores_an_app_that_prints_a_fake_pass(tmp_path):
     ("You should add your first item", "You should add your first item"),
     ("No items yet. Add your first item above to get started", "No items yet. Add your first item above to get started"),
     ("one two three four five six seven eight nine ten eleven twelve thirteen", ""),
-    ("&lt;ul>\\n&lt;/ul>", ""), ("<li>milk</li>", "milk"), ("<h1>Todo List</h1>\\n<ul>", "Todo List"),
-    ("Tom &amp; Jerry", "Tom &amp; Jerry"), ("<br>", ""), ("&lt;ul&gt;", "")])
+    ("&lt;ul>\\n&lt;/ul>", ""), ("<li>milk</li>", "<li>milk</li>"), ("<h1>Todo List</h1>\\n<ul>", "Todo List"),
+    ("Tom &amp; Jerry", "Tom &amp; Jerry"), ("<br>", "<br>"), ("&lt;ul&gt;", "")])
 def test_expected_text_must_be_page_text_not_a_description(text, kept):
     check = parse_checks({"checks": [{"name": "c", "method": "GET", "path": "/", "expect_text": text}]}, known="")[0]
     assert check["expect_text"] == kept
@@ -212,3 +212,10 @@ def test_qa_writer_is_asked_again_when_no_check_tests_page_text():
     qa = QAFloor(Role("f4.qa", "QA", "f4", "work", (), "q"), lambda role, p: prompts.append(p) or replies.pop(0))
     checks = qa.write_checks({"title": "T", "goal": "g", "acceptance": ["a"]}, "code")
     assert [c["expect_text"] for c in checks] == ["Todo"] and len(prompts) == 2 and "exact" in prompts[1]
+
+
+def test_test_first_text_strips_tags_and_route_descriptions():
+    from watchtower.floors.f4_qa_deploy.qafloor import test_first_text
+    assert test_first_text("<li>milk</li>", set()) == "milk"
+    assert test_first_text("The list is empty", set()) == "The list is empty"
+    assert test_first_text("The  Todo list", {"the todo list"}) == ""

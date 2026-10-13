@@ -79,6 +79,7 @@ _DESCRIBES = re.compile(r"^(the|a|an)\s+(\w+\s+){0,2}(home ?page|page|form|list|
 MAX_TEXT_WORDS = 12
 _MARKUP = re.compile(r"<[^<>]*>|\\[nrt]")
 _ESCAPED = re.compile(r"[<>\\]|&(lt|gt);", re.IGNORECASE)
+_ESCAPED_ONLY = re.compile(r"\\[nrt]|&(lt|gt);", re.IGNORECASE)
 
 
 def _page_text(text: str, known: str = "") -> str:
@@ -87,7 +88,8 @@ def _page_text(text: str, known: str = "") -> str:
     title or routes really contain it."""
     if text and text.lower() in known.lower():
         return text
-    text = _unmarked(text)
+    if _ESCAPED_ONLY.search(text):  # raw tags stay: code-derived '<li>milk</li>' is a strong check of the raw page
+        text = _unmarked(text)
     return "" if len(text.split()) > MAX_TEXT_WORDS or _DESCRIBES.search(text) else text
 
 
