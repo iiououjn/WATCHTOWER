@@ -51,7 +51,8 @@ def failures(output: str) -> list[dict]:
         plus = "".join(ln[2:] for ln in rest if ln.startswith("+ "))
         space_only = bool(minus or plus) and minus != plus and re.sub(r"\s", "", minus) == re.sub(r"\s", "", plus)
         marked = any(ln[:2] in ("- ", "+ ", "? ") for ln in rest)  # unittest's own diff lines
-        more = "\n".join(rest[:6])
+        kept = [ln for ln in rest if ln.strip() and not ln.startswith("  ")] if marked else rest  # no ndiff context
+        more = "\n".join(kept[:6])
         diff = more if marked else "\n".join(x for x in (where_raised, more.strip()) if x)  # a plain assert: its line
         out.append({"test": test, "id": where[:150], "kind": kind, "line": tail[at].strip()[:200],
                     "diff": (diff if assertion else where_raised)[:400], "whitespace": space_only})
@@ -62,7 +63,7 @@ def failures(output: str) -> list[dict]:
 def _failure_rows(found: list[dict], limit: int = NOTE_CHARS) -> str:
     """The failures as text, bounded: at most 5 rows, which shrink (diffs first) instead of disappearing."""
     shown, more = found[:MAX_FAILURES], len(found) - MAX_FAILURES
-    for diff_cap, line_cap in ((400, 200), (150, 200), (0, 200), (0, 80)):  # diffs shrink first, then lines
+    for diff_cap, line_cap in ((400, 200), (150, 200), (0, 200), (0, 80), (0, 40)):  # diffs shrink first, then lines
         rows = "\n".join(f"- {f['test'][:60]} ({f['kind']}): {f['line'][:line_cap]}"
                          + (f"\n{f['diff'][:diff_cap]}" if f["diff"] and diff_cap else "") for f in shown)
         rows += f"\n(+{more} more failing)" if more > 0 else ""

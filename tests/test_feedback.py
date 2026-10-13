@@ -60,3 +60,21 @@ def test_multiline_assert_message_keeps_the_source_line():
               "AssertionError: got\n['a']\n\n")
     (f,) = failures(report)
     assert "line 4 in test_x: assert todos == []" in f["diff"] and "['a']" in f["diff"]
+
+
+def test_long_ndiff_shows_the_changed_lines_not_context():
+    context = "".join(f"  <p>line {i}</p>\n" for i in range(15))
+    report = ("FAIL: test_page (test_a.T.test_page)\n" + "-" * 70 + "\nTraceback (most recent call last):\n"
+              '  File "/w/test_a.py", line 9, in test_page\n    self.assertEqual(page, want)\n'
+              "AssertionError: '<p>line 0</p>\\n...' != '<p>line 0</p>\\n...'\n" + context
+              + "- <p>old</p>\n?    ^^^\n+ <p>new</p>\n?    ^^^\n\n")
+    (f,) = failures(report)
+    assert "- <p>old</p>" in f["diff"] and "+ <p>new</p>" in f["diff"] and "line 3</p>" not in f["diff"]
+
+
+def test_stuck_rows_with_long_names_keep_the_more_line():
+    from watchtower.floors.f2_dev.feedback import stuck_note
+    found = [{"test": f"test_{i}_" + "n" * 60, "id": f"m.T.{i}", "kind": "ERROR",
+              "line": "ValueError: " + "x" * 150, "diff": "", "whitespace": False} for i in range(9)]
+    note = _failure_note(found, stuck_note([f["test"] for f in found]))
+    assert "(+4 more failing)" in note and all(f"test_{i}_" in note for i in range(5))
