@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Callable
@@ -57,6 +58,27 @@ class Reply:
     completion_tokens: int
     seconds: float
     usd: float
+
+
+_BLOCK = re.compile(r"^###[ \t]*FILE:[ \t]*(\S[^\n]*?)[ \t]*\n(`{3,})[^\n]*\n(.*?)^\2[ \t]*$", re.M | re.S)
+_DELETE = re.compile(r"^###[ \t]*DELETE:[ \t]*(\S[^\n]*?)[ \t]*$", re.M)
+_MEMO = re.compile(r"^###[ \t]*MEMO[ \t]+(f\d)[ \t]*:[ \t]*(\S[^\n]*)$", re.M)
+FILES_NOTE = ("\n\nYour previous reply had no usable files. Reply with one block per file, exactly like this:\n"
+              "### FILE: app.py\n```python\n<the complete file>\n```")
+
+
+def parse_files(text: str) -> dict:
+    """Code as plain fenced blocks ('### FILE: path' + a ``` fence), so no character ever needs escaping —
+    the coder's JSON escaping of newlines and quotes was the commonest cause of broken files."""
+    text = (text or "").replace("\r\n", "\n")
+    files = [{"path": path.strip(), "content": body if body.endswith("\n") or not body else body + "\n"}
+             for path, _fence, body in _BLOCK.findall(text)]
+    files += [{"path": path.strip(), "delete": True} for path in _DELETE.findall(text)]
+    out: dict = {"files": files}
+    memo = _MEMO.search(text)
+    if memo:  # '### MEMO f3: question' — the same memo the JSON roles send
+        out["memo"] = {"to": memo.group(1), "question": memo.group(2).strip()}
+    return out
 
 
 def _litellm_completion(**kw):
@@ -152,6 +174,25 @@ class ModelSocket:
             {"model": model, "tokens": pt + ct, "seconds": round(seconds, 3), "usd": usd}, job_id,
         )
         return Reply(text, model, pt, ct, seconds, usd)
+
+    def ask_files(self, tier: str, messages: list[dict], job_id: str, retries: int = 1) -> dict:
+        """Ask for files as fenced blocks (plain text, no JSON escaping). A JSON {"files": [...]} reply is still
+        accepted; nothing usable → ask once more with the format shown, then BadModelOutput."""
+        convo = list(messages)
+        for _ in range(retries + 1):
+            reply = self.ask(tier, convo, job_id)
+            out = parse_files(reply.text)
+            if not out["files"]:
+                try:
+                    data = parse_json(reply.text)
+                    out = data if isinstance(data.get("files"), list) and data["files"] else out
+                except ValueError:
+                    pass
+            if out["files"]:
+                return out
+            self._audit.append("model_socket", "bad_files", {"model": reply.model}, job_id)
+            convo = list(messages[:-1]) + [{**messages[-1], "content": messages[-1]["content"] + FILES_NOTE}]
+        raise BadModelOutput(f"{self._s.tiers[tier]} returned no usable files after {retries + 1} tries")
 
     def ask_json(self, tier: str, messages: list[dict], job_id: str, retries: int = 1) -> dict:
         """Ask for a JSON object; on unparseable output, ask again with the error noted. The broken reply is NOT

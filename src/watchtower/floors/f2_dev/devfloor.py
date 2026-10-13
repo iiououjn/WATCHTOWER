@@ -80,15 +80,15 @@ PLAN_PROMPT = (
 )
 CODE_PROMPT = (
     "Spec:\n{spec}\n\nFile plan and routes contract:\n{plan}\n\nCurrent files:\n{files}\n{qa}{feedback}\n"
-    "Write or fix up to 3 files so the unittest tests pass and the spec is met. To remove a stale file, "
-    'send {{"path": string, "delete": true}}. Reply as JSON: {{"files": [{{"path": string, "content": string}}]}}'
+    "Write or fix up to 3 files so the unittest tests pass and the spec is met. Reply with one block per file "
+    "(### FILE: path, then the complete file in a ``` fence); to remove a stale file write ### DELETE: path."
 )
 
 
 UNIT_PROMPT = (
     "Spec:\n{spec}\n\nFile plan and routes contract:\n{plan}\n\nFiles already written:\n{files}\n{qa}\n"
     "You are coder {i} of {n} on this floor. Write ONLY these files, complete and working:\n{unit}\n"
-    'Reply as JSON: {{"files": [{{"path": string, "content": string}}]}}'
+    "Reply with one block per file: ### FILE: path, then the complete file in a ``` fence."
 )
 MAX_UNITS, UNIT_FILES = 4, 3
 HR_PROMPT = (
@@ -466,8 +466,8 @@ class DevFloor:
                 except BadModelOutput:  # a garbled reply costs this round, not the whole job
                     checks.append({"check": "tests", "round": round_no, "pass": False,
                                    "output": "coder reply was not valid JSON"})
-                    notes = ["Your last reply was not valid JSON. Reply with one JSON object; escape every double "
-                             "quote and newline inside file contents (\\\" and \\n)."] + carry  # keep what HR said
+                    notes = ["Your last reply had no usable files. Reply with one block per file: ### FILE: path, "
+                             "then the complete file in a ``` fence."] + carry  # keep what HR said
                     continue
                 notes = self._write(reply.get("files"))
             self._ensure_packages()

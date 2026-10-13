@@ -156,7 +156,8 @@ class JobRunner:
     def _ask_role(self, role: Role, data: dict, prompt: str) -> dict:
         with self._scheduler.agent(role.id, data["job_id"]) as session:
             messages = [{"role": "system", "content": role.system}, {"role": "user", "content": prompt}]
-            out = self._socket.ask_json(role.tier, messages, data["job_id"])
+            ask = self._socket.ask_files if role.reply == "files" else self._socket.ask_json
+            out = ask(role.tier, messages, data["job_id"])
             session.context["messages"] = messages + [{"role": "assistant", "content": str(out)}]
             return out
 

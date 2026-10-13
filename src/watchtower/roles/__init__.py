@@ -18,6 +18,7 @@ class Role:
     tier: str
     tools: tuple[str, ...]
     prompt: str
+    reply: str = "json"  # "files": the role answers with ### FILE blocks (code needs no JSON escaping)
 
     @property
     def system(self) -> str:
@@ -37,8 +38,10 @@ def load_roles(directory: Path = ROLES_DIR, tiers: Iterable[str] | None = None) 
             raise ValueError(f"{path.name}: missing {', '.join(missing)}")
         if known_tiers is not None and data["tier"] not in known_tiers:
             raise ValueError(f"{path.name}: unknown tier {data['tier']!r}")
+        if str(data.get("reply") or "json") not in ("json", "files"):
+            raise ValueError(f"{path.name}: reply must be json or files")
         if data["id"] in roles:
             raise ValueError(f"{path.name}: duplicate role id {data['id']!r}")
         roles[data["id"]] = Role(str(data["id"]), str(data["title"]), str(data["floor"]), str(data["tier"]),
-                                 tuple(data.get("tools") or ()), str(data["prompt"]))
+                                 tuple(data.get("tools") or ()), str(data["prompt"]), str(data.get("reply") or "json"))
     return roles
