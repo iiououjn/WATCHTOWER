@@ -808,3 +808,116 @@ def test_syntax_error_first_marked_and_counted_right(tmp_path):
     note = _problem_note(probs + ["z.py has a syntax error on line 3: '(' was never closed"], ws, True)
     assert note.index("z.py has a syntax error") < note.index("m0.py") and "(+2 more)" in note
     assert ">   3| if (" in note
+
+
+from watchtower.floors.f2_dev.devfloor import repair_strings  # noqa: E402
+
+
+def test_a_line_break_lost_inside_a_string_is_repaired():
+    src = "html = f'<body>\n{x}</body>'\nprint(f'Starting...\n')\n"
+    fixed, lines = repair_strings(src)
+    compile(fixed, "a.py", "exec")
+    assert lines == [1, 3] and "f'<body>\\n{x}</body>'" in fixed
+
+
+def test_repair_keeps_progress_but_never_invents_a_close():
+    src = "a = f'one\ntwo'\nb = bytes(a, \"utf8')\nc = 1\n"
+    fixed, lines = repair_strings(src)
+    assert lines == [1] and "f'one\\ntwo'" in fixed and "\"utf8')" in fixed  # the quote mismatch is the coder's job
+    assert repair_strings("x = 1\n") == ("x = 1\n", [])
+    assert repair_strings("s = '''never\nclosed\n")[1] == []  # triple-quoted: not this repair
+
+
+def test_written_python_files_are_repaired_with_a_note(tmp_path):
+    script = Script({"f2.coder": [{"files": [{"path": "app.py", "content": "x = 'a\nb'\n"}, TEST]}]})
+    d = dev(tmp_path, script, Runner([OK]), rounds=2)
+    d.build(SPEC, PLAN3, [])
+    assert Workspace(tmp_path).read("app.py") == "x = 'a\\nb'\n"
+
+
+def test_runner_accepts_pytest_style_test_functions(tmp_path):
+    import subprocess
+    import sys
+    from watchtower.floors.f2_dev.devfloor import TEST_RUNNER, failures, test_summary
+    (tmp_path / "app.py").write_text("def add(a, b):\n    return a + b\n")
+    (tmp_path / "test_app.py").write_text("from app import add\n\ndef test_ok():\n    assert add(1, 2) == 3\n\n"
+                                         "def test_bad():\n    assert add(1, 1) == 3\n")
+    out = subprocess.run([sys.executable, "-I", "-c", TEST_RUNNER], cwd=tmp_path, capture_output=True, text=True,
+                         timeout=60)
+    summary = test_summary(out.stdout)
+    assert summary["run"] == 2 and summary["failures"] == 1
+    assert [f["test"] for f in failures(out.stderr)] == ["test_bad"]
+
+
+@pytest.mark.parametrize("src", ['def render(page="home):\n    """Render\n    one page."""\n    return page\n',
+                                 'NAME = "app\nHELP = """\nusage\n"""\n',
+                                 'color = "#ff0000\nbg = "#000000"\n', "h = '# Title\nsub = '## Sub'\n",
+                                 "name = 'abc\n# keep the users'\nx = 1\n", "name = 'abc\n# the users', so\n"])
+def test_a_genuinely_missing_quote_is_never_repaired(src):
+    assert repair_strings(src) == (src, [])
+
+
+def test_strings_split_over_several_lines_and_crlf_are_repaired():
+    fixed, lines = repair_strings('print("Usage:\n  foo\n")\nx = 1\n')
+    compile(fixed, "a.py", "exec")
+    assert lines == [1] and 'print("Usage:\\n  foo\\n")' in fixed
+    fixed, lines = repair_strings('r = "HTTP/1.1 200 OK\r\n\r\n"\r\ny = 2\r\n')
+    compile(fixed, "a.py", "exec")
+    assert lines == [1] and '"HTTP/1.1 200 OK\\r\\n\\r\\n"' in fixed
+
+
+def test_repair_survives_absurd_sources_quietly(capfd):
+    deep = "x = " + "+".join(["1"] * 20000) + "\n"
+    assert repair_strings(deep) == (deep, [])
+    noisy = 'import re\np = re.compile("\\d+")\n'
+    assert repair_strings(noisy) == (noisy, []) and "SyntaxWarning" not in capfd.readouterr().err
+
+
+def _run_runner(tmp_path, files):
+    import subprocess
+    import sys
+    from watchtower.floors.f2_dev.devfloor import TEST_RUNNER, test_summary
+    for name, body in files.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(body)
+    out = subprocess.run([sys.executable, "-I", "-c", TEST_RUNNER], cwd=tmp_path, capture_output=True, text=True,
+                         timeout=60)
+    return test_summary(out.stdout), out.stderr
+
+
+def test_runner_skips_helpers_and_package_functions(tmp_path):
+    summary, err = _run_runner(tmp_path, {
+        "app.py": "def add(a, b):\n    return a + b\n",
+        "pkg/__init__.py": "def test_connection(dsn):\n    raise RuntimeError('not a test')\n",
+        "test_app.py": "import unittest\nfrom app import add\n\ndef test_request(path):\n    return add(1, 2)\n\n"
+                       "class T(unittest.TestCase):\n    def test_a(self):\n        self.assertEqual(test_request('/'), 3)\n"})
+    assert summary == {"run": 1, "skipped": 0, "failures": 0, "errors": 0}, err
+
+
+def test_function_tests_see_setupmodule_and_async_or_generator_tests_fail(tmp_path):
+    summary, err = _run_runner(tmp_path, {
+        "test_app.py": "STATE = {}\n\ndef setUpModule():\n    STATE['ready'] = True\n\n"
+                       "def test_state():\n    assert STATE.get('ready')\n\n"
+                       "async def test_async():\n    assert False\n\n"
+                       "def test_gen():\n    yield\n    assert False\n"})
+    assert summary["run"] == 3 and summary["failures"] + summary["errors"] == 2, err
+    assert "IsolatedAsyncioTestCase" in err or "not run" in err
+
+
+def test_runner_ignores_the_legacy_test_main_idiom_and_odd_functions(tmp_path):
+    summary, err = _run_runner(tmp_path, {
+        "app.py": "def add(a, b):\n    return a + b\n",
+        "test_app.py": "import unittest\nfrom unittest import mock\nfrom app import add\n\n"
+                       "class T(unittest.TestCase):\n    def test_a(self):\n        self.assertEqual(add(1, 2), 3)\n\n"
+                       "def test_main():\n    unittest.main()\n\n"
+                       "test_lam = lambda: None\n\n"
+                       "def test_sig():\n    pass\ntest_sig.__signature__ = 'nope'\n\n"
+                       "@mock.patch('app.add', return_value=5)\ndef test_patched(m):\n    import app\n"
+                       "    assert app.add(1, 1) == 5\n"})
+    assert summary == {"run": 2, "skipped": 0, "failures": 0, "errors": 0}, err
+
+
+def test_repair_note_says_the_lines_are_in_what_the_coder_sent(tmp_path):
+    script = Script({"f2.coder": [{"files": [{"path": "app.py", "content": "x = 'a\nb'\n"}, TEST]}]})
+    dev(tmp_path, script, Runner([FAILED]), rounds=2).build(SPEC, PLAN3, [])
+    assert "line(s) 1 of what you sent" in script.prompts["f2.coder"][1]
