@@ -25,6 +25,7 @@ from watchtower.floors.f5_oversight.office import OversightOffice
 from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
 from watchtower.floors.f5_oversight.oversight import is_failing as _failing, security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
+from watchtower.floors.f2_dev.handoff import f2_handoff
 from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.beacon.glass import INJECTION, normalize
@@ -156,14 +157,13 @@ class TowerPipeline:
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
             self._post(data, "f2", "doing", f"unit tests {'pass' if tests_ok else 'still fail'} "
                        f"after {len(package.checks_run)} round(s) (attempt {attempt + 1})")
-            self._handoff(data, "f2", attempt, tests_ok and plan["entry"] in ws.files(),
-                          ["unit tests do not pass"] if not tests_ok else
-                          [] if plan["entry"] in ws.files() else [f"planned entry file {plan['entry']} missing"])
-            if package.checks_run and package.checks_run[-1].get("pass") and plan["entry"] not in ws.files():
+            go, reasons = f2_handoff(package.checks_run, plan["entry"], ws.files())  # the tower's checks decide
+            self._handoff(data, "f2", attempt, go, reasons)
+            if package.checks_run and plan["entry"] not in ws.files():
                 feedback = [f"the planned entry file {plan['entry']} does not exist; create it"]
                 package = WorkPackage("f2", package.summary, ws.files(), [], package.checks_run +
                                       [{"check": "entry", "pass": False}], feedback)
-            elif package.checks_run and package.checks_run[-1].get("pass"):
+            elif go:
                 f3 = build_check(run, plan["entry"], expect, plan["routes"])  # MVP first, then the full app
                 self._handoff(data, "f3", attempt, f3.checks_run[-1]["pass"], f3.open_questions)
                 self._post(data, "f3", "done" if f3.checks_run[-1]["pass"] else "issue", f3.summary.splitlines()[0])
@@ -466,7 +466,7 @@ def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:
     qa_line = (f"{sum(r.get('pass') is True for r in results)}/{len(results)} checks passed" if results
                else "no QA checks ran")
     return "\n".join([
-        f"- unit tests: {'pass' if tests.get('pass') else 'FAIL'}",
+        f"- coder unit tests (advisory): {'pass' if tests.get('pass') else 'FAIL'}",
         f"- app answered HTTP {http.get('status')}",
         *([f"- full app: {sum(isinstance(r.get('status'), int) and r['status'] < 500 and r['status'] != 404 for r in probe)}"
            f"/{len(probe)} contract routes answered"] if probe else []),

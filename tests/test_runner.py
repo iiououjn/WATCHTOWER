@@ -615,7 +615,7 @@ def test_sign_off_evidence_comes_from_checks_not_app_output(app_tower, conn):
     runner.resume(job.id)
     evidence = approvals.pending_for(job.id).summary.split("Evidence:")[1]
     assert "print(" not in evidence and "# Tests" not in evidence
-    assert "unit tests: pass" in evidence and "security scan: pass" in evidence and "QA: 1/1" in evidence
+    assert "coder unit tests (advisory): pass" in evidence and "security scan: pass" in evidence and "QA: 1/1" in evidence
     runner.close()
 
 

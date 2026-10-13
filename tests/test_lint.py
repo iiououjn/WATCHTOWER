@@ -224,3 +224,21 @@ def test_an_attribute_or_item_assignment_is_not_a_container_binding(tmp_path):
     ws.write("todo.py", "app = object()\napp.config = {}\nCACHE = {}\nCACHE['x'] = []\n")
     ws.write("test_todo.py", "from todo import app\ndef setUp():\n    global app\n    app = object()\n")
     assert idiom_notes(ws) == []
+
+
+def test_f2_rounds_record_the_tower_problems(tmp_path):
+    from watchtower.floors.f2_dev.devfloor import DevFloor
+    from watchtower.engine.sandbox import SandboxResult
+    from watchtower.engine.workspace import Workspace
+    from watchtower.roles import Role
+    app = {"path": "app.py", "content": "import requests\nprint('app')\n"}
+    test = {"path": "test_app.py", "content": "import unittest\nimport app\n"}
+    coder = Role("f2.coder", "Coder", "f2", "work", (), "c")
+    ok = SandboxResult(0, 'WATCHTOWER_TESTS {"run": 2, "skipped": 0, "failures": 0, "errors": 0}\n', "", False)
+    floor = DevFloor(Role("f2.architect", "A", "f2", "work", (), "a"), coder, ask=lambda r, p: {"files": [app, test]},
+                     workspace=Workspace(tmp_path), run=lambda cmd: ok, max_rounds=1)
+    pkg = floor.build({"title": "T", "goal": "g", "acceptance": [], "out_of_scope": []},
+                      {"files": [], "entry": "app.py"}, [])
+    last = pkg.checks_run[-1]
+    assert last["pass"] is False and any("requests" in p for p in last["problems"])
+    assert all(len(p) <= 200 for p in last["problems"])
