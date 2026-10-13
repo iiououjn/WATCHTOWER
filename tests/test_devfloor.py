@@ -1013,3 +1013,13 @@ def test_entry_missing_its_own_modules_import_is_linked_before_the_tests(tmp_pat
     dev(tmp_path, script, Runner([FAILED]), rounds=2).build(SPEC, PLAN3, [])
     assert Workspace(tmp_path).read("app.py") == "from todo import list_items\n" + entry
     assert "added `from todo import list_items` to app.py" in script.prompts["f2.coder"][1]
+
+
+def test_runner_honours_pytest_setup_and_teardown_names(tmp_path):
+    summary, err = _run_runner(tmp_path, {
+        "test_app.py": "LOG = []\n\ndef setup_module(module):\n    LOG.append('m')\n\n"
+                       "def teardown_module():\n    pass\n\ndef setup_function(function):\n    LOG.append(function.__name__)\n\n"
+                       "def teardown_function():\n    LOG.append('down')\n\n"
+                       "def test_a():\n    assert LOG == ['m', 'test_a']\n\n"
+                       "def test_b():\n    assert LOG == ['m', 'test_a', 'down', 'test_b']\n"})
+    assert summary == {"run": 2, "skipped": 0, "failures": 0, "errors": 0}, err

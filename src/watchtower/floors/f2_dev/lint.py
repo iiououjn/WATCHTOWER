@@ -113,3 +113,65 @@ def handler_state_problems(ws: Workspace) -> list[str]:
             continue  # syntax errors are import_problems' to report
         problems += _handler_problems(name, tree)
     return problems[:3]
+
+
+def _required_args(fn: ast.FunctionDef) -> bool:
+    a = fn.args
+    return len(a.posonlyargs + a.args) > len(a.defaults) or any(d is None for d in a.kw_defaults)
+
+
+def _patched(fn: ast.FunctionDef) -> list[str]:
+    """Targets of @patch('mod.name') / @mock.patch('mod.name') on this function."""
+    out = []
+    for d in fn.decorator_list:
+        if (isinstance(d, ast.Call) and ast.unparse(d.func).split(".")[-1] == "patch" and d.args
+                and isinstance(d.args[0], ast.Constant) and isinstance(d.args[0].value, str)):
+            out.append(d.args[0].value)
+    return out
+
+
+def _test_file_notes(tree: ast.Module) -> tuple[list[str], list[tuple[str, str]]]:
+    called = {n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    imported = {a.asname or a.name: f"{n.module}.{a.name}" for n in tree.body if isinstance(n, ast.ImportFrom)
+                and n.module for a in n.names}
+    fixtures, self_patch = [], []
+    for fn in (n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name.startswith("test")):
+        if _required_args(fn) and not _patched(fn) and fn.name not in called:
+            fixtures.append(fn.name)  # a pytest fixture argument: nothing supplies it here, so it never ran
+        calls = {n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        for target in _patched(fn):
+            name = target.rsplit(".", 1)[-1]
+            if imported.get(name) == target and name in calls:
+                self_patch.append((fn.name, target))
+    return fixtures, self_patch
+
+
+def idiom_notes(ws: Workspace) -> list[str]:
+    """Run 15: pytest idioms that silently did nothing. Test functions that take arguments (pytest fixtures such as
+    `client`) never ran; a test that patches the very function it imported and calls tests nothing (the real one
+    runs). Non-blocking notes, at most 2, each within 200 chars."""
+    fixtures, self_patch = [], []
+    for name in ws.files():
+        if not (name.endswith(".py") and name.rsplit("/", 1)[-1].startswith("test")):
+            continue
+        try:
+            source = ws.read(name)
+            if len(source) > MAX_LINT_BYTES:
+                continue
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                f, p = _test_file_notes(ast.parse(source))
+        except (SyntaxError, ValueError, RecursionError, MemoryError, OSError, WorkspaceError):
+            continue
+        fixtures += f
+        self_patch += p
+    notes = []
+    if fixtures:
+        names = ", ".join(sorted(set(fixtures)))[:70]
+        notes.append(f"These tests take arguments, so they never ran (no pytest fixtures such as `client` here): "
+                     f"{names}. Make them take no arguments.")
+    if self_patch:
+        test, target = self_patch[0]
+        notes.append(f"{test[:40]} patches {target[:40]} but calls its own imported copy, so the real function runs "
+                     "and the mock is never called. Test the real function's result; don't patch it.")
+    return [n[:200] for n in notes]

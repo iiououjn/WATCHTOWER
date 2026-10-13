@@ -16,7 +16,7 @@ from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_N
                                                _capped, _failure_note, _failure_rows, _problem_note, failures,
                                                stuck_note)
 from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings
-from watchtower.floors.f2_dev.lint import handler_state_problems
+from watchtower.floors.f2_dev.lint import handler_state_problems, idiom_notes
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
 from watchtower.roles import Role
@@ -42,17 +42,28 @@ def no_args(fn):
     except (ValueError, TypeError):
         return False
     return all(p.default is not p.empty or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in sig.parameters.values())
+def hook(fn, arg):  # pytest's setup_module(module) / setup_function(function): the argument is optional
+    try:
+        wants = len(inspect.signature(fn).parameters)
+    except (ValueError, TypeError):
+        wants = 0
+    return fn(arg) if wants else fn()
 class Loader(unittest.TestLoader):
     def loadTestsFromModule(self, module, *args, **kwargs):
         suite = super().loadTestsFromModule(module, *args, **kwargs)
         if not fnmatch.fnmatch(os.path.basename(getattr(module, "__file__", None) or ""), "test*.py"):
             return suite  # app packages are not test files, even when discovery walks them
+        for py, ut in (("setup_module", "setUpModule"), ("teardown_module", "tearDownModule")):
+            if callable(getattr(module, py, None)) and not hasattr(module, ut):  # pytest's names run too
+                setattr(module, ut, lambda f=getattr(module, py), m=module: hook(f, m))
+        up, down = getattr(module, "setup_function", None), getattr(module, "teardown_function", None)
         case = type("Fn", (Fn,), {"__module__": module.__name__})  # module fixtures wrap these tests too
         for name, fn in sorted(vars(module).items()):
             if (name.startswith("test") and name != "test_main" and inspect.isfunction(fn)  # test_main: legacy
                     and fn.__name__ != "<lambda>" and fn.__module__ == module.__name__
                     and no_args(fn)):  # a helper that takes arguments is not a test
-                suite.addTest(case(plain(fn)))
+                suite.addTest(case(plain(fn), setUp=(lambda f=fn: hook(up, f)) if callable(up) else None,
+                                   tearDown=(lambda f=fn: hook(down, f)) if callable(down) else None))
         return suite
 suite = Loader().discover(".", pattern="test*.py")
 result = unittest.TextTestRunner(stream=sys.stderr, verbosity=1).run(suite)
@@ -344,7 +355,7 @@ class DevFloor:
             if problems:  # one note with the failures (trimming keeps or drops them together), kept last
                 note = _problem_note(problems, self._ws, tests_ok)
                 carry = [carry[0] + "\n" + note] if carry else [note]
-            notes += carry
+            notes += ([] if clean else idiom_notes(self._ws)) + carry  # failures last: kept on trim
             last_failing = failing
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"
                    f"Tests: {'PASS' if passed else 'FAIL'}\n{output[-800:]}")
