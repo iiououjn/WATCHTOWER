@@ -187,6 +187,33 @@ def has_page_text(checks: list[dict], title: str = "") -> bool:
                for c in checks)
 
 
+def _request(c: dict) -> tuple:
+    """Same method, path and form (fields in any order) = the same request."""
+    return c["method"], c["path"], tuple(sorted((str(k), str(v)) for k, v in (c.get("form") or {}).items()))
+
+
+def _same_request_hints(checks: list[dict], results: list[dict]) -> dict[int, str]:
+    """Run 13: two checks sent one request (no other POST between them, so nothing changed) and wanted different
+    texts; the coder saw one failure at a time and flip-flopped. Name the pair once, on its first failing check,
+    right after FAIL (the coder sees only the head of this summary). By position: names may repeat."""
+    if [r.get("name") for r in results] != [c["name"] for c in checks]:
+        return {}
+    hints, paired = {}, set()
+    for j, r in enumerate(results):
+        if r.get("pass") is True or j in paired:
+            continue
+        for i, c in enumerate(checks):
+            first, between = checks[min(i, j)], checks[min(i, j) + 1:max(i, j)]
+            real_add = first["method"] == "POST" and first["form"] and all(first["form"].values())  # may change state
+            if (i != j and _request(c) == _request(checks[j]) and c["expect_text"] and not real_add
+                    and c["expect_text"] != checks[j]["expect_text"] and c["expect_status"] == checks[j]["expect_status"]
+                    and not any(b["method"] == "POST" for b in between)):
+                hints[j] = f" [same request as {c['name'][:30]!r}: show both texts]"
+                paired |= {i, j}
+                break
+    return hints
+
+
 def parse_checks(reply, known: str | None = None) -> list[dict]:
     """Keep only checks that are safe to run: local relative paths, small forms, sane values; names made
     unique. With `known` (checks written from existing code), description-like expected text is dropped
@@ -224,8 +251,9 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
     except ValueError:
         app_log = output
     passed = not result.timed_out and all(r.get("pass") is True for r in results)
-    lines = [f"- {r.get('name')}: {'PASS' if r.get('pass') is True else 'FAIL'} {str(r.get('detail') or '')[:300]}"
-             for r in results]
+    hints = _same_request_hints(checks, results)
+    lines = [f"- {r.get('name')}: {'PASS' if r.get('pass') is True else 'FAIL'}{hints.get(i, '')} "
+             f"{str(r.get('detail') or '')[:300]}" for i, r in enumerate(results)]
     error = "" if passed else app_error(str(app_log))  # first: the coder sees only the head of this summary
     summary = f"QA checks {'passed' if passed else 'FAILED'}:\n" + (error + "\n" if error else "") + "\n".join(lines)
     if not passed:

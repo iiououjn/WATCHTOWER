@@ -277,3 +277,45 @@ def test_a_big_non_ascii_log_cannot_push_the_result_line_out():
     # the sandbox keeps the output's tail: the result line goes last, and the log is not \u-escaped (6x growth)
     assert QA_SCRIPT.index('print("WATCHTOWER_LOG ') < QA_SCRIPT.index('print("WATCHTOWER_QA ')
     assert "ensure_ascii=False" in QA_SCRIPT
+
+
+def _c(name, form, status, text, method="POST", path="/add"):
+    return {"name": name, "method": method, "path": path, "form": form, "expect_status": status, "expect_text": text}
+
+
+def test_a_failing_check_that_shares_its_request_says_so():
+    checks = [_c("Check 1", {"item": ""}, 200, "Welcome"), _c("ADD", {"item": ""}, 200, "Confirmation"),
+              _c("other", {"item": "z"}, 200, "z")]
+    qa = [{"name": "Check 1", "pass": True, "status": 200, "detail": ""},
+          {"name": "ADD", "pass": False, "status": 200, "detail": "expected 200 with 'Confirmation', got 200: Welcome"},
+          {"name": "other", "pass": True, "status": 200, "detail": ""}]
+    summary = run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py", checks).summary
+    line = next(ln for ln in summary.splitlines() if ln.startswith("- ADD:"))
+    assert line.startswith("- ADD: FAIL [same request as 'Check 1': show both texts]")
+    assert "same request" not in next(ln for ln in summary.splitlines() if ln.startswith("- other:"))
+
+
+def test_a_stateful_get_post_get_sequence_gets_no_hint():
+    checks = [_c("empty", {}, 200, "No items yet", "GET", "/"), _c("add", {"item": "milk"}, 200, ""),
+              _c("shows", {}, 200, "milk", "GET", "/")]
+    qa = [{"name": "empty", "pass": True, "status": 200, "detail": ""},
+          {"name": "add", "pass": True, "status": 200, "detail": ""},
+          {"name": "shows", "pass": False, "status": 200, "detail": "expected 200 with 'milk', got 200: x"}]
+    assert "same request" not in run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py", checks).summary
+
+
+def test_the_hint_survives_what_the_coder_sees_and_is_named_once():
+    checks = [_c("Check 1", {"item": ""}, 200, "Welcome"), _c("ADD", {"item": ""}, 200, "Confirmation")]
+    qa = [{"name": "Check 1", "pass": False, "status": 200, "detail": "expected 200 with 'Welcome', got 200: " + "x" * 300},
+          {"name": "ADD", "pass": False, "status": 200, "detail": "expected 200 with 'Confirmation', got 200: " + "y" * 300}]
+    summary = run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py", checks).summary
+    assert summary.count("same request as") == 1 and summary.index("same request as") < 100
+
+
+def test_a_real_add_twice_is_not_told_to_show_both_texts():
+    for checks in ([_c("add milk", {"item": "milk"}, 200, "Added"), _c("dup", {"item": "milk"}, 200, "already exists")],
+                   [_c("bad", {"item": ""}, 400, "Empty"), _c("ok", {"item": ""}, 200, "Welcome")]):  # status differs
+        qa = [{"name": checks[0]["name"], "pass": True, "status": 200, "detail": ""},
+              {"name": checks[1]["name"], "pass": False, "status": 200, "detail": "expected x"}]
+        assert "same request" not in run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py",
+                                            checks).summary
