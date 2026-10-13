@@ -99,3 +99,20 @@ def test_message_never_exceeds_the_note_cut(tmp_path):
     ws.write(name, RUN12.replace("TodoHandler", "T" * 60).replace("todo_list", "t" * 60))
     (p,) = handler_state_problems(ws)
     assert len(p) <= 200 and p.endswith("in a file.")
+
+
+def test_a_per_request_override_read_by_a_shared_helper_is_left_alone(tmp_path):
+    body = ("    status = 200\n    def _send(self, body):\n        self.send_response(self.status)\n"
+            "        self.wfile.write(body)\n    def do_GET(self):\n        self._send(b'list')\n"
+            "    def do_POST(self):\n        self.status = 201\n        self._send(b'created')\n")
+    assert problems(tmp_path, HEAD + body) == []
+
+
+def test_a_big_handler_is_checked_quickly(tmp_path):
+    import time
+    methods = "".join(f"    def _h{i}(self):\n" + "".join(f"        self.a{j} = self.a{j + 1}\n" for j in range(30))
+                      + f"        self._h{(i + 1) % 40}()\n" for i in range(40))
+    handlers = "".join(f"    def do_M{i}(self):\n        self._h{i}()\n" for i in range(7))
+    start = time.monotonic()
+    problems(tmp_path, HEAD + methods + handlers)
+    assert time.monotonic() - start < 2
