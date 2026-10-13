@@ -991,3 +991,15 @@ def test_a_normalised_delete_path_counts_as_a_change(tmp_path):
     script = Script({"f2.coder": [{"files": [APP]}, {"files": [APP, {"path": "./old.py", "delete": True}]}]})
     dev(tmp_path, script, Runner([FAILED, FAILED, FAILED]), rounds=3).build(SPEC, PLAN3, [])
     assert "old.py" not in ws.files() and "back unchanged" not in script.prompts["f2.coder"][2]
+
+
+def test_entry_that_never_starts_its_server_is_repaired_and_the_coder_told(tmp_path):
+    body = ("from http.server import HTTPServer, BaseHTTPRequestHandler\n\n"
+            "def run():\n    HTTPServer(('127.0.0.1', 8000), BaseHTTPRequestHandler).serve_forever()\n")
+    script = Script({"f2.coder": [{"files": [{"path": "./app.py", "content": body},  # normalised path
+                                             {"path": "test_app.py", "content": body}]}]})
+    dev(tmp_path, script, Runner([FAILED]), rounds=2).build(SPEC, PLAN3, [])
+    ws = Workspace(tmp_path)
+    assert ws.read("app.py").endswith('if __name__ == "__main__":\n    run()\n')
+    assert ws.read("test_app.py") == body  # only the plan's entry file starts a server
+    assert "app.py never started its server" in script.prompts["f2.coder"][1]
