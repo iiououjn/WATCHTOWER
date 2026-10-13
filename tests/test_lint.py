@@ -27,7 +27,7 @@ def problems(tmp_path, source):
 
 def test_run12_handler_state_is_named(tmp_path):
     (p,) = problems(tmp_path, RUN12)
-    assert "app.py" in p and "self.todo_list" in p and "new handler per request" in p and p.endswith("in a file.")
+    assert "app.py" in p and "self.todo_list" in p and "each request gets a new handler" in p and p.endswith("in a file.")
     assert len(problems(tmp_path, RUN12.replace("TodoHandler", "T" * 300))[0]) <= 200
 
 
@@ -59,4 +59,43 @@ def test_f2_does_not_pass_while_handler_state_is_lost(tmp_path):
     s = Script({"f2.coder": [{"files": [{"path": "app.py", "content": RUN12}, todo, TEST]}]})
     pkg = DevFloor(ARCH, CODER, ask=s, workspace=Workspace(tmp_path), run=Runner([OK]), max_rounds=2).build(
         SPEC, {"files": [], "entry": "app.py"}, [])
-    assert pkg.checks_run[-1]["pass"] is False and "new handler per request" in s.prompts["f2.coder"][1]
+    assert pkg.checks_run[-1]["pass"] is False and "each request gets a new handler" in s.prompts["f2.coder"][1]
+
+
+HEAD = "from http.server import BaseHTTPRequestHandler\nITEMS = []\nclass H(BaseHTTPRequestHandler):\n"
+
+
+def test_correct_handlers_reported_by_review_are_left_alone(tmp_path):
+    cases = [
+        # each method sets its own per-request value first
+        "    def do_GET(self):\n        self.body = b'x'\n        self.wfile.write(self.body)\n"
+        "    def do_POST(self):\n        self.body = b'ok'\n        self.wfile.write(self.body)\n",
+        # the stdlib sets path for every request
+        "    def do_GET(self):\n        self.path = self.path.rstrip('/')\n"
+        "    def do_POST(self):\n        if self.path == '/add':\n            pass\n",
+        # POST sets a message, then renders through do_GET in the same request
+        "    message = ''\n    def do_POST(self):\n        self.message = 'Added'\n        self.do_GET()\n"
+        "    def do_GET(self):\n        self.wfile.write(self.message.encode())\n",
+        # the reader loads its value through a helper first
+        "    def _load(self):\n        self.data = self.rfile.read(3)\n"
+        "    def do_PUT(self):\n        self._load()\n        ITEMS.append(self.data)\n"
+        "    def do_POST(self):\n        self.data = self.rfile.read(3)\n        ITEMS.append(self.data)\n",
+    ]
+    for body in cases:
+        assert problems(tmp_path, HEAD + body) == [], body
+
+
+def test_data_written_through_a_helper_is_still_caught(tmp_path):
+    body = ("    def _save(self, item):\n        self.items.append(item)\n"
+            "    def do_POST(self):\n        self._save(1)\n"
+            "    def do_GET(self):\n        self.wfile.write(str(self.items).encode())\n")
+    assert len(problems(tmp_path, HEAD.replace("class H", "class H") + "    def __init__(self, *a):\n        self.items = []\n"
+                        "        super().__init__(*a)\n" + body)) == 1
+
+
+def test_message_never_exceeds_the_note_cut(tmp_path):
+    ws = Workspace(tmp_path)
+    name = "a" * 40 + "/" + "b" * 40 + ".py"
+    ws.write(name, RUN12.replace("TodoHandler", "T" * 60).replace("todo_list", "t" * 60))
+    (p,) = handler_state_problems(ws)
+    assert len(p) <= 200 and p.endswith("in a file.")

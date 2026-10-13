@@ -296,7 +296,7 @@ class DevFloor:
                 notes = _format_notes(reply) + self._write(reply.get("files"), plan["entry"])
             self._ensure_packages()
             notes += self._link_entry(plan["entry"])
-            problems = (import_problems(self._ws) if self._stdlib_only else []) + handler_state_problems(self._ws)
+            problems = handler_state_problems(self._ws) + (import_problems(self._ws) if self._stdlib_only else [])
             has_tests = any(_is_test_file(f) for f in self._ws.files())
             result = self._run(TEST_COMMAND)
             output = ((result.stdout or "") + (result.stderr or ""))[-2000:]
