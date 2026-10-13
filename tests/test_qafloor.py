@@ -226,3 +226,54 @@ def test_test_first_text_with_several_text_pieces_is_dropped_not_weakened():
     for text in ("<li>milk</li><li>eggs</li>", "Total: <b>3</b>", "<span>2</span> items left", "<p>0</p>"):
         assert test_first_text(text, set()) == "", text
     assert test_first_text("<h2>Shopping list</h2>", set()) == "Shopping list"
+
+
+HANDLER_CRASH = ("Starting httpd on port 8000\n" + "-" * 40 + "\nException occurred during processing of request from "
+                 "('127.0.0.1', 50000)\nTraceback (most recent call last):\n"
+                 '  File "/usr/local/lib/python3.14/socketserver.py", line 697, in process_request_thread\n'
+                 "    self.finish_request(request, client_address)\n"
+                 '  File "/w/__main__.py", line 13, in do_GET\n    items = list_items()\n            ^^^^^^^^^^\n'
+                 "NameError: name 'list_items' is not defined\n" + "-" * 40 + "\n")
+
+
+def test_the_apps_own_error_comes_first_and_fits_what_the_coder_sees():
+    checks = [{"name": f"check {i}", "method": "GET", "path": "/", "form": {}, "expect_status": 200,
+               "expect_text": "x" * 80} for i in range(2)]
+    qa = [{"name": c["name"], "pass": False, "status": 200, "detail": "expected 200 with '" + "x" * 250 + "'"}
+          for c in checks]
+    res = result(["WATCHTOWER_QA " + json.dumps(qa), "WATCHTOWER_LOG " + json.dumps(HANDLER_CRASH)])
+    summary = run_qa(runner(res)[0], "__main__.py", checks).summary
+    assert summary.splitlines()[0] == "QA checks FAILED:"
+    at = summary.index("NameError: name 'list_items' is not defined")
+    assert at < 400 and "__main__.py line 13 in do_GET: items = list_items()" in summary[:500]
+
+
+def test_no_app_error_means_no_error_line():
+    checks = [{"name": "home", "method": "GET", "path": "/", "form": {}, "expect_status": 200, "expect_text": "Hi"}]
+    qa = [{"name": "home", "pass": False, "status": 200, "detail": "expected 200 with 'Hi'"}]
+    res = result(["WATCHTOWER_QA " + json.dumps(qa), "WATCHTOWER_LOG " + json.dumps("serving\n")])
+    assert "App error" not in run_qa(runner(res)[0], "app.py", checks).summary
+
+
+def test_a_real_handler_crash_is_found_in_what_the_qa_runner_keeps():
+    from pathlib import Path
+    from watchtower.floors.f4_qa_deploy.qafloor import app_error
+    log = (Path(__file__).parent / "fixtures" / "handler_crash_log.txt").read_text()  # real 3.14, 5 stdlib frames
+    assert len(log) > 1000 and "[-4000:]" in QA_SCRIPT
+    error = app_error(log[-4000:])
+    assert error.startswith("App error: NameError: name 'list_items' is not defined")
+    assert "app.py line 4 in render" in error
+    assert "NameError: name 'list_items'" in app_error(log[-200:])  # header cut off: the error line still found
+
+
+def test_app_error_where_is_bounded():
+    from watchtower.floors.f4_qa_deploy.qafloor import app_error
+    log = ('Traceback (most recent call last):\n  File "/' + "p" * 900 + '.py", line 1, in ' + "f" * 900
+           + "\n    x()\nValueError: v\n")
+    assert len(app_error(log)) < 400
+
+
+def test_a_big_non_ascii_log_cannot_push_the_result_line_out():
+    # the sandbox keeps the output's tail: the result line goes last, and the log is not \u-escaped (6x growth)
+    assert QA_SCRIPT.index('print("WATCHTOWER_LOG ') < QA_SCRIPT.index('print("WATCHTOWER_QA ')
+    assert "ensure_ascii=False" in QA_SCRIPT

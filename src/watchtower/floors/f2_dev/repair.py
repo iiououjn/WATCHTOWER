@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import io
+import keyword
 import sys
 import tokenize
 import warnings
@@ -175,7 +177,13 @@ def repair_imports(source: str) -> tuple[str, list[str]]:
             return source, []  # a use that is not this module (datetime.now): leave the file alone
     if not wanted:
         return source, []
-    after = 0  # insert after a module docstring and any __future__ imports
+    added = sorted(wanted)
+    return _insert(source, tree, [f"import {m}" for m in added]), added
+
+
+def _insert(source: str, tree: ast.Module, new: list[str]) -> str:
+    """Add lines after a module docstring and any __future__ imports, keeping the file's line breaks."""
+    after = 0
     for stmt in tree.body:
         if (isinstance(stmt, ast.ImportFrom) and stmt.module == "__future__") or (
                 stmt is tree.body[0] and isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)
@@ -183,13 +191,12 @@ def repair_imports(source: str) -> tuple[str, list[str]]:
             after = stmt.end_lineno
         else:
             break
-    added = sorted(wanted)
     eol = "\r\n" if "\r\n" in source else "\n"
     lines = io.StringIO(source, newline="").readlines()  # \n, \r\n, \r only: the line breaks ast counts
     if after and lines and not lines[after - 1].endswith(("\n", "\r")):
         lines[after - 1] += eol
-    lines[after:after] = [f"import {m}{eol}" for m in added]
-    return "".join(lines), added
+    lines[after:after] = [f"{line}{eol}" for line in new]
+    return "".join(lines)
 
 
 _DECLARE = (ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign, ast.FunctionDef, ast.AsyncFunctionDef,
@@ -255,3 +262,80 @@ def repair_main(source: str) -> tuple[str, str | None]:
     if len(text.encode("utf-8", "replace")) > MAX_REPAIR_BYTES:  # never grow a file past what Workspace takes
         return source, None
     return text, name
+
+
+def _top_names(tree: ast.Module) -> set[str]:
+    """Functions and classes a module defines at top level. Not variables: `from todo import items` would be a
+    copy that goes stale when todo rebinds it."""
+    return {node.name for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+
+
+_SERVES = re.compile(r"serve|server", re.I)
+
+
+def _quiet(tree: ast.Module) -> bool:
+    """Importing this module does nothing but define things: no top-level call that serves or runs, no loop,
+    no harness. A `__main__` block is fine (it does not run on import)."""
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+                             ast.Pass)):
+            continue
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            continue  # a docstring or a bare constant
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Compare) and \
+                ast.unparse(node.test).replace("'", '"') == '__name__ == "__main__"':
+            continue
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and not any(
+                isinstance(n, ast.Call) and _SERVES.search(ast.unparse(n.func))
+                for n in ast.walk(node.value if node.value is not None else ast.Pass())):
+            continue  # PORT = int(os.getenv(...)) is fine; httpd = HTTPServer(...) binds the port
+        return False
+    return True
+
+
+def _parse(source: str) -> ast.Module | None:
+    if len(source) > MAX_REPAIR_BYTES:
+        return None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return None
+
+
+def repair_names(source: str, module: str, siblings: dict[str, str]) -> tuple[str, list[str]]:
+    """Run 11: __main__.py called list_items() and add_item() from todo.py but never imported them. For every
+    name the file uses but binds nowhere (and is not a builtin), import it from the one sibling module that
+    defines it at top level. Any name with no owner or two owners, a star import, a sibling that imports this
+    module back or shadows the standard library: the file is left alone. Static only."""
+    tree = _parse(source)
+    found = _bound(tree) if tree is not None else None
+    if found is None:
+        return source, []
+    bound = found[0] | set(dir(builtins)) | {"__file__", "__builtins__"}
+    missing = sorted({n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+                     - bound)
+    if not missing:
+        return source, []
+    owners: dict[str, list[str]] = {}
+    for name, text in sorted(siblings.items()):
+        if (name == module or not name.isidentifier() or keyword.iskeyword(name) or name.startswith("test")
+                or name == "__main__"
+                or name in sys.stdlib_module_names):
+            continue
+        other = _parse(text)
+        if other is None or not _quiet(other):
+            continue  # importing it would bind a port, serve, or run a harness: never link it
+        imports_back = any(isinstance(n, ast.Import) and any(a.name.split(".")[0] == module for a in n.names)
+                           or isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == module
+                           for n in ast.walk(other))
+        for defined in _top_names(other) & set(missing):
+            owners.setdefault(defined, []).append("" if imports_back else name)
+    wanted: dict[str, list[str]] = {}
+    for name in missing:
+        if len(owners.get(name, [])) != 1 or not owners[name][0]:
+            return source, []  # no owner, two owners, or an owner that would import this module back
+        wanted.setdefault(owners[name][0], []).append(name)
+    added = [f"from {mod} import {', '.join(names)}" for mod, names in sorted(wanted.items())]
+    return _insert(source, tree, added), added
