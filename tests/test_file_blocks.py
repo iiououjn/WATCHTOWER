@@ -138,3 +138,59 @@ def test_the_code_view_uses_the_same_block_format(tmp_path):
     ws.write("app.py", "s = '```'\nx = 1\n")
     snap = ws.snapshot()
     assert snap.startswith("### FILE: app.py\n````\n") and parse_files(snap)["files"][0]["content"] == "s = '```'\nx = 1\n"
+
+
+def test_nested_bare_fences_inside_code_never_cut_a_file_short():
+    readme = "### FILE: README.md\n````markdown\n# App\n```bash\npython app.py\n```\nDone.\n````\n"
+    assert parse_files(readme)["files"][0]["content"] == "# App\n```bash\npython app.py\n```\nDone.\n"
+    py = "### FILE: app.py\n```python\nHELP = '''\n```\ncode\n```\n'''\nx = 1\n```\n### FILE: b.py\n```\ny = 2\n```\n"
+    files = parse_files(py)["files"]
+    assert files[0]["content"] == "HELP = '''\n```\ncode\n```\n'''\nx = 1\n" and files[1]["path"] == "b.py"
+
+
+def test_header_like_lines_inside_code_are_code():
+    out = parse_files("### FILE: app.py\n```python\nx = 1\n# File: app.py\n```\n")
+    assert out["files"] == [{"path": "app.py", "content": "x = 1\n# File: app.py\n"}] and "notes" not in out
+    gen = "### FILE: gen.py\n```python\nT = '''\n### FILE: {name}\n```\n'''\n```\n"
+    out = parse_files(gen)
+    assert [f["path"] for f in out["files"]] == ["gen.py"] and "### FILE: {name}" in out["files"][0]["content"]
+
+
+def test_prose_is_not_a_header():
+    out = parse_files("File: app.py is the entry point.\nDelete: nothing needed\n### FILE: app.py\n```\nx = 1\n```\n")
+    assert out["files"] == [{"path": "app.py", "content": "x = 1\n"}] and "notes" not in out
+
+
+def test_more_variants_and_indented_blocks():
+    for text in ("### **File:** `app.py`\n```\nx = 1\n```\n", "1. ### FILE: app.py\n```\nx = 1\n```\n",
+                 "- ### FILE: app.py\n  ```python\n  x = 1\n  ```\n"):
+        assert parse_files(text)["files"] == [{"path": "app.py", "content": "x = 1\n"}], text
+    assert parse_files("**MEMO f1:** what size?\n")["memo"] == {"to": "f1", "question": "what size?"}
+    assert "memo" not in parse_files("### MEMO f1: Your question?\n")
+
+
+def test_a_lone_cr_inside_code_is_kept_and_backslash_paths_work():
+    out = parse_files("### FILE: src\\app.py\r\n```\r\ns = 'a\rb'\r\n```\r\n")
+    assert out["files"] == [{"path": "src/app.py", "content": "s = 'a\rb'\n"}]
+
+
+def test_notes_only_replies_are_retried_and_json_memo_only_is_kept(parts):
+    from conftest import fake_response
+    from watchtower.engine.model_socket import ModelSocket
+    settings, budget, audit = parts
+
+    def sock(replies, seen):
+        def completion(**kw):
+            seen.append(kw)
+            return fake_response(replies.pop(0) if len(replies) > 1 else replies[0], 1, 1)
+        return ModelSocket(settings, budget, audit, completion_fn=completion, unload_fn=lambda m: None,
+                           resident_fn=lambda: [], free_ram_fn=lambda: 100)
+    msgs = [{"role": "user", "content": "x"}]
+    seen = []
+    out = sock(["### FILE: a.py\nx = 1\n", "### FILE: a.py\n```\nx = 1\n```\n"], seen).ask_files("work", msgs, "j")
+    assert len(seen) == 2 and out["files"] == [{"path": "a.py", "content": "x = 1\n"}]
+    seen = []
+    out = sock(["### FILE: a.py\nx = 1\n"], seen).ask_files("work", msgs, "j")
+    assert len(seen) == 2 and out["files"] == [] and out["notes"]  # after the last try, the notes reach the coder
+    out = sock(['{"files": [], "memo": {"to": "f3", "question": "port?"}}'], []).ask_files("work", msgs, "j")
+    assert out["memo"] == {"to": "f3", "question": "port?"}

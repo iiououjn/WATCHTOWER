@@ -929,3 +929,11 @@ def test_parse_notes_reach_the_coder_and_the_repair_note_never_mentions_json(tmp
     dev(tmp_path, script, Runner([FAILED]), rounds=2).build(SPEC, PLAN3, [])
     second = script.prompts["f2.coder"][1]
     assert "b.py was cut off" in second and "Auto-repaired" in second and "JSON" not in second
+
+
+def test_deletes_do_not_use_up_the_file_cap(tmp_path):
+    Workspace(tmp_path).write("old.py", "x = 1\n")
+    files = [{"path": "old.py", "delete": True}, APP, TEST, {"path": "store.py", "content": "S = 1\n"}]
+    script = Script({"f2.coder": [{"files": files}]})
+    dev(tmp_path, script, Runner([OK]), rounds=1).build(SPEC, PLAN3, [])
+    assert sorted(Workspace(tmp_path).files()) == ["app.py", "store.py", "test_app.py"]

@@ -565,9 +565,16 @@ class DevFloor:
 
     def _write(self, files) -> list[str]:
         notes = []
-        for f in (files if isinstance(files, list) else [])[:MAX_FILES_PER_ROUND]:
+        written = 0
+        for f in (files if isinstance(files, list) else [])[:MAX_FILES_PER_ROUND + 5]:
             if not isinstance(f, dict):
                 continue
+            if f.get("delete") is not True:
+                if written >= MAX_FILES_PER_ROUND:  # deletes don't use up the cap; writes beyond it are dropped
+                    notes.append(f"File {str(f.get('path'))[:100]!r} not written: at most {MAX_FILES_PER_ROUND} "
+                                 "files per reply")
+                    continue
+                written += 1
             try:
                 if f.get("delete") is True:
                     self._ws.delete(str(f.get("path", "")))
