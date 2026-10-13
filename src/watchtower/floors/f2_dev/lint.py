@@ -157,33 +157,52 @@ def _test_file_notes(tree: ast.Module) -> tuple[list[str], list[tuple[str, str]]
     return fixtures, self_patch
 
 
-def _top_bound(tree: ast.Module) -> set[str]:
+_CONTAINERS = {"list", "dict", "set", "defaultdict", "OrderedDict", "Counter", "deque"}
+
+
+def _top_bound(tree: ast.Module, containers: bool = False) -> set[str]:
+    """Names the module binds itself at top level (imports are not its own). containers=True: only names bound to
+    a list/dict/set — the app state a test resets, and the only kind `.clear()` fits."""
     out: set[str] = set()
     for n in tree.body:
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and not containers:
             out.add(n.name)
         elif isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            value = getattr(n, "value", None)
+            if containers and not (isinstance(value, (ast.List, ast.Dict, ast.Set)) or isinstance(value, ast.Call)
+                                   and ast.unparse(value.func).split(".")[-1] in _CONTAINERS):
+                continue
             for t in n.targets if isinstance(n, ast.Assign) else [n.target]:
                 out |= {x.id for x in ast.walk(t) if isinstance(x, ast.Name)}
-        elif isinstance(n, (ast.Import, ast.ImportFrom)):
-            out |= {(a.asname or a.name).split(".")[0] for a in n.names}
     return out
+
+
+def _scope(fn: ast.AST):
+    """The nodes of one function's own scope: nested functions and classes are their own scopes."""
+    todo = list(ast.iter_child_nodes(fn))
+    while todo:
+        node = todo.pop()
+        yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            todo.extend(ast.iter_child_nodes(node))
 
 
 def _global_resets(tree: ast.Module, apps: dict[str, set[str]]) -> list[tuple[str, str]]:
     """Run 16: setUp did `global todos; todos = []` after `from todo import ...`: that binds a new todos in the
-    test module; todo.todos is never reset. (name, module) pairs: the test's own top level does not bind the name,
-    and a module it imports from binds it at top level."""
+    test module; todo.todos is never reset. (name, module) pairs: the test does not bind the name itself, a module
+    it imports binds it to a container, and the function never touches module.name (aliasing that works)."""
     own = _top_bound(tree)
     sources = [n.module for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module and not n.level]
     sources += [a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names]
     out = []
     for fn in (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))):
-        declared = {g for n in ast.walk(fn) if isinstance(n, ast.Global) for g in n.names}
-        assigned = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+        nodes = list(_scope(fn))
+        declared = {g for n in nodes if isinstance(n, ast.Global) for g in n.names}
+        assigned = {n.id for n in nodes if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+        touched = {ast.unparse(n) for n in nodes if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)}
         for name in sorted((declared & assigned) - own):
             mod = next((m for m in sources if name in apps.get(m, set())), None)
-            if mod and (name, mod) not in out:
+            if mod and f"{mod}.{name}" not in touched and (name, mod) not in out:
                 out.append((name, mod))
     return out
 
@@ -205,7 +224,7 @@ def idiom_notes(ws: Workspace) -> list[str]:
                     trees[name] = ast.parse(source)
         except (SyntaxError, ValueError, RecursionError, MemoryError, OSError, WorkspaceError):
             continue
-    apps = {n[:-3].replace("/", ".").removesuffix(".__init__"): _top_bound(t) for n, t in trees.items()
+    apps = {n[:-3].replace("/", ".").removesuffix(".__init__"): _top_bound(t, containers=True) for n, t in trees.items()
             if not n.rsplit("/", 1)[-1].startswith("test")}
     for name, tree in trees.items():
         if name.rsplit("/", 1)[-1].startswith("test"):
@@ -223,7 +242,7 @@ def idiom_notes(ws: Workspace) -> list[str]:
         notes.append(f"{test[:25]} patches {target[:25]} but calls its own imported copy, so the real function runs "
                      "and the mock is never called. Test the real function's result; don't patch it.")
     if resets:
-        test, var, mod = (x[:25] for x in resets[0])
-        notes.append(f"{test} resets its own {var}, not {mod}.{var}: `global {var}` makes a new name in the test. "
-                     f"Reset the app's with `import {mod}` and `{mod}.{var}.clear()` in setUp.")
+        said = [f"Test `global {var}` binds its own copy; {mod}.{var} stays dirty. In setUp: `import {mod}`; "
+                f"`{mod}.{var}.clear()`." for _, var, mod in resets]
+        notes += [n for n in said if len(n) <= 200][:1]  # names are never cut (a cut name is wrong code)
     return [n[:200] for n in notes]

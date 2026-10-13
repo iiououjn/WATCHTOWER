@@ -173,7 +173,7 @@ def test_a_reset_of_the_tests_own_copy_is_named(tmp_path):
     ws.write("todo.py", "todos = []\n\ndef add_todo(i):\n    todos.append(i)\n\ndef list_todos():\n    return todos\n")
     ws.write("test_todo.py", RUN16_TEST)
     (note,) = idiom_notes(ws)
-    assert "todo.todos" in note and "test_todo" in note and "todo.todos.clear()" in note and len(note) <= 200
+    assert "todo.todos" in note and "todo.todos.clear()" in note and len(note) <= 200
 
 
 def test_a_global_the_test_really_owns_is_left_alone(tmp_path):
@@ -185,3 +185,34 @@ def test_a_global_the_test_really_owns_is_left_alone(tmp_path):
     ws.write("test_b.py", RUN16_TEST.replace("from todo import", "from other import seen  #").replace(
         "global todos\n        todos", "global seen2\n        seen2"))                   # nothing binds seen2
     assert idiom_notes(ws) == []
+
+
+def test_global_reset_review_cases(tmp_path):
+    from watchtower.floors.f2_dev.lint import idiom_notes
+    app = "PORT = 8000\nserver = None\ntodos = []\n\ndef add_todo(i):\n    todos.append(i)\n"
+
+    def notes(test):
+        ws = Workspace(tmp_path / str(abs(hash(test))))
+        ws.write("app.py", app)
+        ws.write("test_app.py", test)
+        return idiom_notes(ws)
+    assert notes("from app import add_todo\ndef setUpModule():\n    global PORT, server\n    PORT = 1\n    server = 2\n") == []
+    assert notes("import app\ndef setUp():\n    global todos\n    todos = app.todos\n    todos.clear()\n") == []
+    assert notes("from app import add_todo\ndef setUp():\n    todos = []\n    def h():\n        global todos\n"
+                 "        print(todos)\n") == []                                   # the inner scope only reads
+    (n,) = notes("from app import add_todo, todos\ndef setUp():\n    global todos\n    todos = []\n")
+    assert "app.todos.clear()" in n                                               # imported name: still the app's
+
+
+def test_global_reset_note_keeps_its_advice_with_long_names(tmp_path):
+    from watchtower.floors.f2_dev.lint import idiom_notes
+    ws = Workspace(tmp_path)
+    ws.write("myapp/storage_memory.py", "registered_users_list = {}\n")
+    ws.write("tests_x/test_storage_backend.py", "from myapp.storage_memory import registered_users_list as r\n"
+             "def setUp():\n    global registered_users_list\n    registered_users_list = {}\n")
+    assert idiom_notes(ws) == []  # too long to say whole: no note rather than a cut (wrong) name
+    ws.write("myapp/store.py", "users_list = {}\n")
+    ws.write("tests_x/test_store.py", "from myapp.store import users_list as u\n"
+             "def setUp():\n    global users_list\n    users_list = {}\n")
+    (n,) = idiom_notes(ws)
+    assert n.endswith("`myapp.store.users_list.clear()`.") and len(n) <= 200
