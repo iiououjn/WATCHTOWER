@@ -60,24 +60,68 @@ class Reply:
     usd: float
 
 
-_BLOCK = re.compile(r"^###[ \t]*FILE:[ \t]*(\S[^\n]*?)[ \t]*\n(`{3,})[^\n]*\n(.*?)^\2[ \t]*$", re.M | re.S)
-_DELETE = re.compile(r"^###[ \t]*DELETE:[ \t]*(\S[^\n]*?)[ \t]*$", re.M)
-_MEMO = re.compile(r"^###[ \t]*MEMO[ \t]+(f\d)[ \t]*:[ \t]*(\S[^\n]*)$", re.M)
+_HEADER = re.compile(r"^[ \t]*(?:\*\*)?#{0,4}[ \t]*(FILE|DELETE)[ \t]*:[ \t]*(.+?)[ \t]*(?:\*\*)?[ \t]*$", re.I)
+_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})")
+_MEMO = re.compile(r"^[ \t]*#{0,4}[ \t]*MEMO[ \t]+(f\d)[ \t]*:[ \t]*(\S.*?)[ \t]*$", re.I)
 FILES_NOTE = ("\n\nYour previous reply had no usable files. Reply with one block per file, exactly like this:\n"
               "### FILE: app.py\n```python\n<the complete file>\n```")
 
 
+def _clean_path(raw: str) -> str:
+    path = raw.strip().strip("`*'\"").strip()
+    while path.startswith("./"):
+        path = path[2:]
+    return path
+
+
 def parse_files(text: str) -> dict:
-    """Code as plain fenced blocks ('### FILE: path' + a ``` fence), so no character ever needs escaping —
-    the coder's JSON escaping of newlines and quotes was the commonest cause of broken files."""
-    text = (text or "").replace("\r\n", "\n")
-    files = [{"path": path.strip(), "content": body if body.endswith("\n") or not body else body + "\n"}
-             for path, _fence, body in _BLOCK.findall(text)]
-    files += [{"path": path.strip(), "delete": True} for path in _DELETE.findall(text)]
+    """Code as plain fenced blocks ('### FILE: path' + a fence), so no character ever needs escaping — the
+    coder's JSON escaping of newlines and quotes was the commonest cause of broken files. Read line by line:
+    a header or DELETE/MEMO line counts only outside code; a block never runs into the next file; a block left
+    open is rejected with a note (never written half), and the model's own order is kept."""
+    lines = (text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    files, notes, memo = [], [], None
+    path, fence, body, i = None, None, [], 0
+    while i < len(lines):
+        line = lines[i]
+        if fence is None:
+            header = _HEADER.match(line)
+            if header and header.group(1).upper() == "DELETE":
+                files.append({"path": _clean_path(header.group(2)), "delete": True})
+            elif header:
+                path, body = _clean_path(header.group(2)), []
+                j = i + 1
+                while j < len(lines) and not lines[j].strip():
+                    j += 1
+                opener = _FENCE.match(lines[j]) if j < len(lines) else None
+                if not path:
+                    path = None
+                elif opener:
+                    fence, i = opener.group(1), j
+                else:
+                    notes.append(f"File {path} had no ``` fence after its header; send it again as a block")
+                    path = None
+            elif (m := _MEMO.match(line)) and m.group(2).lower() != "your question" and memo is None:
+                memo = {"to": m.group(1).lower(), "question": m.group(2)}
+        else:
+            stripped = line.strip()
+            if stripped and set(stripped) == {fence[0]} and len(stripped) >= len(fence):  # the closing fence
+                files.append({"path": path, "content": "\n".join(body) + ("\n" if body else "")})
+                path, fence = None, None
+            elif _HEADER.match(line) and _FENCE.match(next((x for x in lines[i + 1:] if x.strip()), "")):
+                notes.append(f"File {path} was not closed with a fence before the next file; it was not written")
+                path, fence = None, None
+                continue  # read this header again, outside code
+            else:
+                body.append(line)
+        i += 1
+    if fence is not None:
+        notes.append(f"File {path} was cut off (no closing fence); send it again, shorter")
     out: dict = {"files": files}
-    memo = _MEMO.search(text)
+    if notes:
+        out["notes"] = notes
     if memo:  # '### MEMO f3: question' — the same memo the JSON roles send
-        out["memo"] = {"to": memo.group(1), "question": memo.group(2).strip()}
+        out["memo"] = memo
     return out
 
 
@@ -188,7 +232,7 @@ class ModelSocket:
                     out = data if isinstance(data.get("files"), list) and data["files"] else out
                 except ValueError:
                     pass
-            if out["files"]:
+            if out["files"] or out.get("memo") or out.get("notes"):  # a memo or a format note still reaches the coder
                 return out
             self._audit.append("model_socket", "bad_files", {"model": reply.model}, job_id)
             convo = list(messages[:-1]) + [{**messages[-1], "content": messages[-1]["content"] + FILES_NOTE}]

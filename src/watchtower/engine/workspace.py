@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path, PurePosixPath
 
 ALLOWED_SUFFIXES = {".py", ".html", ".css", ".js", ".json", ".md", ".txt", ".sql"}
@@ -83,7 +84,9 @@ class Workspace:
                 break
             if len(body) > room - 100:
                 body = body[: room - 100] + "\n(truncated)"
-            block = f"### {name}\n{body}\n"
+            fence = "`" * max(3, 1 + max((len(r) for r in re.findall(r"`+", body)), default=0))
+            end = "" if body.endswith("\n") else "\n"
+            block = f"### FILE: {name}\n{fence}\n{body}{end}{fence}\n"  # the same shape the coder replies in
             parts.append(block)
             used += len(block)
         return "\n".join(parts) or "(no files yet)"

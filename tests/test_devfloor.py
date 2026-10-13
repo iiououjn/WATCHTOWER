@@ -309,7 +309,7 @@ def test_a_broken_coder_reply_costs_a_round_not_the_job(tmp_path):
     pkg = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([OK])).build(
         SPEC, {"files": [], "entry": "app.py"}, [])
     assert pkg.checks_run[-1]["pass"] and "no usable files" in prompts[1] and "### FILE:" in prompts[1]
-    assert pkg.checks_run[0] == {"check": "tests", "round": 0, "pass": False, "output": "coder reply was not valid JSON"}
+    assert pkg.checks_run[0] == {"check": "tests", "round": 0, "pass": False, "output": "coder reply had no usable files"}
 
 
 def test_coder_that_never_returns_json_fails_the_build_after_its_rounds(tmp_path):
@@ -921,3 +921,11 @@ def test_repair_note_says_the_lines_are_in_what_the_coder_sent(tmp_path):
     script = Script({"f2.coder": [{"files": [{"path": "app.py", "content": "x = 'a\nb'\n"}, TEST]}]})
     dev(tmp_path, script, Runner([FAILED]), rounds=2).build(SPEC, PLAN3, [])
     assert "line(s) 1 of what you sent" in script.prompts["f2.coder"][1]
+
+
+def test_parse_notes_reach_the_coder_and_the_repair_note_never_mentions_json(tmp_path):
+    script = Script({"f2.coder": [{"files": [{"path": "app.py", "content": "x = 'a\nb'\n"}, TEST],
+                                   "notes": ["File b.py was cut off (no closing fence); send it again, shorter"]}]})
+    dev(tmp_path, script, Runner([FAILED]), rounds=2).build(SPEC, PLAN3, [])
+    second = script.prompts["f2.coder"][1]
+    assert "b.py was cut off" in second and "Auto-repaired" in second and "JSON" not in second
