@@ -163,3 +163,31 @@ def test_repair_main_never_grows_a_file_past_the_limit():
     from watchtower.floors.f2_dev.repair import MAX_REPAIR_BYTES, repair_main
     source = SERVES + "X = '" + "a" * (MAX_REPAIR_BYTES - len(SERVES) - 10) + "'\n"
     assert repair_main(source) == (source, None)
+
+
+MAIN_USES = ("from http.server import BaseHTTPRequestHandler\n\nclass H(BaseHTTPRequestHandler):\n"
+             "    def do_GET(self):\n        for item in list_items():\n            print(item)\n"
+             "    def do_POST(self):\n        add_item('x')\n")
+TODO = "def add_item(item):\n    pass\n\ndef list_items():\n    return []\n"
+
+
+def test_repair_names_imports_what_one_sibling_defines():
+    from watchtower.floors.f2_dev.repair import repair_names
+    text, added = repair_names(MAIN_USES, "__main__", {"todo": TODO, "test_todo": "def list_items(): pass\n"})
+    assert added == ["from todo import add_item, list_items"]
+    assert text.startswith("from todo import add_item, list_items\n") and text.endswith(MAIN_USES)
+
+
+def test_repair_names_leaves_alone_what_it_cannot_be_sure_of():
+    from watchtower.floors.f2_dev.repair import repair_names
+    cases = [
+        (MAIN_USES, {"todo": TODO, "store": "def add_item(): pass\n"}),           # two owners
+        (MAIN_USES, {"todo": "def add_item(): pass\n"}),                           # list_items owned by none
+        (MAIN_USES, {"todo": TODO + "import __main__\n"}),                         # would import back
+        (MAIN_USES, {"json": TODO}),                                               # shadows the standard library
+        ("from x import *\n" + MAIN_USES, {"todo": TODO}),                        # star import binds anything
+        ("def f(:\n", {"todo": TODO}),                                             # does not parse
+        ("print(len([]))\n", {"todo": TODO}),                                      # nothing missing
+    ]
+    for source, siblings in cases:
+        assert repair_names(source, "__main__", siblings) == (source, []), (source[:30], list(siblings))

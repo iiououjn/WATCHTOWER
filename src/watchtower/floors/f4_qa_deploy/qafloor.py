@@ -68,6 +68,27 @@ print("WATCHTOWER_LOG " + json.dumps(open(log.name, "rb").read().decode(errors="
 """
 _RESULT = re.compile(r"^WATCHTOWER_QA (.*)$", re.M)
 _LOG = re.compile(r"^WATCHTOWER_LOG (.*)$", re.M)
+_FRAME = re.compile(r'^\s+File "([^"]+)", line (\d+), in (\S+)')
+
+
+def app_error(log: str) -> str:
+    """The app's own last error, from its log: the exception line and where it was raised, one short line.
+    Run 11: a NameError in do_GET sat at the end of the log, past what the coder is shown."""
+    text = str(log or "")
+    start = text.rfind("Traceback (most recent call last):")
+    if start < 0:
+        return ""
+    lines = text[start:].splitlines()[1:]
+    at = next((i for i, ln in enumerate(lines) if ln.strip() and not ln[0].isspace()), None)
+    if at is None:
+        return ""
+    where = ""
+    frames = [i for i in range(at) if _FRAME.match(lines[i])]
+    if frames:
+        path, line_no, fn = _FRAME.match(lines[frames[-1]]).groups()
+        source = lines[frames[-1] + 1].strip() if frames[-1] + 1 < at else ""
+        where = f" (at {path.rsplit('/', 1)[-1]} line {line_no} in {fn}: {source[:100]})"
+    return f"App error: {lines[at].strip()[:200]}{where}"
 
 
 def _str(value, cap: int) -> str | None:
@@ -202,7 +223,8 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
     passed = not result.timed_out and all(r.get("pass") is True for r in results)
     lines = [f"- {r.get('name')}: {'PASS' if r.get('pass') is True else 'FAIL'} {str(r.get('detail') or '')[:300]}"
              for r in results]
-    summary = f"QA checks {'passed' if passed else 'FAILED'}:\n" + "\n".join(lines)
+    error = "" if passed else app_error(str(app_log))  # first: the coder sees only the head of this summary
+    summary = f"QA checks {'passed' if passed else 'FAILED'}:\n" + (error + "\n" if error else "") + "\n".join(lines)
     if not passed:
         summary += f"\nApp output:\n{str(app_log)[-800:]}"
     return WorkPackage("f4", summary, [entry], [], [{"check": "qa", "pass": passed, "results": results}],

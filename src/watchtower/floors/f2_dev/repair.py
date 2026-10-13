@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import io
 import sys
 import tokenize
@@ -175,7 +176,13 @@ def repair_imports(source: str) -> tuple[str, list[str]]:
             return source, []  # a use that is not this module (datetime.now): leave the file alone
     if not wanted:
         return source, []
-    after = 0  # insert after a module docstring and any __future__ imports
+    added = sorted(wanted)
+    return _insert(source, tree, [f"import {m}" for m in added]), added
+
+
+def _insert(source: str, tree: ast.Module, new: list[str]) -> str:
+    """Add lines after a module docstring and any __future__ imports, keeping the file's line breaks."""
+    after = 0
     for stmt in tree.body:
         if (isinstance(stmt, ast.ImportFrom) and stmt.module == "__future__") or (
                 stmt is tree.body[0] and isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)
@@ -183,13 +190,12 @@ def repair_imports(source: str) -> tuple[str, list[str]]:
             after = stmt.end_lineno
         else:
             break
-    added = sorted(wanted)
     eol = "\r\n" if "\r\n" in source else "\n"
     lines = io.StringIO(source, newline="").readlines()  # \n, \r\n, \r only: the line breaks ast counts
     if after and lines and not lines[after - 1].endswith(("\n", "\r")):
         lines[after - 1] += eol
-    lines[after:after] = [f"import {m}{eol}" for m in added]
-    return "".join(lines), added
+    lines[after:after] = [f"{line}{eol}" for line in new]
+    return "".join(lines)
 
 
 _DECLARE = (ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign, ast.FunctionDef, ast.AsyncFunctionDef,
@@ -255,3 +261,61 @@ def repair_main(source: str) -> tuple[str, str | None]:
     if len(text.encode("utf-8", "replace")) > MAX_REPAIR_BYTES:  # never grow a file past what Workspace takes
         return source, None
     return text, name
+
+
+def _top_names(tree: ast.Module) -> set[str]:
+    out: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            out.add(node.name)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            for t in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                out |= {n.id for n in ast.walk(t) if isinstance(n, ast.Name)}
+    return out
+
+
+def _parse(source: str) -> ast.Module | None:
+    if len(source) > MAX_REPAIR_BYTES:
+        return None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            return ast.parse(source)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return None
+
+
+def repair_names(source: str, module: str, siblings: dict[str, str]) -> tuple[str, list[str]]:
+    """Run 11: __main__.py called list_items() and add_item() from todo.py but never imported them. For every
+    name the file uses but binds nowhere (and is not a builtin), import it from the one sibling module that
+    defines it at top level. Any name with no owner or two owners, a star import, a sibling that imports this
+    module back or shadows the standard library: the file is left alone. Static only."""
+    tree = _parse(source)
+    found = _bound(tree) if tree is not None else None
+    if found is None:
+        return source, []
+    bound = found[0] | set(dir(builtins)) | {"__file__", "__builtins__"}
+    missing = sorted({n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+                     - bound)
+    if not missing:
+        return source, []
+    owners: dict[str, list[str]] = {}
+    for name, text in sorted(siblings.items()):
+        if (name == module or not name.isidentifier() or name.startswith("test") or name == "__main__"
+                or name in sys.stdlib_module_names):
+            continue
+        other = _parse(text)
+        if other is None:
+            continue
+        imports_back = any(isinstance(n, ast.Import) and any(a.name.split(".")[0] == module for a in n.names)
+                           or isinstance(n, ast.ImportFrom) and (n.module or "").split(".")[0] == module
+                           for n in ast.walk(other))
+        for defined in _top_names(other) & set(missing):
+            owners.setdefault(defined, []).append("" if imports_back else name)
+    wanted: dict[str, list[str]] = {}
+    for name in missing:
+        if len(owners.get(name, [])) != 1 or not owners[name][0]:
+            return source, []  # no owner, two owners, or an owner that would import this module back
+        wanted.setdefault(owners[name][0], []).append(name)
+    added = [f"from {mod} import {', '.join(names)}" for mod, names in sorted(wanted.items())]
+    return _insert(source, tree, added), added

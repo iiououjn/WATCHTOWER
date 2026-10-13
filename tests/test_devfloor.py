@@ -1003,3 +1003,13 @@ def test_entry_that_never_starts_its_server_is_repaired_and_the_coder_told(tmp_p
     assert ws.read("app.py").endswith('if __name__ == "__main__":\n    run()\n')
     assert ws.read("test_app.py") == body  # only the plan's entry file starts a server
     assert "app.py never started its server" in script.prompts["f2.coder"][1]
+
+
+def test_entry_missing_its_own_modules_import_is_linked_before_the_tests(tmp_path):
+    entry = "def run():\n    return list_items()\n"
+    script = Script({"f2.coder": [{"files": [{"path": "app.py", "content": entry},
+                                             {"path": "todo.py", "content": "def list_items():\n    return []\n"},
+                                             TEST]}]})
+    dev(tmp_path, script, Runner([FAILED]), rounds=2).build(SPEC, PLAN3, [])
+    assert Workspace(tmp_path).read("app.py") == "from todo import list_items\n" + entry
+    assert "added `from todo import list_items` to app.py" in script.prompts["f2.coder"][1]

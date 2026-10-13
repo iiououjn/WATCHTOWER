@@ -15,7 +15,7 @@ from watchtower.engine.sandbox import SandboxResult
 from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_NOTE,  # noqa: F401 (re-export)
                                                _capped, _failure_note, _failure_rows, _problem_note, failures,
                                                stuck_note)
-from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_strings
+from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
 from watchtower.roles import Role
@@ -294,6 +294,7 @@ class DevFloor:
                     continue
                 notes = _format_notes(reply) + self._write(reply.get("files"), plan["entry"])
             self._ensure_packages()
+            notes += self._link_entry(plan["entry"])
             problems = import_problems(self._ws) if self._stdlib_only else []
             has_tests = any(_is_test_file(f) for f in self._ws.files())
             result = self._run(TEST_COMMAND)
@@ -369,6 +370,28 @@ class DevFloor:
         if not isinstance(out.get("pass"), bool):  # no clear verdict from a sloppy model: skip, never veto
             return None
         return out["pass"], str(out.get("reason") or "no reason given").strip()[:300]
+
+    def _link_entry(self, entry: str) -> list[str]:
+        """Run 11: the entry called its own module's functions without importing them; the unit tests import
+        that module directly, so only QA met the NameError. Static: link names exactly one sibling defines."""
+        if "/" in entry or not entry.endswith(".py"):
+            return []
+        siblings = {}
+        for f in self._ws.files():
+            if "/" not in f and f.endswith(".py") and f != entry:
+                try:
+                    siblings[f[:-3]] = self._ws.read(f)
+                except (WorkspaceError, OSError):
+                    continue
+        try:
+            source = self._ws.read(entry)
+            text, added = repair_names(source, entry[:-3], siblings)
+            if added:
+                self._ws.write(entry, text)
+        except (WorkspaceError, OSError):
+            return []
+        return [f"Auto-repaired: added `{line}` to {entry}; it used those names without importing them."
+                for line in added]
 
     def _ensure_packages(self) -> None:
         """unittest discovery only enters folders that are packages: add empty __init__.py where missing."""

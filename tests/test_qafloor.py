@@ -226,3 +226,30 @@ def test_test_first_text_with_several_text_pieces_is_dropped_not_weakened():
     for text in ("<li>milk</li><li>eggs</li>", "Total: <b>3</b>", "<span>2</span> items left", "<p>0</p>"):
         assert test_first_text(text, set()) == "", text
     assert test_first_text("<h2>Shopping list</h2>", set()) == "Shopping list"
+
+
+HANDLER_CRASH = ("Starting httpd on port 8000\n" + "-" * 40 + "\nException occurred during processing of request from "
+                 "('127.0.0.1', 50000)\nTraceback (most recent call last):\n"
+                 '  File "/usr/local/lib/python3.14/socketserver.py", line 697, in process_request_thread\n'
+                 "    self.finish_request(request, client_address)\n"
+                 '  File "/w/__main__.py", line 13, in do_GET\n    items = list_items()\n            ^^^^^^^^^^\n'
+                 "NameError: name 'list_items' is not defined\n" + "-" * 40 + "\n")
+
+
+def test_the_apps_own_error_comes_first_and_fits_what_the_coder_sees():
+    checks = [{"name": f"check {i}", "method": "GET", "path": "/", "form": {}, "expect_status": 200,
+               "expect_text": "x" * 80} for i in range(2)]
+    qa = [{"name": c["name"], "pass": False, "status": 200, "detail": "expected 200 with '" + "x" * 250 + "'"}
+          for c in checks]
+    res = result(["WATCHTOWER_QA " + json.dumps(qa), "WATCHTOWER_LOG " + json.dumps(HANDLER_CRASH)])
+    summary = run_qa(runner(res)[0], "__main__.py", checks).summary
+    assert summary.splitlines()[0] == "QA checks FAILED:"
+    at = summary.index("NameError: name 'list_items' is not defined")
+    assert at < 400 and "__main__.py line 13 in do_GET: items = list_items()" in summary[:500]
+
+
+def test_no_app_error_means_no_error_line():
+    checks = [{"name": "home", "method": "GET", "path": "/", "form": {}, "expect_status": 200, "expect_text": "Hi"}]
+    qa = [{"name": "home", "pass": False, "status": 200, "detail": "expected 200 with 'Hi'"}]
+    res = result(["WATCHTOWER_QA " + json.dumps(qa), "WATCHTOWER_LOG " + json.dumps("serving\n")])
+    assert "App error" not in run_qa(runner(res)[0], "app.py", checks).summary
