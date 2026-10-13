@@ -203,9 +203,11 @@ def _same_request_hints(checks: list[dict], results: list[dict]) -> dict[int, st
         if r.get("pass") is True or j in paired:
             continue
         for i, c in enumerate(checks):
-            between = checks[min(i, j) + 1:max(i, j)]
-            if (i != j and _request(c) == _request(checks[j]) and c["expect_text"]
-                    and c["expect_text"] != checks[j]["expect_text"] and not any(b["method"] == "POST" for b in between)):
+            first, between = checks[min(i, j)], checks[min(i, j) + 1:max(i, j)]
+            real_add = first["method"] == "POST" and first["form"] and all(first["form"].values())  # may change state
+            if (i != j and _request(c) == _request(checks[j]) and c["expect_text"] and not real_add
+                    and c["expect_text"] != checks[j]["expect_text"] and c["expect_status"] == checks[j]["expect_status"]
+                    and not any(b["method"] == "POST" for b in between)):
                 hints[j] = f" [same request as {c['name'][:30]!r}: show both texts]"
                 paired |= {i, j}
                 break

@@ -310,3 +310,12 @@ def test_the_hint_survives_what_the_coder_sees_and_is_named_once():
           {"name": "ADD", "pass": False, "status": 200, "detail": "expected 200 with 'Confirmation', got 200: " + "y" * 300}]
     summary = run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py", checks).summary
     assert summary.count("same request as") == 1 and summary.index("same request as") < 100
+
+
+def test_a_real_add_twice_is_not_told_to_show_both_texts():
+    for checks in ([_c("add milk", {"item": "milk"}, 200, "Added"), _c("dup", {"item": "milk"}, 200, "already exists")],
+                   [_c("bad", {"item": ""}, 400, "Empty"), _c("ok", {"item": ""}, 200, "Welcome")]):  # status differs
+        qa = [{"name": checks[0]["name"], "pass": True, "status": 200, "detail": ""},
+              {"name": checks[1]["name"], "pass": False, "status": 200, "detail": "expected x"}]
+        assert "same request" not in run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py",
+                                            checks).summary
