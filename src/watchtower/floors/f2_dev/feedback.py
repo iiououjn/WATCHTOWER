@@ -11,7 +11,7 @@ _BLOCK = re.compile(r"^(FAIL|ERROR): (\w+) \(([^)\n]*)\)(?: \([^\n]*\))?\n(?:(?!
                     r"(.*?)(?=^={20,}$|^-{20,}$|\Z)", re.M | re.S)  # optional docstring line before the dashes
 _EXC = re.compile(r"^[A-Za-z_][\w.]*(: |$)")  # an unindented 'Name: message' line ends a traceback
 _FRAME = re.compile(r'^\s+File "([^"]+)", line (\d+), in (\S+)')
-MAX_FAILURES, MAX_PARSED, NOTE_CHARS, STUCK_CHARS = 5, 20, 1000, 420
+MAX_FAILURES, MAX_PARSED, NOTE_CHARS, STUCK_CHARS = 5, 20, 1000, 443
 NOTE_CAP = 2000  # any one note, after escaping: the newest note is never trimmed, so it must stay small
 
 
@@ -50,9 +50,11 @@ def failures(output: str) -> list[dict]:
         minus = "".join(ln[2:] for ln in rest if ln.startswith("- "))
         plus = "".join(ln[2:] for ln in rest if ln.startswith("+ "))
         space_only = bool(minus or plus) and minus != plus and re.sub(r"\s", "", minus) == re.sub(r"\s", "", plus)
-        diff = "\n".join(rest[:6])[:400] if assertion else ""
+        marked = any(ln[:2] in ("- ", "+ ", "? ") for ln in rest)  # unittest's own diff lines
+        more = "\n".join(rest[:6])
+        diff = more if marked else "\n".join(x for x in (where_raised, more.strip()) if x)  # a plain assert: its line
         out.append({"test": test, "id": where[:150], "kind": kind, "line": tail[at].strip()[:200],
-                    "diff": diff or where_raised, "whitespace": space_only})  # a plain assert: its source line
+                    "diff": (diff if assertion else where_raised)[:400], "whitespace": space_only})
     out.sort(key=lambda f: (0 if "_FailedTest" in f["id"] else 1 if f["kind"] == "FAIL" else 2))
     return out[:MAX_PARSED]
 
@@ -60,8 +62,8 @@ def failures(output: str) -> list[dict]:
 def _failure_rows(found: list[dict], limit: int = NOTE_CHARS) -> str:
     """The failures as text, bounded: at most 5 rows, which shrink (diffs first) instead of disappearing."""
     shown, more = found[:MAX_FAILURES], len(found) - MAX_FAILURES
-    for diff_cap in (400, 150, 0):
-        rows = "\n".join(f"- {f['test'][:60]} ({f['kind']}): {f['line'][:200]}"
+    for diff_cap, line_cap in ((400, 200), (150, 200), (0, 200), (0, 80)):  # diffs shrink first, then lines
+        rows = "\n".join(f"- {f['test'][:60]} ({f['kind']}): {f['line'][:line_cap]}"
                          + (f"\n{f['diff'][:diff_cap]}" if f["diff"] and diff_cap else "") for f in shown)
         rows += f"\n(+{more} more failing)" if more > 0 else ""
         if len(rows) <= limit:
@@ -75,7 +77,7 @@ def _failure_note(found: list[dict], stuck: str = "", diagnosis: str = "") -> st
     hints = [f"{f['test'][:60]}: the two sides differ only in spaces or indentation — make them identical, or "
              "compare without exact whitespace" for f in found[:MAX_FAILURES] if f["whitespace"]][:2]
     # the coder's own test output: HTML kept readable (untrusted_code escapes only <untrusted tags), then bounded
-    limit = NOTE_CHARS - (STUCK_CHARS - 50 if stuck else 0)  # the stuck note's room comes from the rows
+    limit = NOTE_CHARS - (300 if stuck else 0)  # stuck note room from the rows: worst case 1950 ≤ NOTE_CAP
     return ("Failing tests (unittest's own report):\n" + _capped("sandbox", _failure_rows(found, limit), limit + 100, code=True)
             + ("\n" + "\n".join(hints) if hints else "") + (f"\n{stuck[:STUCK_CHARS]}" if stuck else "")
             + ("\nFloor 2 HR diagnosis:\n" + _capped("f2.hr", diagnosis, 300) if diagnosis else ""))
@@ -114,3 +116,8 @@ STUCK_NOTE = ("Check each failing test itself before changing the app again: tes
               "share state — module variables and files the app writes, like a database file (reset both in "
               "setUp) — and a test's own expected value can be wrong: fix the test when it is. The same tests "
               "failed again after your last change: {names}")  # names last: a cut drops names, never the advice
+
+
+def stuck_note(names) -> str:
+    """STUCK_NOTE with the failing test names, each and all bounded (names are unittest's \\w+ ids)."""
+    return STUCK_NOTE.format(names=", ".join(sorted({str(n)[:40] for n in names}))[:120])

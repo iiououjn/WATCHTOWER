@@ -13,7 +13,8 @@ from watchtower.engine.model_socket import BadModelOutput
 from watchtower.floors.f4_qa_deploy.qafloor import parse_routes
 from watchtower.engine.sandbox import SandboxResult
 from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_NOTE,  # noqa: F401 (re-export)
-                                               _capped, _failure_note, _failure_rows, _problem_note, failures)
+                                               _capped, _failure_note, _failure_rows, _problem_note, failures,
+                                               stuck_note)
 from watchtower.floors.f2_dev.repair import repair_imports, repair_strings
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
@@ -336,8 +337,7 @@ class DevFloor:
             shown = diagnosis if stuck and failing == diagnosed_for else ""  # never another set's diagnosis
             tests_ok = clean  # "only thing left" only when the whole test bar is met
             carry = [] if tests_ok and problems else [
-                _failure_note(found, STUCK_NOTE.format(names=", ".join(sorted({f["test"] for f in found})))
-                              if stuck else "", shown) if found  # last: trimming drops the oldest first
+                _failure_note(found, stuck_note(f["test"] for f in found) if stuck else "", shown) if found  # last: trimming drops the oldest first
                 else "Test output:\n" + _capped("sandbox", (output or "(no output)")[-1200:], 1300, code=True)]
             if problems:  # one note with the failures (trimming keeps or drops them together), kept last
                 note = _problem_note(problems, self._ws, tests_ok)

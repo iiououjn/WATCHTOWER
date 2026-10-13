@@ -31,8 +31,32 @@ def test_stuck_note_reaches_the_coder_whole():
 
 
 def test_worst_case_note_stays_within_the_cap():
-    huge = [{"test": "test_" + "n" * 300 + str(i), "id": f"m.T.{i}", "kind": "FAIL", "line": "AssertionError: " + "<" * 200,
-             "diff": "<" * 400, "whitespace": True} for i in range(20)]
+    huge = [{"test": "test_" + "n" * 300 + str(i), "id": f"m.T.{i}", "kind": "FAIL",
+             "line": "AssertionError: " + "<untrusted" * 20, "diff": "<untrusted" * 40, "whitespace": True}
+            for i in range(20)]  # '<untrusted' is what escaping grows
     stuck = STUCK_NOTE.format(names=", ".join(f["test"] for f in huge))
     note = _failure_note(huge, stuck, "<b>" * 300)
     assert len(note) <= NOTE_CAP and "fix the test when it is." in note
+
+
+def test_stuck_note_caps_each_name_and_keeps_the_advice():
+    from watchtower.floors.f2_dev.feedback import stuck_note
+    text = stuck_note(["test_" + "n" * 200, "test_b", "test_a"])
+    assert "test_a, test_b" in text and "n" * 60 not in text and text.endswith("…") is False
+    assert len(text) <= 323 + 120 + 5 and "fix the test when it is." in text
+
+
+def test_stuck_rows_keep_every_failure():
+    from watchtower.floors.f2_dev.feedback import stuck_note
+    found = [{"test": f"test_case_number_{i:02}_abcdefghij", "id": f"m.T.{i}", "kind": "FAIL",
+              "line": "AssertionError: " + "x" * 110, "diff": "", "whitespace": False} for i in range(7)]
+    note = _failure_note(found, stuck_note([f["test"] for f in found]))
+    assert all(f"test_case_number_{i:02}" in note for i in range(5)) and "(+2 more failing)" in note
+
+
+def test_multiline_assert_message_keeps_the_source_line():
+    report = ("FAIL: test_x (test_a.test_x)\n" + "-" * 70 + "\nTraceback (most recent call last):\n"
+              '  File "/w/test_a.py", line 4, in test_x\n    assert todos == [], f"got\\n{todos}"\n'
+              "AssertionError: got\n['a']\n\n")
+    (f,) = failures(report)
+    assert "line 4 in test_x: assert todos == []" in f["diff"] and "['a']" in f["diff"]
