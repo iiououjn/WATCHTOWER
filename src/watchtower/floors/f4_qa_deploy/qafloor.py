@@ -68,6 +68,8 @@ for c in json.loads(sys.argv[2]):
     names = set(re.findall(r"</?\\s*([A-Za-z][A-Za-z0-9]*)", want))
     split_ok = len(pieces) > 1 and all(in_node(t) for t in pieces) and not any(
         re.search(r"&lt;/?\\s*" + n + r"\\b", seen, re.I) for n in names)
+    if c.get("expect_escaped"):  # 6z (run 30): user text must be escaped exactly once, as a browser needs it
+        whole, split_ok = html.escape(want, quote=False) in seen, False
     ok = status == c["expect_status"] and (whole or split_ok)
     spec = c.get("expect_form")  # 6w (run 25): a browser user needs a real form to add anything
     if ok and spec:
@@ -102,6 +104,11 @@ for c in json.loads(sys.argv[2]):
                  if e != want and any(e in n for n in nodes)]  # visible text only: quote() is right in an href
         hint = (f"the page shows it still URL-encoded ({coded[0][:60]!r}): decode with "
                 "urllib.parse.parse_qs and never quote_plus() it again; " if want and coded else "")
+        twice = html.escape(html.escape(want, quote=False), quote=False)
+        if c.get("expect_escaped") and want and want in seen:
+            hint = "user text is shown unescaped (XSS): build the HTML with html.escape(text); "
+        elif c.get("expect_escaped") and want and twice in seen:
+            hint = "user text is escaped twice: call html.escape once, when you build the HTML, not on save; "
         detail = f"{hint}expected {c['expect_status']} with {want!r}, got {status}: {body[:300]}"
     results.append({"name": c["name"], "pass": ok, "status": status, "detail": detail})
 try:
@@ -212,6 +219,8 @@ def _check(raw) -> dict | None:
             and isinstance(want.get("fields"), list) and 0 < len(want["fields"]) <= 6
             and all(isinstance(f, str) and _FIELD.fullmatch(f) for f in want["fields"])):
         check["expect_form"] = {"action": want["action"], "fields": list(want["fields"])}
+    if raw.get("expect_escaped") is True:
+        check["expect_escaped"] = True
     return check
 
 

@@ -13,14 +13,20 @@ GUEST = [{"method": "GET", "path": "/", "fields": [], "shows": "Guestbook form a
 def test_add_then_list_for_each_field():
     checks, decide = contract_checks(GUEST, "482913")
     assert [(c["method"], c["path"]) for c in checks] == [("GET", "/"), ("POST", "/submit"), ("GET", "/"), ("GET", "/")]
-    assert checks[1]["form"] == {"name": "4829130 482913", "message": "4829131 482913"}
-    assert [c["expect_text"] for c in checks[2:]] == ["4829130 482913", "4829131 482913"]
+    assert checks[1]["form"] == {"name": "4829130 <&> 482913", "message": "4829131 <&> 482913"}
+    assert [c["expect_text"] for c in checks[2:]] == ["4829130 <&> 482913", "4829131 <&> 482913"]
     assert all(c["name"].startswith("[tower] ") and c["expect_status"] == 200 for c in checks)
     assert decide == 3  # the form, the POST and one shown value decide; other fields are advisory (6u review r1 C1)
 
 
 def test_values_carry_a_space_so_hand_split_forms_fail():  # runs 19-20: split('=')[1]
     assert " " in contract_checks(TODO, "482913")[0][1]["form"]["item"]
+
+
+def test_values_carry_markup_and_the_list_checks_expect_it_escaped():  # 6z (run 30)
+    checks = contract_checks(TODO, "482913")[0]
+    assert "<&>" in checks[1]["form"]["item"]
+    assert all(c.get("expect_escaped") is True for c in checks[2:]) and "expect_escaped" not in checks[1]
 
 
 def test_destructive_routes_are_skipped():
@@ -124,7 +130,7 @@ def test_f4_runs_a_fresh_token_the_coder_never_saw(app_tower):  # 6u review r1 I
     shown = json.loads(next(c[4] for c in sandbox.calls if "WATCHTOWER_QA" in c[2]))[1]["form"]["item"]
     from watchtower.floors.f4_qa_deploy.qafloor import parse_routes
     seen = contract_checks(parse_routes(arch["routes"]), coder_token(job.id))[0][1]["form"]["item"]
-    assert any(seen in p for p in coder) and shown != seen and re.fullmatch(r"\d{7} \d{6}", shown)
+    assert any(seen.replace("<", "&lt;") in p for p in coder) and shown != seen and re.fullmatch(r"\d{7} <&> \d{6}", shown)
     runner.close()
 
 
@@ -249,3 +255,11 @@ def test_the_coder_hears_the_first_model_only_objection_even_after_a_real_failur
     assert model.calls.count("f5.dev_gate") == 2 and out.status == "paused"
     assert Approvals(conn).pending_for(job.id).kind == "signoff"
     runner.close()
+
+
+def test_coder_is_told_how_escaped_checks_read():  # 6z: untrusted() shows '<' as '&lt;' to the coder
+    from watchtower.floors.f2_dev.devfloor import _qa_block
+    block = _qa_block("QA:\n", contract_checks(TODO, "482913")[0])
+    assert "&lt;&>" in block and "html.escape" in block.split("</untrusted>")[1]
+    assert "html.escape" not in _qa_block("QA:\n", [{"name": "x", "path": "/", "expect_text": "a"}])
+    assert _qa_block("QA:\n", []) == ""

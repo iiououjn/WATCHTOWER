@@ -362,7 +362,7 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"<a href='/x?t=New+todo'>open</a>")
-HTTPServer(("127.0.0.1", int(os.environ["WT_PORT"])), H).serve_forever()
+HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
 """
 
 
@@ -370,7 +370,37 @@ def test_url_encoded_text_only_inside_a_link_gets_no_hint(tmp_path):
     """6y review r1: quote() is right inside an href; the hint must look at visible text only."""
     checks = parse_checks({"checks": [{"name": "list", "path": "/", "expect_text": "New todo"}]})
     line = next(ln for ln in _live(tmp_path, HREF_APP, checks).summary.splitlines() if ln.startswith("- list:"))
-    assert "FAIL" in line and "URL-encoded" not in line
+    assert "FAIL" in line and "URL-encoded" not in line and "<a href" in line  # the app really answered
+
+
+def _shown(tmp_path, mode):
+    app = ECHO_APP.replace('ITEMS.append(raw.split("=", 1)[1])  # MODE',
+                           "from urllib.parse import parse_qs\n        ITEMS.append(" + mode + ")")
+    value = "2409400 <&> 240940"
+    checks = parse_checks({"checks": [
+        {"name": "add", "method": "POST", "path": "/add", "form": {"item": value}, "expect_text": ""},
+        {"name": "list", "path": "/", "expect_text": value, "expect_escaped": True}]})
+    return next(ln for ln in _live(tmp_path, app, checks).summary.splitlines() if ln.startswith("- list:"))
+
+
+def test_escaped_once_passes(tmp_path):  # 6z (run 30): XSS, over-escaping and encoding in one deciding check
+    assert "PASS" in _shown(tmp_path, 'html.escape(parse_qs(raw)["item"][0])')
+
+
+def test_unescaped_user_text_fails_with_an_xss_hint(tmp_path):
+    line = _shown(tmp_path, 'parse_qs(raw)["item"][0]')
+    assert "FAIL" in line and "html.escape" in line and "unescaped" in line
+
+
+def test_text_escaped_twice_fails_with_a_hint(tmp_path):  # run 29: escape on save and again on show
+    line = _shown(tmp_path, 'html.escape(html.escape(parse_qs(raw)["item"][0]))')
+    assert "FAIL" in line and "twice" in line
+
+
+def test_expect_escaped_survives_validation():
+    c = parse_checks({"checks": [{"name": "l", "path": "/", "expect_text": "a", "expect_escaped": True},
+                                 {"name": "m", "path": "/", "expect_text": "a", "expect_escaped": "yes"}]})
+    assert c[0].get("expect_escaped") is True and "expect_escaped" not in c[1]
 
 
 def test_html_escaped_text_counts_as_shown(tmp_path):

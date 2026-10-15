@@ -57,12 +57,12 @@ def contract_checks(routes: list[dict], token: str) -> tuple[list[dict], int]:
     same = [r for r in gets if r["path"] == route["path"]]  # GET /add shows the add form
     adding = [r for r in gets if _ADDS.search(r["path"]) and not _DESTRUCTIVE.search(r["path"] + " " + r["shows"])]
     form_page = (same or adding or [{"path": page}])[0]["path"]  # 6w reviews: the add form's page, else the list
-    values = {f: f"{token}{i} {token}" for i, f in enumerate(route["fields"])}
+    values = {f: f"{token}{i} <&> {token}" for i, f in enumerate(route["fields"])}  # 6z: shown escaped once
     raw = [{"name": f"[tower] GET {form_page} has the add form"[:80], "method": "GET", "path": form_page, "form": {},
             "expect_status": 200, "expect_text": "",
             "expect_form": {"action": route["path"], "fields": route["fields"]}}]
     raw += [{"name": f"[tower] POST {route['path']} adds"[:80], "method": "POST", "path": route["path"],
             "form": values, "expect_status": 200, "expect_text": ""}]
     raw += [{"name": f"[tower] GET {page} shows {f}"[:80], "method": "GET", "path": page, "form": {},
-             "expect_status": 200, "expect_text": v} for f, v in values.items()]
+             "expect_status": 200, "expect_text": v, "expect_escaped": True} for f, v in values.items()]
     return parse_checks({"checks": raw}), 3

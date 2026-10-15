@@ -124,6 +124,18 @@ def _compact_checks(checks: Sequence[dict]) -> str:
     return text if len(text) <= QA_CHARS else text[:QA_CHARS] + " ...(more checks)"
 
 
+ESCAPE_NOTE = ('Checks with "expect_escaped": true post text containing <&> (written &lt;&> above). The page '
+               "must show it escaped exactly once: html.escape(text) when you build the HTML, not on save.\n")
+
+
+def _qa_block(head: str, checks: Sequence[dict]) -> str:
+    """The QA checks for a coder prompt; the escape note sits outside the untrusted block (6z)."""
+    if not checks:
+        return ""
+    note = ESCAPE_NOTE if any(c.get("expect_escaped") for c in checks) else ""
+    return head + untrusted("f4", _compact_checks(checks)) + "\n" + note
+
+
 TEST_DIAGNOSE_PROMPT = (
     "The coder's unit tests keep failing the same way. unittest's report:\n{report}\n\nIn one or two plain "
     "sentences: is the test wrong or the code, and what exactly should change? Reply as JSON: "
@@ -244,8 +256,7 @@ class DevFloor:
         present = {p.lower() for p in self._ws.files()}  # macOS disks are case-blind: App.py is app.py
         todo = [[f for f in u if f["path"].lower() not in present] for u in units(plan)]
         todo = [u for u in todo if u]  # a worker writes only files that do not exist yet: never a fixed one
-        qa = ("Floor 4 QA will run these HTTP checks against the app:\n"
-              + untrusted("f4", _compact_checks(qa_checks)) + "\n") if qa_checks else ""
+        qa = _qa_block("Floor 4 QA will run these HTTP checks against the app:\n", qa_checks)
         notes: list[str] = []
         stray: list[str] = []
         for i, unit in enumerate(todo, start=1):
@@ -281,8 +292,7 @@ class DevFloor:
             kept.append(item)
             used += len(item)
         notes = [f"Reviewer feedback to address:\n{_capped('gate', f, 800)}" for f in kept]
-        qa = ("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n"
-              + untrusted("f4", _compact_checks(qa_checks)) + "\n") if qa_checks else ""
+        qa = _qa_block("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n", qa_checks)
         checks, output, passed, hr_asks, hr_question = [], "", False, 0, None
         last_failing, diagnoses, diagnosis, diagnosed_for, carry = None, 0, "", None, []  # stuck = same set twice
         for round_no in range(self._max_rounds):
