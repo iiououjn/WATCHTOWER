@@ -1,56 +1,51 @@
 """Phase 6u: the F4 checks that decide come from the architect's routes contract, not a model (runs 18-21).
 
-For the first POST route that adds something, the tower posts one value per field and expects the list page
-to show the first text field's value. Text values carry a space, so an app that splits the form body by hand
-instead of decoding it (runs 19-20) fails, and F4's URL-encoded hint names the fix. Typed fields (numbers,
-dates, emails, check boxes) get plausible values and never decide; other text fields' checks are advisory."""
+Only for an unambiguous add-and-list contract: a GET page that lists entries, and a POST route that adds one
+whose fields are all plain text (item, name, message...). The tower posts a value per field and expects the
+list page to show it. Anything else (typed or choice fields, no list page, a calculator posting to /) leaves
+the decision to the model checks, exactly as before. Values are digits with a space: they survive .title(),
+and an app that splits the form body by hand (runs 19-20) shows '1234560+123456' and fails with a hint."""
 import re
+import secrets
 
 from watchtower.floors.f4_qa_deploy.qafloor import parse_checks
 
 QA_ADVISORY = ("small-model QA checks failed (advisory) but the tower's contract checks passed: "
                "judge the app on the contract checks and the spec")
-_ADDS = re.compile(r"add|new|create|submit|post|save|sign|entr|message|item|comment|note|todo|guest", re.I)
-_DESTRUCTIVE = re.compile(r"delete|remove|clear|done|toggle|edit|update|complete", re.I)
-_SKIP_FIELD = re.compile(r"^(id|index|\w+_id|pass(word)?|q|query|search|token|csrf\w*)$", re.I)
-_WORD = r"(?:^|_)(?:{})(?:$|_)"  # whole name parts: 'age' must not match 'message' (6u review)
-_TYPED = [(re.compile(_WORD.format("amount|price|qty|quantity|count|age|number|num|total|cost|score|rating|year"),
-                      re.I), "3"),
-          (re.compile(_WORD.format("date|due|deadline|day"), re.I), "2026-01-02"),
-          (re.compile(_WORD.format("e-?mail"), re.I), "{token}@example.com"),
-          (re.compile(r"^(done|completed?|checked|agree|urgent|flag|is_\w+)$", re.I), "on")]
-_LIST = re.compile(r"\b(list|all|entries|items|messages|todos|posts|comments|notes)\b", re.I)
+_ADDS = re.compile(r"add|new|create|submit|post|save|entr|message|item|comment|note|todo|guest", re.I)
+_DESTRUCTIVE = re.compile(r"delete|remove|clear|done|toggle|edit|update|complete|sign|log", re.I)
+_TEXT = {"item", "task", "todo", "title", "name", "text", "message", "body", "content", "note", "comment",
+         "description", "entry", "author", "subject", "details", "summary", "label", "post", "idea", "quote"}
+_LIST = re.compile(r"\b(list|all|entries|items|messages|todos|tasks|posts|comments|notes|ideas|quotes)\b", re.I)
+_FORM = re.compile(r"\bform\b", re.I)
 
 
-def _value(field: str, token: str) -> tuple[str, bool]:
-    """The value to post and whether it is text the list page should show."""
-    for pattern, value in _TYPED:
-        if pattern.search(field):
-            return value.format(token=token), False
-    return f"{field} {token}", True
+def coder_token(job_id: str) -> str:
+    """The token in the checks the coder is shown; F4 runs with fresh_token(), which the coder never sees."""
+    return f"{int(job_id[:6], 16) % 1_000_000:06d}" if re.fullmatch(r"[0-9a-f]{6}.*", job_id) else "000000"
 
 
-def _adds(route: dict, page: str) -> bool:
-    return (route["method"] == "POST" and bool(route["fields"]) and not _DESTRUCTIVE.search(route["path"])
-            and (bool(_ADDS.search(route["path"])) or route["path"] == page)
-            and not any(_SKIP_FIELD.match(f) for f in route["fields"]))
+def fresh_token() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def _adds(route: dict) -> bool:
+    return (route["method"] == "POST" and bool(route["fields"]) and bool(_ADDS.search(route["path"]))
+            and not _DESTRUCTIVE.search(route["path"]) and all(f.lower() in _TEXT for f in route["fields"]))
 
 
 def contract_checks(routes: list[dict], token: str) -> tuple[list[dict], int]:
-    """(checks, decide): add-then-list checks for the first adding POST route; the first `decide` of them decide
-    (the POST and one shown text value). ([], 0) when the contract has no such route: the models decide."""
-    pages = [r for r in routes if r["method"] == "GET" and not r["fields"]]
-    listing = [r for r in pages if _LIST.search(r["shows"])]
-    page = (listing or [r for r in pages if r["path"] == "/"] or pages or [{"path": "/"}])[0]["path"]
-    route = next((r for r in routes if _adds(r, page)), None)
-    if route is None:
+    """(checks, decide): add-then-list checks for the first plain-text adding route; the POST and the first
+    shown value decide, the other fields' checks are advisory. ([], 0) when the contract is not that simple."""
+    pages = [r for r in routes if r["method"] == "GET" and not r["fields"] and _LIST.search(r["shows"])]
+    pages = [r for r in pages if not _FORM.search(r["shows"])] or pages
+    route = next((r for r in routes if _adds(r)), None)
+    if not pages or route is None:
         return [], 0
-    values = {f: _value(f, token) for f in route["fields"]}
-    shown = [(f, v) for f, (v, text) in values.items() if text]
-    if not shown:
-        return [], 0
+    page = pages[0]["path"]
+    values = {f: f"{token}{i} {token}" for i, f in enumerate(route["fields"])}
     raw = [{"name": f"[tower] POST {route['path']} adds"[:80], "method": "POST", "path": route["path"],
-            "form": {f: v for f, (v, _) in values.items()}, "expect_status": 200, "expect_text": ""}]
+            "form": values, "expect_status": 200, "expect_text": ""}]
     raw += [{"name": f"[tower] GET {page} shows {f}"[:80], "method": "GET", "path": page, "form": {},
-             "expect_status": 200, "expect_text": v} for f, v in shown]
+             "expect_status": 200, "expect_text": v} for f, v in values.items()]
     return parse_checks({"checks": raw}), 2

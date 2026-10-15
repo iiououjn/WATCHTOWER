@@ -1,5 +1,7 @@
 """Phase 6u: the deciding F4 checks come from the routes contract, not the small model (runs 18-21)."""
-from watchtower.floors.f4_qa_deploy.contract import contract_checks
+from watchtower.floors.f4_qa_deploy.contract import coder_token, contract_checks
+import re
+
 from runner_kit import app_tower  # noqa: F401 — pipeline fixture
 
 TODO = [{"method": "GET", "path": "/", "fields": [], "shows": "List of all todo items."},
@@ -9,16 +11,16 @@ GUEST = [{"method": "GET", "path": "/", "fields": [], "shows": "Guestbook form a
 
 
 def test_add_then_list_for_each_field():
-    checks, decide = contract_checks(GUEST, "k3f9a2")
+    checks, decide = contract_checks(GUEST, "482913")
     assert [(c["method"], c["path"]) for c in checks] == [("POST", "/submit"), ("GET", "/"), ("GET", "/")]
-    assert checks[0]["form"] == {"name": "name k3f9a2", "message": "message k3f9a2"}
-    assert [c["expect_text"] for c in checks[1:]] == ["name k3f9a2", "message k3f9a2"]
+    assert checks[0]["form"] == {"name": "4829130 482913", "message": "4829131 482913"}
+    assert [c["expect_text"] for c in checks[1:]] == ["4829130 482913", "4829131 482913"]
     assert all(c["name"].startswith("[tower] ") and c["expect_status"] == 200 for c in checks)
     assert decide == 2  # the POST and one shown value decide; other fields are advisory (6u review r1 C1)
 
 
 def test_values_carry_a_space_so_hand_split_forms_fail():  # runs 19-20: split('=')[1]
-    assert " " in contract_checks(TODO, "abc123")[0][0]["form"]["item"]
+    assert " " in contract_checks(TODO, "482913")[0][0]["form"]["item"]
 
 
 def test_destructive_routes_are_skipped():
@@ -31,13 +33,13 @@ def test_destructive_routes_are_skipped():
 
 
 def test_the_list_page_is_the_first_get_route_without_fields():
-    routes = [{"method": "GET", "path": "/todos", "fields": [], "shows": ""}] + TODO[1:]
-    assert contract_checks(routes, "k3f9a2")[0][1]["path"] == "/todos"
+    routes = [{"method": "GET", "path": "/todos", "fields": [], "shows": "all todos"}] + TODO[1:]
+    assert contract_checks(routes, "482913")[0][1]["path"] == "/todos"
 
 
 def test_one_add_route_only():
-    routes = [{"method": "POST", "path": f"/add{i}", "fields": ["item"], "shows": ""} for i in range(4)]
-    assert len(contract_checks(routes, "k3f9a2")[0]) == 2
+    routes = TODO[:1] + [{"method": "POST", "path": f"/add{i}", "fields": ["item"], "shows": ""} for i in range(4)]
+    assert len(contract_checks(routes, "482913")[0]) == 2
 
 
 def test_a_copied_route_description_is_dropped_despite_its_period():  # run 21
@@ -92,15 +94,6 @@ def test_the_pipeline_ships_when_tower_checks_pass_and_small_model_checks_fail(a
     runner.close()
 
 
-def test_typed_fields_get_plausible_values_and_never_decide():  # 6u review r1 C1
-    routes = [{"method": "POST", "path": "/add", "fields": ["amount", "description", "due_date", "email", "done"],
-               "shows": ""}]
-    checks, decide = contract_checks(routes, "k3f9a2")
-    assert checks[0]["form"] == {"amount": "3", "description": "description k3f9a2", "due_date": "2026-01-02",
-                                 "email": "k3f9a2@example.com", "done": "on"}
-    assert decide == 2 and checks[1]["expect_text"] == "description k3f9a2"
-
-
 def test_only_adding_routes_count():  # 6u review r1 I1
     routes = [{"method": "POST", "path": "/login", "fields": ["username", "password"], "shows": ""},
               {"method": "POST", "path": "/search", "fields": ["q"], "shows": ""},
@@ -108,20 +101,15 @@ def test_only_adding_routes_count():  # 6u review r1 I1
     assert contract_checks(routes, "k3f9a2") == ([], 0)
 
 
-def test_a_route_with_only_typed_fields_does_not_decide():
-    assert contract_checks([{"method": "POST", "path": "/add", "fields": ["amount"], "shows": ""}], "t") == ([], 0)
-    assert contract_checks([{"method": "POST", "path": "/add", "fields": ["message"], "shows": ""}], "t")[1] == 2
-
-
 def test_the_list_page_is_the_get_that_shows_the_list():  # 6u review r1 I2
     routes = [{"method": "GET", "path": "/", "fields": [], "shows": "A form to sign the guestbook"},
               {"method": "GET", "path": "/entries", "fields": [], "shows": "All messages"},
-              {"method": "POST", "path": "/sign", "fields": ["message"], "shows": ""}]
+              {"method": "POST", "path": "/add", "fields": ["message"], "shows": ""}]
     assert contract_checks(routes, "k3f9a2")[0][1]["path"] == "/entries"
 
 
 def test_long_names_are_cut_not_replaced_by_the_path():  # 6u review r1 M3
-    routes = [{"method": "POST", "path": "/add/" + "x" * 60, "fields": ["item"], "shows": ""}]
+    routes = TODO[:1] + [{"method": "POST", "path": "/add/" + "x" * 60, "fields": ["item"], "shows": ""}]
     assert all(c["name"].startswith("[tower] ") for c in contract_checks(routes, "k3f9a2")[0])
 
 
@@ -134,7 +122,9 @@ def test_f4_runs_a_fresh_token_the_coder_never_saw(app_tower):  # 6u review r1 I
     runner.start(job.id, extra={"auto_approve": True})
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
     shown = json.loads(next(c[4] for c in sandbox.calls if "WATCHTOWER_QA" in c[2]))[0]["form"]["item"]
-    assert any(f"item {job.id[:6]}" in p for p in coder) and job.id[:6] not in shown and shown.startswith("item ")
+    from watchtower.floors.f4_qa_deploy.qafloor import parse_routes
+    seen = contract_checks(parse_routes(arch["routes"]), coder_token(job.id))[0][0]["form"]["item"]
+    assert any(seen in p for p in coder) and shown != seen and re.fullmatch(r"\d{7} \d{6}", shown)
     runner.close()
 
 
@@ -152,3 +142,42 @@ def test_a_silent_small_model_does_not_pause_a_job_with_tower_checks(app_tower):
     runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f4.qa": [{"checks": []}]})
     assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
     runner.close()
+
+
+def test_unknown_fields_leave_the_decision_to_the_models():  # 6u review r2 I-A: priority, calories, dueDate...
+    for fields in (["task", "priority"], ["name", "calories"], ["task", "dueDate"], ["title", "postId"]):
+        assert contract_checks(TODO[:1] + [{"method": "POST", "path": "/add", "fields": fields, "shows": ""}],
+                               "482913") == ([], 0), fields
+
+
+def test_no_list_page_no_tower_checks():  # 6u review r2 I-B: a word counter posts to / and lists nothing
+    routes = [{"method": "GET", "path": "/", "fields": [], "shows": "a text box and the word count"},
+              {"method": "POST", "path": "/", "fields": ["text"], "shows": "the count"}]
+    assert contract_checks(routes, "482913") == ([], 0)
+
+
+def test_a_form_page_is_not_the_list_page():  # 6u review r2 I-C
+    routes = [{"method": "GET", "path": "/new", "fields": [], "shows": "Form to add new items to the list"},
+              {"method": "GET", "path": "/items", "fields": [], "shows": "All items"},
+              {"method": "POST", "path": "/add", "fields": ["item"], "shows": ""}]
+    assert contract_checks(routes, "482913")[0][1]["path"] == "/items"
+
+
+def test_signup_never_decides_and_the_next_adding_route_does():  # 6u review r2 I-D, M-1
+    routes = [{"method": "GET", "path": "/", "fields": [], "shows": "all posts"},
+              {"method": "POST", "path": "/signup", "fields": ["username", "email"], "shows": ""},
+              {"method": "POST", "path": "/add", "fields": ["amount"], "shows": ""},
+              {"method": "POST", "path": "/posts", "fields": ["title", "body"], "shows": ""}]
+    assert contract_checks(routes, "482913")[0][0]["path"] == "/posts"
+
+
+def test_values_survive_case_changes():  # 6u review r2 M-4: .title() / .capitalize() apps
+    value = contract_checks(TODO, "482913")[0][0]["form"]["item"]
+    assert value == value.title() == value.upper() == value.lower()
+
+
+def test_the_failing_headline_marks_advisory_checks():  # 6u review r2 M-3
+    from watchtower.floors.f4_qa_deploy.qafloor import qa_headline
+    results = [{"name": "[tower] add", "pass": False, "detail": "500"}, {"name": "empty", "pass": False, "detail": "x"}]
+    line = qa_headline(results, False, decide=1)
+    assert line.startswith("QA checks FAILED (1/1 tower): [tower] add: 500") and "advisory failing: empty" in line

@@ -256,20 +256,21 @@ def parse_checks(reply, known: str | None = None) -> list[dict]:
     return checks
 
 
-def qa_headline(results: list[dict], passed: bool | None = None) -> str:
+def qa_headline(results: list[dict], passed: bool | None = None, decide: int = 0) -> str:
     """The board's F4 line: which checks failed and why, in one line (runs 17-19 showed only 'QA checks FAILED:').
-    `passed` is the run's own verdict: a timed-out run fails even when every check it reported passed."""
-    bad = [r for r in results if r.get("pass") is not True]
+    `passed` is the run's own verdict (a timed-out run fails even when every reported check passed); with
+    `decide`, only the first `decide` checks (the tower's, 6u) count and the rest are named as advisory."""
+    deciding, advisory = (results[:decide], results[decide:]) if decide else (results, [])
+    bad = [r for r in deciding if r.get("pass") is not True]
+    soft = "; ".join(str(r.get("name"))[:40] for r in advisory if r.get("pass") is not True)
+    tail = f"; advisory failing: {soft}" if soft else ""
+    tag = " tower" if decide else ""
     if not bad and passed is False:
-        return f"QA checks FAILED (0/{len(results)}): the QA run timed out or its result was incomplete"
-    if bad and passed is True:  # 6u: only advisory (small-model) checks failed
-        return (f"QA checks passed; {len(bad)} advisory check(s) failing: "
-                + "; ".join(str(r.get("name"))[:40] for r in bad))[:300]
-    head = f"QA checks {'FAILED' if bad else 'passed'} ({len(bad) if bad else len(results)}/{len(results)})"
+        return f"QA checks FAILED (0/{len(deciding)}{tag}): the QA run timed out or its result was incomplete"
     if not bad:
-        return head
-    return (head + ": " + "; ".join(f"{str(r.get('name'))[:40]}: {str(r.get('detail') or '')[:80]}"
-                                    for r in bad))[:300]
+        return f"QA checks passed ({len(deciding)}/{len(deciding)}{tag}){tail}"[:300]
+    return (f"QA checks FAILED ({len(bad)}/{len(deciding)}{tag}): "
+            + "; ".join(f"{str(r.get('name'))[:40]}: {str(r.get('detail') or '')[:80]}" for r in bad) + tail)[:300]
 
 
 def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[dict],
