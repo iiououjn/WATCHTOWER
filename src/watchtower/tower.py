@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import re
 import shlex
-from http import HTTPStatus
 from pathlib import Path
 from typing import Callable
 
@@ -23,10 +21,10 @@ from watchtower.engine.model_socket import BadModelOutput
 from watchtower.floors.f3_build.office import F3Office
 from watchtower.floors.f5_oversight.office import OversightOffice
 from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
-from watchtower.floors.f5_oversight.oversight import is_failing as _failing, security_package, security_scan
+from watchtower.evidence import _evidence, _finding_query, _reference, _status_query  # noqa: F401 — re-export
+from watchtower.floors.f5_oversight.oversight import security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
 from watchtower.floors.f2_dev.handoff import board_line, f2_handoff, for_gate, static_feedback
-from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.floors.f4_qa_deploy.contract import QA_ADVISORY, coder_token, contract_checks, fresh_token
 from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, qa_headline, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
@@ -438,58 +436,3 @@ class TowerPipeline:
         hits = sorted(hits[:3], key=lambda h: -glass.credibility(h.source))  # step 3: credible sources first
         return "\n".join(("[credible] " if glass.credibility(h.source) == 2 else "")  # outside the data: unforgeable
                          + untrusted(h.source, h.text[:CONTEXT_CHARS]) for h in hits)
-
-
-def _reference(glass: str, text: str) -> list[str]:
-    return [f"Reference for this failure (from the web through Glass {glass}; may be wrong):\n{text}"] if text else []
-
-
-def _status_query(check: dict) -> str:
-    """F4 lookup: the HTTP status of the first failing QA check, as words (never the app's output)."""
-    for r in check.get("results") or []:
-        status = r.get("status")
-        if not r.get("pass") and isinstance(status, int) and 100 <= status <= 599:
-            try:
-                return f"HTTP {status} {HTTPStatus(status).phrase} python http.server"
-            except ValueError:
-                return f"HTTP {status} python http.server"
-    return ""
-
-
-def _finding_query(check: dict, fail_on) -> str:
-    """F5 lookup: the Bandit test id of the first failing finding (secrets need no lookup)."""
-    for f in check.get("findings") or []:
-        if f.get("tool") == "bandit" and _failing(f, fail_on) and re.fullmatch(r"B\d{3}", str(f.get("id"))):
-            return f"bandit {f['id']} python"
-    return ""
-
-
-def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:
-    """Sign-off evidence built from the checks' own results — never from text the app could print."""
-    last = {}
-    for c in checks:
-        last[c.get("check")] = c
-    tests, http, qa, sec = last.get("tests", {}), last.get("http", {}), last.get("qa", {}), last.get("security", {})
-    probe = last.get("routes", {}).get("results") or []
-    results = qa.get("results") or []
-    findings = sec.get("findings") or []
-    serious = sum(_failing(f, fail_on) for f in findings)
-    unknown = sum(f.get("severity") == "UNKNOWN" for f in findings)
-    if unknown:
-        scan = f"INCOMPLETE — a scanner did not run (see watchtower doctor); {serious} serious found"
-    else:
-        scan = f"{'pass' if sec.get('pass') else 'FAIL'} ({serious} serious, {len(findings) - serious} minor)"
-    qa_line = (f"{sum(r.get('pass') is True for r in results)}/{len(results)} checks passed" if results
-               else "no QA checks ran")
-    if qa.get("decide") and len(results) > qa["decide"]:  # 6u: the tower's checks decide, the rest are advisory
-        d, a = results[:qa["decide"]], results[qa["decide"]:]
-        qa_line = (f"{'pass' if qa.get('pass') else 'FAIL'} (tower checks {sum(r.get('pass') is True for r in d)}/"
-                   f"{len(d)}; advisory {sum(r.get('pass') is True for r in a)}/{len(a)} passed)")
-    return "\n".join([
-        f"- coder unit tests (advisory): {'pass' if tests.get('pass') else 'FAIL'}",
-        f"- app answered HTTP {http.get('status')}",
-        *([f"- full app: {sum(isinstance(r.get('status'), int) and r['status'] < 500 and r['status'] != 404 for r in probe)}"
-           f"/{len(probe)} contract routes answered"] if probe else []),
-        f"- QA: {qa_line}",
-        f"- security scan: {scan}",
-    ])
