@@ -352,7 +352,25 @@ def test_a_form_value_shown_still_url_encoded_is_named(tmp_path):
         {"name": "list", "path": "/", "expect_text": "New todo & more"}]})
     pkg = _live(tmp_path, ECHO_APP, checks)
     line = next(ln for ln in pkg.summary.splitlines() if ln.startswith("- list:"))
-    assert "URL-encoded" in line and "parse_qs" in line and line.index("URL-encoded") < 120
+    assert "URL-encoded" in line and "parse_qs" in line and "quote_plus" in line and line.index("URL-encoded") < 120
+
+
+HREF_APP = """import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"<a href='/x?t=New+todo'>open</a>")
+HTTPServer(("127.0.0.1", int(os.environ["WT_PORT"])), H).serve_forever()
+"""
+
+
+def test_url_encoded_text_only_inside_a_link_gets_no_hint(tmp_path):
+    """6y review r1: quote() is right inside an href; the hint must look at visible text only."""
+    checks = parse_checks({"checks": [{"name": "list", "path": "/", "expect_text": "New todo"}]})
+    line = next(ln for ln in _live(tmp_path, HREF_APP, checks).summary.splitlines() if ln.startswith("- list:"))
+    assert "FAIL" in line and "URL-encoded" not in line
 
 
 def test_html_escaped_text_counts_as_shown(tmp_path):
@@ -382,6 +400,16 @@ def test_the_url_encoded_hint_reaches_the_head_of_the_summary():
     seen = ("Floor 4 QA checks failed:\n" + untrusted("sandbox", summary))[:600]
     assert "parse_qs" in seen and summary.splitlines()[0] == "QA checks FAILED:"
     assert summary.splitlines()[1].startswith("Form data:")
+
+
+def test_url_encoded_hint_names_quote_plus_and_html_escape():
+    """Run 28: the coder used parse_qs but wrapped the text in quote_plus() on save and display; the hint said
+    only 'decode with parse_qs', which it already did, for 4 attempts."""
+    checks = [_c("list", {}, 200, "New todo", "GET", "/")]
+    qa = [{"name": "list", "pass": False, "status": 200,
+           "detail": "the page shows it still URL-encoded ('New+todo'): x"}]
+    head = run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py", checks).summary.splitlines()[1]
+    assert "quote_plus" in head and "html.escape" in head and len(head) <= 300
 
 
 def _post(form, status=200, name="add"):
