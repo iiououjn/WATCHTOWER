@@ -55,17 +55,19 @@ for c in json.loads(sys.argv[2]):
         detail = type(e).__name__ + ": " + str(e)[:200]
     want = c["expect_text"]  # escaped text renders the same in a browser: "Tom &amp; Jerry" shows "Tom & Jerry"
     escaped_ok = not re.search(r"<[A-Za-z/!?%]", want)  # markup expected raw: an escaped tag is a broken page
-    shown = lambda t: t in body or html.escape(t) in body or html.escape(t, quote=False) in body
-    whole = want in body or escaped_ok and shown(want)
+    seen = re.sub(r"(?s)<!--.*?-->", " ", body)  # commented-out markup is not on the page
+    shown = lambda t: t in seen or html.escape(t) in seen or html.escape(t, quote=False) in seen
+    whole = want in seen or escaped_ok and shown(want)
     # runs 18-19: text glued from page pieces (tags, or lines joined by newlines) passes when each
     # piece is on the page and none of its tags shows escaped (a page escaping its own markup is still broken)
     pieces = [t.strip() for t in re.split(r"<[^>]*>|\\n|\\\\n", want) if t.strip()]
-    # pieces must be visible text: text between tags, never attributes, <title>, <style> or <script>
-    nodes = re.split(r"<[^>]*>", re.sub(r"(?is)<(title|style|script)\\b.*?</\\1\\s*>", " ", body))
-    in_node = lambda t: any(t in n or html.escape(t) in n or html.escape(t, quote=False) in n for n in nodes)
+    # each piece must BE one visible text node (text between tags; not attributes, comments, title, style...)
+    hidden = r"(?is)<(title|style|script|noscript|template|textarea)\\b.*?</\\1\\s*>"
+    nodes = re.split(r"<[^>]*>", re.sub(hidden, " ", seen))
+    in_node = lambda t: any(n.strip() in (t, html.escape(t), html.escape(t, quote=False)) for n in nodes)
     names = set(re.findall(r"</?\\s*([A-Za-z][A-Za-z0-9]*)", want))
     split_ok = len(pieces) > 1 and all(in_node(t) for t in pieces) and not any(
-        re.search(r"&lt;/?\\s*" + n + r"\\b", body, re.I) for n in names)
+        re.search(r"&lt;/?\\s*" + n + r"\\b", seen, re.I) for n in names)
     ok = status == c["expect_status"] and (whole or split_ok)
     if not ok and not detail:
         coded = [e for e in dict.fromkeys((urllib.parse.quote_plus(want), urllib.parse.quote(want)))
@@ -252,9 +254,12 @@ def parse_checks(reply, known: str | None = None) -> list[dict]:
     return checks
 
 
-def qa_headline(results: list[dict]) -> str:
-    """The board's F4 line: which checks failed and why, in one line (runs 17-19 showed only 'QA checks FAILED:')."""
+def qa_headline(results: list[dict], passed: bool = True) -> str:
+    """The board's F4 line: which checks failed and why, in one line (runs 17-19 showed only 'QA checks FAILED:').
+    `passed` is the run's own verdict: a timed-out run fails even when every check it reported passed."""
     bad = [r for r in results if r.get("pass") is not True]
+    if not bad and not passed:
+        return f"QA checks FAILED (0/{len(results)}): the QA run timed out or its result was incomplete"
     head = f"QA checks {'FAILED' if bad else 'passed'} ({len(bad) if bad else len(results)}/{len(results)})"
     if not bad:
         return head

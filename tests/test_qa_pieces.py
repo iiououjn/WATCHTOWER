@@ -52,3 +52,32 @@ def test_a_page_escaping_only_its_brackets_fails_a_markup_check(tmp_path):  # 6t
     assert app != ECHO_APP
     assert _list(tmp_path, "<li>milk</li><li>eggs</li>", app)["pass"] is False
 
+
+PAGE = 'self.wfile.write(("<ul>" + "".join(f"<li>{i}</li>" for i in ITEMS) + "</ul>").encode())'
+
+
+def _page(html_expr):
+    return ECHO_APP.replace(PAGE, f"self.wfile.write(({html_expr}).encode())")
+
+
+def test_a_piece_must_be_a_whole_text_node(tmp_path):  # 6t review r2 A: '1' found in '+1', 'eggs' in 'Added eggs'
+    assert _list(tmp_path, "<p>Count: <span>2</span></p>",
+                 _page('"<p>Count: <span>0</span></p><button>+2</button>"'))["pass"] is False
+    assert _list(tmp_path, "<li>milk</li><li>eggs</li>",
+                 _page('"<ul><li>milk</li></ul><p>Added eggs</p>"'))["pass"] is False
+
+
+def test_commented_out_markup_is_not_shown(tmp_path):  # 6t review r2 C
+    assert _list(tmp_path, "<li>milk</li><li>eggs</li>",
+                 _page('"<!-- <li>milk</li><li>eggs</li> --><ul></ul>"'))["pass"] is False
+
+
+def test_a_double_escaped_page_fails(tmp_path):  # 6t review r2 B
+    assert _list(tmp_path, "<li>milk</li><li>eggs</li>",
+                 _page('html.escape(html.escape("<ul>" + "".join(f"<li>{i}</li>" for i in ITEMS) + "</ul>"))'))[
+        "pass"] is False
+
+
+def test_the_board_line_says_when_the_run_itself_failed():  # 6t review r2 D: timed out after all checks passed
+    from watchtower.floors.f4_qa_deploy.qafloor import qa_headline
+    assert qa_headline([{"name": "a", "pass": True}], passed=False).startswith("QA checks FAILED (0/1): the QA run")
