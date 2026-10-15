@@ -1,3 +1,4 @@
+from conftest import STORE_CODER
 from runner_kit import *  # noqa: F403 — helpers and fixtures
 
 
@@ -337,7 +338,7 @@ def test_f5_xss_probe_sends_raw_html_back_to_the_coder(app_tower):
     arch = {**APP_REPLIES["f2.architect"][0], "routes": APP_REPLIES["f2.architect"][0]["routes"]
             + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "the list"}]}
     hit = [{"post": "/add", "field": "item", "page": "GET /"}]
-    runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, xss=[hit, []])
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER}, xss=[hit, []])
     assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
     assert any("raw HTML on GET /" in p and "html.escape" in p for p in coder)

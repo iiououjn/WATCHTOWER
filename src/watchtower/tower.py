@@ -26,6 +26,7 @@ from watchtower.evidence import (  # noqa: F401 — re-export
 from watchtower.floors.f5_oversight.oversight import security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
 from watchtower.floors.f2_dev.handoff import board_line, f2_handoff, for_gate, static_feedback
+from watchtower.floors.f2_dev.skeleton import apply as apply_skeleton, page_text
 from watchtower.floors.f4_qa_deploy.contract import QA_ADVISORY, coder_token, contract_checks, fresh_token
 from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, qa_headline, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
@@ -139,7 +140,7 @@ class TowerPipeline:
         focus = oversight.focus(spec)
         qa_round = QARound(qa_office, qa, spec)
         qa_round.reset(self._plan_qa(data, plan, qa_office))
-        expect = f3_office.expect(spec, plan["routes"])
+        expect = page_text(spec["title"]) if dev.owned else f3_office.expect(spec, plan["routes"])
         model_heard = False  # 6v: has the coder already heard a model-only gate objection?
         for attempt in range(self._g.max_send_backs + 1):
             written: list[int] = []  # F2 workers write the missing planned files first (MVP unit first)
@@ -242,7 +243,7 @@ class TowerPipeline:
             if verdict.route in ("design", "research"):
                 plan, units_due = self._approved_plan(data, dev, cto, research, lessons, feedback, docs), True
                 qa_round.reset(self._plan_qa(data, plan, qa_office))
-                expect = f3_office.expect(spec, plan["routes"])
+                expect = page_text(spec["title"]) if dev.owned else f3_office.expect(spec, plan["routes"])
         self._retro(data, oversight, passed=False)
         raise NeedsOwner(f"gate rejected the app {self._g.max_send_backs + 1} times: {'; '.join(feedback)[:300]}")
 
@@ -351,6 +352,10 @@ class TowerPipeline:
                 plan = dev.plan(data["spec"], research, [f"CTO: {c}" for c in changes[:3]] + list(feedback), lessons, docs)
             except ADVISORY_ERRORS:  # the C-suite is advisory: a failed re-plan keeps the plan we have
                 self._post(data, "f2", "issue", "re-plan for the CTO failed; keeping the first plan")
+        ws = Workspace(self._sandbox.workspace(data["job_id"]))
+        plan, dev.owned = apply_skeleton(plan, data["spec"]["title"], ws, previous=dev.owned)
+        if dev.owned:  # 7a: runs 26-31 failed on HTTP plumbing; for add-and-list apps the tower writes the server
+            self._post(data, "f2", "doing", f"tower wrote the web server {plan['entry']}; the coder writes store.py")
         return plan
 
     def _handoff(self, data: dict, floor: str, attempt: int, passed: bool, reasons: list[str]) -> None:

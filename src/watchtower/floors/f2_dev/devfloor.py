@@ -16,6 +16,7 @@ from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_N
                                                _capped, _failure_note, _failure_rows, _problem_note, failures,
                                                stuck_note)
 from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings, sibling_names
+from watchtower.floors.f2_dev.skeleton import STORE
 from watchtower.floors.f2_dev.lint import handler_state_problems, idiom_notes
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
@@ -222,6 +223,7 @@ class DevFloor:
         self._ws = workspace
         self._run = run
         self._max_rounds = max_rounds
+        self.owned: set[str] = set()  # 7a: paths the tower wrote (the web server); the coder never changes them
 
     def plan(self, spec: dict, research: str, feedback: Sequence[str], lessons: str = "", reference: str = "") -> dict:
         note = ("\nThe reviewer rejected the last design:\n" + "\n".join(untrusted("gate", str(f)[:FEEDBACK_ITEM])
@@ -377,7 +379,10 @@ class DevFloor:
 
     def _problems(self) -> list[str]:
         """The tower's own static checks on the files on disk: they block the F2 handoff (phase 6s)."""
-        return handler_state_problems(self._ws) + (import_problems(self._ws) if self._stdlib_only else [])
+        found = handler_state_problems(self._ws) + (import_problems(self._ws) if self._stdlib_only else [])
+        return [f"write {STORE} with add(entry) and items(): the tower's web server imports it"
+                if self.owned and p.endswith(f"imports {STORE[:-3]} (not in the Python standard library)") else p
+                for p in found]
 
     def _diagnose_tests(self, report: str) -> str:
         """Floor 2 HR, only when the coder is stuck: plain words on why the same tests keep failing. Advisory."""
@@ -436,6 +441,11 @@ class DevFloor:
         written = 0
         for f in (files if isinstance(files, list) else [])[:MAX_FILES_PER_ROUND + 5]:
             if not isinstance(f, dict):
+                continue
+            given = PurePosixPath(str(f.get("path", "")).strip())
+            if {str(given).lower(), given.parts[0].lower() if given.parts else ""} & {o.lower() for o in self.owned}:
+                notes.append(f"{str(f.get('path'))[:100]!r} belongs to the tower's web server and was not changed: "
+                             f"write {STORE} (add and items) instead")
                 continue
             if f.get("delete") is not True:
                 if written >= MAX_FILES_PER_ROUND:  # deletes don't use up the cap; writes beyond it are dropped

@@ -54,6 +54,11 @@ class RoleModel:
         return fake_response(reply if isinstance(reply, str) else json.dumps(reply), 2, 3)
 
 
+# 7a: an add-and-list contract gets the tower's server; the coder writes store.py
+STORE_CODER = [{"files": [{"path": "store.py", "content": "E = []\n\ndef add(e):\n    E.append(e)\n\n"
+                                                         "def items():\n    return E\n"},
+                          {"path": "test_store.py", "content": "import unittest\nimport store\n"}]}]
+
 APP_REPLIES = {
     "f2.architect": [{"files": [{"path": "app.py", "purpose": "server"},
                                 {"path": "test_app.py", "purpose": "tests"}], "entry": "app.py",

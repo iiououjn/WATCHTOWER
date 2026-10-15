@@ -1,4 +1,5 @@
 """Phase 6u: the deciding F4 checks come from the routes contract, not the small model (runs 18-21)."""
+from conftest import STORE_CODER
 from watchtower.floors.f4_qa_deploy.contract import coder_token, contract_checks
 import re
 
@@ -89,7 +90,7 @@ def test_the_pipeline_ships_when_tower_checks_pass_and_small_model_checks_fail(a
     from conftest import APP_REPLIES
     arch = dict(APP_REPLIES["f2.architect"][0])
     arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
-    runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, qa_fn=lambda checks: [
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER}, qa_fn=lambda checks: [
         {"name": c["name"], "pass": c["name"].startswith("[tower]"), "status": 200, "detail": ""} for c in checks])
     out = runner.start(job.id, extra={"auto_approve": True})
     assert out.status == "done"
@@ -124,7 +125,7 @@ def test_f4_runs_a_fresh_token_the_coder_never_saw(app_tower):  # 6u review r1 I
     from conftest import APP_REPLIES
     arch = dict(APP_REPLIES["f2.architect"][0])
     arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
-    runner, model, sandbox, job = app_tower({"f2.architect": [arch]})
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER})
     runner.start(job.id, extra={"auto_approve": True})
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
     shown = json.loads(next(c[4] for c in sandbox.calls if "WATCHTOWER_QA" in c[2]))[1]["form"]["item"]
@@ -145,7 +146,7 @@ def test_a_silent_small_model_does_not_pause_a_job_with_tower_checks(app_tower):
     from conftest import APP_REPLIES
     arch = dict(APP_REPLIES["f2.architect"][0])
     arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
-    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f4.qa": [{"checks": []}]})
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER, "f4.qa": [{"checks": []}]})
     assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
     runner.close()
 
@@ -193,7 +194,8 @@ def _gate_says_no(app_tower, routes_extra):
     from conftest import APP_REPLIES
     arch = dict(APP_REPLIES["f2.architect"][0])
     arch["routes"] = arch["routes"] + routes_extra
-    return app_tower({"f2.architect": [arch], "f5.dev_gate": [
+    coder = {"f2.coder": STORE_CODER} if routes_extra else {}  # 7a: tower checks mean the tower's server
+    return app_tower({"f2.architect": [arch], **coder, "f5.dev_gate": [
         {"pass": False, "reasons": ["The user views all items in the todo list."], "send_back_to": "code"}]})
 
 
@@ -236,7 +238,7 @@ def test_a_real_failure_is_never_escalated(app_tower):  # 6v: the XSS probe foun
     arch = dict(APP_REPLIES["f2.architect"][0])
     arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
     hit = [{"post": "/add", "field": "item", "page": "GET /"}]
-    runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, xss=[hit])
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER}, xss=[hit])
     out = runner.start(job.id, extra={"auto_approve": True})
     assert out.status == "paused" and "objected" not in (out.reason or "")
     runner.close()
@@ -247,7 +249,7 @@ def test_the_coder_hears_the_first_model_only_objection_even_after_a_real_failur
     from conftest import APP_REPLIES
     arch = dict(APP_REPLIES["f2.architect"][0])
     arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
-    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f5.dev_gate": [
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER, "f5.dev_gate": [
         {"pass": False, "reasons": ["no way to delete a note"], "send_back_to": "code"}]}, qa_ok=[False, True, True, True])
     out = runner.start(job.id, extra={"auto_approve": True})
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
