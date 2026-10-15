@@ -1,0 +1,125 @@
+"""Phase 7a: the tower writes the web server for add-and-list apps; the coder writes only store.py."""
+import json
+import os
+import socket
+import subprocess
+import sys
+
+from watchtower.engine.sandbox import SandboxResult
+from watchtower.engine.workspace import Workspace
+from watchtower.floors.f2_dev.skeleton import apply
+from watchtower.floors.f4_qa_deploy.contract import contract_checks
+from watchtower.floors.f4_qa_deploy.qafloor import QA_SCRIPT, run_qa
+from runner_kit import app_tower  # noqa: F401 — pipeline fixture
+
+TODO = [{"method": "GET", "path": "/", "fields": [], "shows": "All todo items and an add form"},
+        {"method": "POST", "path": "/add", "fields": ["item"], "shows": "Confirmation message."}]
+GUEST = [{"method": "GET", "path": "/", "fields": [], "shows": "All messages"},
+         {"method": "GET", "path": "/sign", "fields": [], "shows": "The sign form"},
+         {"method": "POST", "path": "/sign", "fields": ["name", "message"], "shows": "Saved."}]
+STORE = "ENTRIES = []\n\ndef add(entry):\n    ENTRIES.append(dict(entry))\n\ndef items():\n    return list(ENTRIES)\n"
+
+
+def _plan(routes, entry="app.py"):
+    return {"files": [{"path": entry, "purpose": "server"}, {"path": "todo.py", "purpose": "logic"}],
+            "entry": entry, "routes": routes}
+
+
+def _port():
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _qa(tmp_path, routes, store=STORE, title="My <b>Todo</b>"):
+    plan, owned = apply(_plan(routes), title, Workspace(tmp_path))
+    (tmp_path / "store.py").write_text(store)
+    checks, decide = contract_checks(routes, "240940")
+    proc = subprocess.run([sys.executable, "-c", QA_SCRIPT, plan["entry"], json.dumps(checks)], cwd=tmp_path,
+                          capture_output=True, text=True, timeout=60, env={**os.environ, "WT_PORT": str(_port())})
+    return run_qa(lambda cmd: SandboxResult(proc.returncode, proc.stdout, proc.stderr, False), plan["entry"],
+                  checks, decide=decide)
+
+
+def test_applies_to_a_plain_add_and_list_contract(tmp_path):
+    plan, owned = apply(_plan(TODO), "Todo", Workspace(tmp_path))
+    assert owned == {"app.py"} and (tmp_path / "app.py").exists()
+    assert [f["path"] for f in plan["files"]] == ["app.py", "store.py", "test_store.py"]
+    assert "add(entry" in plan["files"][1]["purpose"] and "items()" in plan["files"][1]["purpose"]
+    compile((tmp_path / "app.py").read_text(), "app.py", "exec")
+
+
+def test_any_other_route_keeps_the_coder_path(tmp_path):
+    routes = TODO + [{"method": "POST", "path": "/delete", "fields": ["item"], "shows": ""}]
+    plan, owned = apply(_plan(routes), "Todo", Workspace(tmp_path))
+    assert owned == set() and plan == _plan(routes) and not (tmp_path / "app.py").exists()
+    assert apply(_plan([TODO[0]]), "Todo", Workspace(tmp_path))[1] == set()  # no adding route
+
+
+def test_template_with_a_correct_store_passes_every_tower_check(tmp_path):
+    pkg = _qa(tmp_path, TODO)
+    assert pkg.checks_run[-1]["pass"] is True, pkg.summary
+
+
+def test_separate_form_page_and_two_fields_pass(tmp_path):
+    pkg = _qa(tmp_path, GUEST)
+    assert all(r["pass"] for r in pkg.checks_run[-1]["results"]), pkg.summary
+
+
+def test_store_returning_plain_strings_still_renders_escaped(tmp_path):
+    store = "E = []\n\ndef add(entry):\n    E.append(entry['item'])\n\ndef items():\n    return E\n"
+    assert _qa(tmp_path, TODO, store).checks_run[-1]["pass"] is True
+
+
+def test_title_is_escaped_and_blank_fields_get_400(tmp_path):
+    plan, _ = apply(_plan(TODO), "My <b>Todo</b>", Workspace(tmp_path))
+    source = (tmp_path / "app.py").read_text()
+    assert "<b>" in source  # stored as data, escaped at render time
+    (tmp_path / "store.py").write_text(STORE)
+    port = _port()
+    proc = subprocess.Popen([sys.executable, "app.py"], cwd=tmp_path, env={**os.environ, "PORT": str(port)},
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        import time
+        import urllib.error
+        import urllib.request
+        for _ in range(50):
+            try:
+                page = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1).read().decode()
+                break
+            except OSError:
+                time.sleep(0.1)
+        assert "&lt;b&gt;Todo&lt;/b&gt;" in page and "<b>Todo" not in page
+        try:
+            urllib.request.urlopen(urllib.request.Request(f"http://127.0.0.1:{port}/add", data=b"item=+",
+                                                          method="POST"), timeout=2)
+            status = 200
+        except urllib.error.HTTPError as e:
+            status = e.code
+        assert status == 400
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_coder_cannot_overwrite_or_delete_an_owned_file(tmp_path):
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    Workspace(tmp_path).write("app.py", "TOWER")
+    floor.owned = {"app.py"}
+    for f in ({"path": "app.py", "content": "x"}, {"path": "./App.py", "content": "x"},
+              {"path": "app.py", "delete": True}):
+        notes = floor._write([f])
+        assert Workspace(tmp_path).read("app.py") == "TOWER" and any("store.py" in n for n in notes)
+
+
+def test_tower_writes_the_server_and_tells_the_coder_the_store_contract(app_tower):
+    from conftest import APP_REPLIES, STORE_CODER
+    arch = dict(APP_REPLIES["f2.architect"][0])
+    arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert coder and "store.py" in coder[0] and "add(entry)" in coder[0]
+    assert "written by the tower" in Workspace(sandbox.workspace(job.id)).read("app.py")
+    runner.close()
