@@ -44,13 +44,15 @@ for _ in range(40):
 results = []
 for c in json.loads(sys.argv[2]):
     data = urllib.parse.urlencode(c["form"]).encode() if c["method"] == "POST" else None
-    status, body, detail, url = None, "", "", base + c["path"]
+    status, body, detail, url, ctype = None, "", "", base + c["path"], ""
     try:
         with urllib.request.urlopen(urllib.request.Request(base + c["path"], data=data, method=c["method"]),
                                     timeout=3) as r:
             status, body, url = r.status, r.read(200000).decode(errors="replace"), r.geturl()
+            ctype = r.headers.get("Content-Type") or ""
     except urllib.error.HTTPError as e:
         status, body, url = e.code, e.read(200000).decode(errors="replace"), e.geturl() or url
+        ctype = (e.headers.get("Content-Type") if e.headers else "") or ""
     except Exception as e:
         detail = type(e).__name__ + ": " + str(e)[:200]
     want = c["expect_text"]  # escaped text renders the same in a browser: "Tom &amp; Jerry" shows "Tom & Jerry"
@@ -68,7 +70,8 @@ for c in json.loads(sys.argv[2]):
     names = set(re.findall(r"</?\\s*([A-Za-z][A-Za-z0-9]*)", want))
     split_ok = len(pieces) > 1 and all(in_node(t) for t in pieces) and not any(
         re.search(r"&lt;/?\\s*" + n + r"\\b", seen, re.I) for n in names)
-    if c.get("expect_escaped"):  # 6z (run 30): user text must be escaped exactly once, as a browser needs it
+    html_page = ctype.split(";")[0].strip().lower() in ("", "text/html")  # no type: browsers sniff it as HTML
+    if c.get("expect_escaped") and html_page:  # 6z (run 30): user text must be escaped exactly once, as a browser needs it
         def depth(t):  # how many unescapes until the text reads as typed (numeric entities count)
             for k in range(1, 5):
                 t = html.unescape(t)
@@ -76,7 +79,7 @@ for c in json.loads(sys.argv[2]):
                     return k
             return 0
         levels = [depth(n) for n in nodes if n.strip()]
-        whole, split_ok = 1 in levels and want not in seen, False  # raw anywhere (banner, title) is XSS
+        whole, split_ok = 1 in levels and want not in body, False  # raw anywhere (banner, title) is XSS
     ok = status == c["expect_status"] and (whole or split_ok)
     spec = c.get("expect_form")  # 6w (run 25): a browser user needs a real form to add anything
     if ok and spec:
@@ -111,9 +114,9 @@ for c in json.loads(sys.argv[2]):
                  if e != want and any(e in n for n in nodes)]  # visible text only: quote() is right in an href
         hint = (f"the page shows it still URL-encoded ({coded[0][:60]!r}): decode with "
                 "urllib.parse.parse_qs and never quote_plus() it again; " if want and coded else "")
-        if c.get("expect_escaped") and want and want in seen:
+        if c.get("expect_escaped") and html_page and want and want in body:
             hint = "user text is shown unescaped (XSS): build the HTML with html.escape(text); "
-        elif c.get("expect_escaped") and want and any(k > 1 for k in levels):
+        elif c.get("expect_escaped") and html_page and want and any(k > 1 for k in levels):
             hint = "user text is escaped more than once: call html.escape once, when you build the HTML; "
         detail = f"{hint}expected {c['expect_status']} with {want!r}, got {status}: {body[:300]}"
     results.append({"name": c["name"], "pass": ok, "status": status, "detail": detail})

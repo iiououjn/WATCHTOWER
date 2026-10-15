@@ -34,3 +34,9 @@ no attempts left. Run 29 shipped text escaped three times. Problems surface one 
 - Attribute XSS untested (value has no quotes); F5 probe still covers it.
 - Tag-stripping app fails with only the generic detail (no "stripped" hint).
 - Coder prompt: untrusted() escaping runs after the QA_CHARS cap; 4+ fields can cut model checks.
+
+## Review r2 + r3: fixed non-HTML pages (JSON/text exempt; no type = HTML) and raw text hidden in comments.
+Deferred (F5 probe covers, or pre-existing):
+- DOM XSS via JS innerHTML; raw text on other routes (detail pages, POST response).
+- Raw value inside a quoted attribute flagged as XSS though harmless; json in <script> flagged (kept: real risk).
+- text/plain showing entities passes; pre-existing quadratic comment/hidden-tag regexes on hostile 100KB bodies.

@@ -489,3 +489,23 @@ def test_control_characters_leave_check_names():
 def test_a_blank_optional_field_keeps_the_check():  # 6s review r1 #3: a later GET depends on this POST
     (c,) = parse_checks(_post({"item": "milk", "note": ""}))
     assert c["form"] == {"item": "milk", "note": ""}
+
+
+def test_json_list_page_is_not_held_to_html_escaping(tmp_path):  # 6z review r2: raw '<' is harmless in JSON
+    app = ECHO_APP.replace("self.end_headers()", 'self.send_header("Content-Type", "application/json")\n        '
+                           'self.end_headers()').replace(
+        '("<ul>" + "".join(f"<li>{i}</li>" for i in ITEMS) + "</ul>")', "json.dumps(ITEMS)").replace(
+        'ITEMS.append(raw.split("=", 1)[1])  # MODE', 'ITEMS.append(parse_qs(raw)["item"][0])').replace(
+        "import html, os", "import html, json, os\nfrom urllib.parse import parse_qs")
+    value = "2409400 <&> 240940"
+    checks = parse_checks({"checks": [
+        {"name": "add", "method": "POST", "path": "/add", "form": {"item": value}, "expect_text": ""},
+        {"name": "list", "path": "/", "expect_text": value}]})
+    checks[1]["expect_escaped"] = True
+    line = next(ln for ln in _live(tmp_path, app, checks).summary.splitlines() if ln.startswith("- list:"))
+    assert "PASS" in line
+
+
+def test_raw_text_in_a_comment_still_fails(tmp_path):  # 6z review r3: '-->' breaks out of a comment
+    assert "unescaped" in _shown(tmp_path, '(ITEMS.append("<!-- " + parse_qs(raw)["item"][0] + " -->") or '
+                                           'html.escape(parse_qs(raw)["item"][0]))')
