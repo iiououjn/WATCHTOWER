@@ -218,3 +218,25 @@ def test_repair_names_never_imports_a_sibling_that_does_things_at_import():
         assert repair_names(MAIN_USES, "__main__", {"todo": sibling}) == (MAIN_USES, []), sibling[-40:]
     ok = TODO + "import os\nPORT = int(os.getenv('PORT', 8000))\n" + quiet_main
     assert repair_names(MAIN_USES, "__main__", {"todo": ok})[1] == ["from todo import add_item, list_items"]
+
+
+def test_bare_stdlib_function_gets_its_from_import():
+    """Run 26: parse_qs used bare, never imported: NameError in all 4 attempts."""
+    src = "def do_POST(self):\n    data = parse_qs(self.rfile.read(5).decode())\n"
+    fixed, added = repair_imports(src)
+    assert added == ["from urllib.parse import parse_qs"]
+    assert fixed == "from urllib.parse import parse_qs\n" + src
+    compile(fixed, "t.py", "exec")
+
+
+def test_bare_names_group_per_module_and_skip_bound():
+    src = "class H(BaseHTTPRequestHandler):\n    pass\nsrv = HTTPServer(('', 1), H)\nx = escape('<')\n"
+    fixed, added = repair_imports(src)
+    assert added == ["from html import escape", "from http.server import BaseHTTPRequestHandler, HTTPServer"]
+    for src in ("from urllib.parse import parse_qs\nparse_qs('a')\n", "def parse_qs(x):\n    return x\nparse_qs(1)\n",
+                "from urllib.parse import *\nparse_qs('a')\n", "import urllib.parse as parse_qs\nparse_qs.x\n"):
+        assert repair_imports(src)[1] == []
+
+
+def test_bare_name_that_is_an_attribute_or_keyword_is_left_alone():
+    assert repair_imports("self.escape = 1\nx = obj.parse_qs\nf(escape=1)\n")[1] == []

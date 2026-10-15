@@ -105,6 +105,13 @@ SUBMODULES = {"urllib": {"parse", "request", "error"}, "http": {"server", "clien
               "unittest": {"mock"}, "html": {"parser"}}
 
 
+# Bare names the coder uses without importing (run 26: parse_qs, NameError in 4 attempts). Only names whose
+# meaning is unambiguous in a small stdlib web app.
+BARE = {"parse_qs": "urllib.parse", "parse_qsl": "urllib.parse", "urlparse": "urllib.parse", "escape": "html",
+        "HTTPServer": "http.server", "ThreadingHTTPServer": "http.server",
+        "BaseHTTPRequestHandler": "http.server"}
+
+
 def _has(module: str, attr: str) -> bool:
     """Does the stdlib module (loaded above) have this attribute? `datetime.now()` means the class, not the module:
     no import there. Submodules a bare import does not load (html.parser, unittest.mock …) are in SUBMODULES and
@@ -175,10 +182,15 @@ def repair_imports(source: str) -> tuple[str, list[str]]:
             wanted.add(name)
         else:
             return source, []  # a use that is not this module (datetime.now): leave the file alone
-    if not wanted:
+    used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    by_module: dict[str, list[str]] = {}
+    for name in sorted(used & set(BARE) - bound):
+        by_module.setdefault(BARE[name], []).append(name)
+    froms = [f"from {m} import {', '.join(names)}" for m, names in sorted(by_module.items())]
+    if not wanted and not froms:
         return source, []
-    added = sorted(wanted)
-    return _insert(source, tree, [f"import {m}" for m in added]), added
+    added = sorted(wanted) + froms
+    return _insert(source, tree, [f"import {m}" for m in sorted(wanted)] + froms), added
 
 
 def _insert(source: str, tree: ast.Module, new: list[str]) -> str:
