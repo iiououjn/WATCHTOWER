@@ -41,3 +41,9 @@ Deferred:
 - Unit order: test_store.py is written before store.py (F2 rounds fix it).
 - No cap on items rendered (memory bound only).
 - F3 smoke test flake seen once in a full-suite run; did not reproduce.
+
+## Scoreboard after 7a (exit: >=3 of runs 32-35 pass, covering todo, guestbook, and one non-skeleton app)
+| run | prompt | result | floor | cause |
+|---|---|---|---|---|
+| 31 | todo | FAIL | F4 | pre-7a: XSS on last attempt |
+| 32 | todo | PENDING (approve rec.) | — | gate/CEO false objection |
