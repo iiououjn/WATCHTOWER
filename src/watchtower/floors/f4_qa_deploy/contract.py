@@ -53,9 +53,10 @@ def contract_checks(routes: list[dict], token: str) -> tuple[list[dict], int]:
     if not pages or route is None:
         return [], 0
     page = pages[0]["path"]
-    forms = [r for r in routes if r["method"] == "GET" and not r["fields"] and _FORM.search(r["shows"])
-             and r["path"] != page]
-    form_page = forms[0]["path"] if forms else page  # 6w review r1: the form may live on its own page
+    gets = [r for r in routes if r["method"] == "GET" and r["path"] != page]
+    same = [r for r in gets if r["path"] == route["path"]]  # GET /add shows the add form
+    adding = [r for r in gets if _ADDS.search(r["path"]) and not _DESTRUCTIVE.search(r["path"] + " " + r["shows"])]
+    form_page = (same or adding or [{"path": page}])[0]["path"]  # 6w reviews: the add form's page, else the list
     values = {f: f"{token}{i} {token}" for i, f in enumerate(route["fields"])}
     raw = [{"name": f"[tower] GET {form_page} has the add form"[:80], "method": "GET", "path": form_page, "form": {},
             "expect_status": 200, "expect_text": "",

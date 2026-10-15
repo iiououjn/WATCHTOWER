@@ -83,3 +83,48 @@ def test_compound_typed_fields_are_not_text():  # 6w review r1 #3
         return contract_checks([LIST, {"method": "POST", "path": "/add", "fields": fields, "shows": ""}], "1")[1]
     assert tower(["item_name", "item_cost"]) == tower(["task_deadline"]) == tower(["note_color"]) == 0
     assert tower(["new_item"]) == tower(["user_name"]) == tower(["first_name", "message"]) == 3
+
+
+def test_the_form_page_belongs_to_the_add_route():  # 6w review r2 #1, #2
+    edit = {"method": "GET", "path": "/edit", "fields": [], "shows": "shows the edit form"}
+    search = {"method": "GET", "path": "/search", "fields": [], "shows": "a search form"}
+    add = {"method": "POST", "path": "/add", "fields": ["item"], "shows": ""}
+    assert contract_checks([LIST, edit, search, add], "1")[0][0]["path"] == "/"
+    new = {"method": "GET", "path": "/new", "fields": ["item"], "shows": "form to add an item"}
+    assert contract_checks([LIST, edit, new, add], "1")[0][0]["path"] == "/new"
+    same = {"method": "GET", "path": "/add", "fields": [], "shows": "the add page"}
+    assert contract_checks([LIST, new, same, add], "1")[0][0]["path"] == "/add"
+
+
+REDIRECT_APP = """
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/":
+            self.send_response(302); self.send_header("Location", "/g/"); self.end_headers(); return
+        self.send_response(200); self.end_headers()
+        self.wfile.write(b'<form method="post" action="add"><input name="item"></form>')
+    def log_message(self, *a):
+        pass
+HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
+"""
+
+
+def test_relative_actions_resolve_against_the_page_reached(tmp_path):  # 6w review r2 #3
+    def run(action):
+        checks = parse_checks({"checks": [{"name": "form", "path": "/", "expect_text": "",
+                                           "expect_form": {"action": action, "fields": ["item"]}}]})
+        return _live(tmp_path, REDIRECT_APP, checks).checks_run[-1]["pass"]
+    assert run("/g/add") is True and run("/add") is False
+
+
+def test_a_query_in_the_contract_action_is_ignored(tmp_path):  # 6w review r2 #5
+    checks = parse_checks({"checks": [{"name": "form", "path": "/", "expect_text": "",
+                                       "expect_form": {"action": "/add?list=1", "fields": ["item"]}}]})
+    assert _live(tmp_path, _with(FORM), checks).checks_run[-1]["pass"] is True
+
+
+def test_a_nested_form_tag_is_ignored_like_a_browser(tmp_path):  # 6w review r2 #4
+    page = '<form method="get" action="/search"><form method="post" action="/add"><input name="item"></form>'
+    assert _form_check(tmp_path, _with(page))["pass"] is False

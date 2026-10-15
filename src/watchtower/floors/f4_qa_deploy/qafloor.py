@@ -44,13 +44,13 @@ for _ in range(40):
 results = []
 for c in json.loads(sys.argv[2]):
     data = urllib.parse.urlencode(c["form"]).encode() if c["method"] == "POST" else None
-    status, body, detail = None, "", ""
+    status, body, detail, url = None, "", "", base + c["path"]
     try:
         with urllib.request.urlopen(urllib.request.Request(base + c["path"], data=data, method=c["method"]),
                                     timeout=3) as r:
-            status, body = r.status, r.read(200000).decode(errors="replace")
+            status, body, url = r.status, r.read(200000).decode(errors="replace"), r.geturl()
     except urllib.error.HTTPError as e:
-        status, body = e.code, e.read(200000).decode(errors="replace")
+        status, body, url = e.code, e.read(200000).decode(errors="replace"), e.geturl() or url
     except Exception as e:
         detail = type(e).__name__ + ": " + str(e)[:200]
     want = c["expect_text"]  # escaped text renders the same in a browser: "Tom &amp; Jerry" shows "Tom & Jerry"
@@ -76,8 +76,10 @@ for c in json.loads(sys.argv[2]):
         class Forms(html.parser.HTMLParser):
             def handle_starttag(self, tag, attrs):
                 a = dict(attrs)
-                if tag == "form":  # resolved as a browser would: relative, absolute, empty (= this page)
-                    act = urllib.parse.urlparse(urllib.parse.urljoin(base + c["path"], a.get("action") or "")).path
+                if tag == "form" and inside:
+                    return  # a browser ignores a <form> inside an open form
+                if tag == "form":  # resolved as a browser would, against the page reached after redirects
+                    act = urllib.parse.urlparse(urllib.parse.urljoin(url, a.get("action") or "")).path
                     forms.append((act.rstrip("/") or "/", (a.get("method") or "get").lower(), set()))
                     inside[:] = [True]
                 elif tag in ("input", "textarea", "select") and inside and a.get("name"):
@@ -89,8 +91,8 @@ for c in json.loads(sys.argv[2]):
         try:
             Forms().feed(seen)
         except Exception as e:  # odd HTML fails this check, never the whole QA run
-            detail = "the page HTML could not be parsed: " + type(e).__name__
-        target = spec["action"].rstrip("/") or "/"
+            detail, forms = "the page HTML could not be parsed: " + type(e).__name__, []
+        target = urllib.parse.urlparse(spec["action"]).path.rstrip("/") or "/"
         ok = any(act == target and m == "post" and set(spec["fields"]) <= names for act, m, names in forms)
         if not ok and not detail:
             detail = (f"the page has no <form method='post' action='{spec['action']}'> with inputs named "
