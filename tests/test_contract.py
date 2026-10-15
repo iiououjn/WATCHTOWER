@@ -12,15 +12,15 @@ GUEST = [{"method": "GET", "path": "/", "fields": [], "shows": "Guestbook form a
 
 def test_add_then_list_for_each_field():
     checks, decide = contract_checks(GUEST, "482913")
-    assert [(c["method"], c["path"]) for c in checks] == [("POST", "/submit"), ("GET", "/"), ("GET", "/")]
-    assert checks[0]["form"] == {"name": "4829130 482913", "message": "4829131 482913"}
-    assert [c["expect_text"] for c in checks[1:]] == ["4829130 482913", "4829131 482913"]
+    assert [(c["method"], c["path"]) for c in checks] == [("GET", "/"), ("POST", "/submit"), ("GET", "/"), ("GET", "/")]
+    assert checks[1]["form"] == {"name": "4829130 482913", "message": "4829131 482913"}
+    assert [c["expect_text"] for c in checks[2:]] == ["4829130 482913", "4829131 482913"]
     assert all(c["name"].startswith("[tower] ") and c["expect_status"] == 200 for c in checks)
-    assert decide == 2  # the POST and one shown value decide; other fields are advisory (6u review r1 C1)
+    assert decide == 3  # the form, the POST and one shown value decide; other fields are advisory (6u review r1 C1)
 
 
 def test_values_carry_a_space_so_hand_split_forms_fail():  # runs 19-20: split('=')[1]
-    assert " " in contract_checks(TODO, "482913")[0][0]["form"]["item"]
+    assert " " in contract_checks(TODO, "482913")[0][1]["form"]["item"]
 
 
 def test_destructive_routes_are_skipped():
@@ -34,12 +34,12 @@ def test_destructive_routes_are_skipped():
 
 def test_the_list_page_is_the_first_get_route_without_fields():
     routes = [{"method": "GET", "path": "/todos", "fields": [], "shows": "all todos"}] + TODO[1:]
-    assert contract_checks(routes, "482913")[0][1]["path"] == "/todos"
+    assert contract_checks(routes, "482913")[0][2]["path"] == "/todos"
 
 
 def test_one_add_route_only():
     routes = TODO[:1] + [{"method": "POST", "path": f"/add{i}", "fields": ["item"], "shows": ""} for i in range(4)]
-    assert len(contract_checks(routes, "482913")[0]) == 2
+    assert len(contract_checks(routes, "482913")[0]) == 3
 
 
 def test_a_copied_route_description_is_dropped_despite_its_period():  # run 21
@@ -105,7 +105,7 @@ def test_the_list_page_is_the_get_that_shows_the_list():  # 6u review r1 I2
     routes = [{"method": "GET", "path": "/", "fields": [], "shows": "A form to sign the guestbook"},
               {"method": "GET", "path": "/entries", "fields": [], "shows": "All messages"},
               {"method": "POST", "path": "/add", "fields": ["message"], "shows": ""}]
-    assert contract_checks(routes, "k3f9a2")[0][1]["path"] == "/entries"
+    assert contract_checks(routes, "k3f9a2")[0][2]["path"] == "/entries"
 
 
 def test_long_names_are_cut_not_replaced_by_the_path():  # 6u review r1 M3
@@ -121,9 +121,9 @@ def test_f4_runs_a_fresh_token_the_coder_never_saw(app_tower):  # 6u review r1 I
     runner, model, sandbox, job = app_tower({"f2.architect": [arch]})
     runner.start(job.id, extra={"auto_approve": True})
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
-    shown = json.loads(next(c[4] for c in sandbox.calls if "WATCHTOWER_QA" in c[2]))[0]["form"]["item"]
+    shown = json.loads(next(c[4] for c in sandbox.calls if "WATCHTOWER_QA" in c[2]))[1]["form"]["item"]
     from watchtower.floors.f4_qa_deploy.qafloor import parse_routes
-    seen = contract_checks(parse_routes(arch["routes"]), coder_token(job.id))[0][0]["form"]["item"]
+    seen = contract_checks(parse_routes(arch["routes"]), coder_token(job.id))[0][1]["form"]["item"]
     assert any(seen in p for p in coder) and shown != seen and re.fullmatch(r"\d{7} \d{6}", shown)
     runner.close()
 
@@ -160,7 +160,7 @@ def test_a_form_page_is_not_the_list_page():  # 6u review r2 I-C
     routes = [{"method": "GET", "path": "/new", "fields": [], "shows": "Form to add new items to the list"},
               {"method": "GET", "path": "/items", "fields": [], "shows": "All items"},
               {"method": "POST", "path": "/add", "fields": ["item"], "shows": ""}]
-    assert contract_checks(routes, "482913")[0][1]["path"] == "/items"
+    assert contract_checks(routes, "482913")[0][2]["path"] == "/items"
 
 
 def test_signup_never_decides_and_the_next_adding_route_does():  # 6u review r2 I-D, M-1
@@ -168,11 +168,11 @@ def test_signup_never_decides_and_the_next_adding_route_does():  # 6u review r2 
               {"method": "POST", "path": "/signup", "fields": ["username", "email"], "shows": ""},
               {"method": "POST", "path": "/add", "fields": ["amount"], "shows": ""},
               {"method": "POST", "path": "/posts", "fields": ["title", "body"], "shows": ""}]
-    assert contract_checks(routes, "482913")[0][0]["path"] == "/posts"
+    assert contract_checks(routes, "482913")[0][1]["path"] == "/posts"
 
 
 def test_values_survive_case_changes():  # 6u review r2 M-4: .title() / .capitalize() apps
-    value = contract_checks(TODO, "482913")[0][0]["form"]["item"]
+    value = contract_checks(TODO, "482913")[0][1]["form"]["item"]
     assert value == value.title() == value.upper() == value.lower()
 
 

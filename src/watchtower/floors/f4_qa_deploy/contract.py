@@ -29,14 +29,26 @@ def fresh_token() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
+_NOT_TEXT = {"id", "index", "count", "qty", "quantity", "amount", "price", "total", "number", "num", "age", "date",
+             "due", "day", "time", "email", "mail", "password", "pass", "url", "link", "phone", "priority",
+             "status", "type", "category", "done", "completed", "checked", "is", "has", "q", "query", "search",
+             "token", "csrf", "rating", "score", "year"}
+
+
+def _plain_text(field: str) -> bool:
+    """'new_item', 'user_name', 'messageText' are text; 'item_count', 'dueDate', 'todo_id' are not (6w, run 24)."""
+    parts = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", field).lower().split("_")
+    return any(p in _TEXT for p in parts) and not any(p in _NOT_TEXT for p in parts)
+
+
 def _adds(route: dict) -> bool:
     return (route["method"] == "POST" and bool(route["fields"]) and bool(_ADDS.search(route["path"]))
-            and not _DESTRUCTIVE.search(route["path"]) and all(f.lower() in _TEXT for f in route["fields"]))
+            and not _DESTRUCTIVE.search(route["path"]) and all(_plain_text(f) for f in route["fields"]))
 
 
 def contract_checks(routes: list[dict], token: str) -> tuple[list[dict], int]:
-    """(checks, decide): add-then-list checks for the first plain-text adding route; the POST and the first
-    shown value decide, the other fields' checks are advisory. ([], 0) when the contract is not that simple."""
+    """(checks, decide): for the first plain-text adding route, the list page's form (6w), the POST and the
+    first shown value decide; the other fields' checks are advisory. ([], 0) when the contract is not that simple."""
     pages = [r for r in routes if r["method"] == "GET" and not r["fields"] and _LIST.search(r["shows"])]
     pages = [r for r in pages if not _FORM.search(r["shows"])] or pages
     route = next((r for r in routes if _adds(r)), None)
@@ -44,8 +56,11 @@ def contract_checks(routes: list[dict], token: str) -> tuple[list[dict], int]:
         return [], 0
     page = pages[0]["path"]
     values = {f: f"{token}{i} {token}" for i, f in enumerate(route["fields"])}
-    raw = [{"name": f"[tower] POST {route['path']} adds"[:80], "method": "POST", "path": route["path"],
+    raw = [{"name": f"[tower] GET {page} has the add form"[:80], "method": "GET", "path": page, "form": {},
+            "expect_status": 200, "expect_text": "",
+            "expect_form": {"action": route["path"], "fields": route["fields"]}}]
+    raw += [{"name": f"[tower] POST {route['path']} adds"[:80], "method": "POST", "path": route["path"],
             "form": values, "expect_status": 200, "expect_text": ""}]
     raw += [{"name": f"[tower] GET {page} shows {f}"[:80], "method": "GET", "path": page, "form": {},
              "expect_status": 200, "expect_text": v} for f, v in values.items()]
-    return parse_checks({"checks": raw}), 2
+    return parse_checks({"checks": raw}), 3
