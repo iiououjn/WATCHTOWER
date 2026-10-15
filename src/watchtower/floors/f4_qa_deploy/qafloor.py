@@ -55,8 +55,14 @@ for c in json.loads(sys.argv[2]):
         detail = type(e).__name__ + ": " + str(e)[:200]
     want = c["expect_text"]  # escaped text renders the same in a browser: "Tom &amp; Jerry" shows "Tom & Jerry"
     escaped_ok = not re.search(r"<[A-Za-z/!?%]", want)  # markup expected raw: an escaped tag is a broken page
-    ok = status == c["expect_status"] and (want in body or escaped_ok and (
-        html.escape(want) in body or html.escape(want, quote=False) in body))
+    shown = lambda t: t in body or html.escape(t) in body or html.escape(t, quote=False) in body
+    whole = want in body or escaped_ok and shown(want)
+    # runs 18-19: text glued from page pieces (tags, or lines joined by newlines) passes when each
+    # piece is on the page and none of its tags shows escaped (a page escaping its own markup is still broken)
+    pieces = [t.strip() for t in re.split(r"<[^>]*>|\\n|\\\\n", want) if t.strip()]
+    split_ok = len(pieces) > 1 and all(shown(t) for t in pieces) and not any(
+        html.escape(t, quote=False) in body for t in re.findall(r"<[^>]*>", want))
+    ok = status == c["expect_status"] and (whole or split_ok)
     if not ok and not detail:
         coded = [e for e in dict.fromkeys((urllib.parse.quote_plus(want), urllib.parse.quote(want)))
                  if e != want and e in body]
@@ -240,6 +246,16 @@ def parse_checks(reply, known: str | None = None) -> list[dict]:
         if seen[c["name"]] > 1:
             c["name"] = f"{c['name']} #{seen[c['name']]}"
     return checks
+
+
+def qa_headline(results: list[dict]) -> str:
+    """The board's F4 line: which checks failed and why, in one line (runs 17-19 showed only 'QA checks FAILED:')."""
+    bad = [r for r in results if r.get("pass") is not True]
+    head = f"QA checks {'FAILED' if bad else 'passed'} ({len(bad) if bad else len(results)}/{len(results)})"
+    if not bad:
+        return head
+    return (head + ": " + "; ".join(f"{str(r.get('name'))[:40]}: {str(r.get('detail') or '')[:80]}"
+                                    for r in bad))[:300]
 
 
 def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[dict]) -> WorkPackage:

@@ -26,7 +26,7 @@ from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
 from watchtower.floors.f5_oversight.oversight import is_failing as _failing, security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
 from watchtower.floors.f2_dev.handoff import board_line, f2_handoff, for_gate, static_feedback
-from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, run_qa
+from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, qa_headline, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.beacon.glass import INJECTION, normalize
 from watchtower.floors.f4_qa_deploy.releases import Releases, manifest_of, manifest_problems
@@ -170,7 +170,7 @@ class TowerPipeline:
                     f4 = run_qa(run, plan["entry"], qa_round.ensure(plan["routes"], ws.snapshot()))
                     self._handoff(data, "f4", attempt, f4.checks_run[-1]["pass"], f4.open_questions)
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
-                               f4.summary.splitlines()[0], known=f4.summary[:1500])
+                               qa_headline(f4.checks_run[-1].get("results") or []), known=f4.summary[:1500])
                 if f4 is not None and f4.checks_run[-1]["pass"]:  # Floor 5 office: security scan, then spec audit
                     sec = security_package(xss_probe(run, plan["entry"], plan["routes"])  # probe first: never cut
                                            + security_scan(ws.root, ws.files()), self._g.security_fail_on)
