@@ -362,7 +362,7 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"<a href='/x?t=New+todo'>open</a>")
-HTTPServer(("127.0.0.1", int(os.environ["WT_PORT"])), H).serve_forever()
+HTTPServer(("127.0.0.1", int(os.environ["PORT"])), H).serve_forever()
 """
 
 
@@ -370,7 +370,61 @@ def test_url_encoded_text_only_inside_a_link_gets_no_hint(tmp_path):
     """6y review r1: quote() is right inside an href; the hint must look at visible text only."""
     checks = parse_checks({"checks": [{"name": "list", "path": "/", "expect_text": "New todo"}]})
     line = next(ln for ln in _live(tmp_path, HREF_APP, checks).summary.splitlines() if ln.startswith("- list:"))
-    assert "FAIL" in line and "URL-encoded" not in line
+    assert "FAIL" in line and "URL-encoded" not in line and "<a href" in line  # the app really answered
+
+
+def _shown(tmp_path, mode):
+    app = ECHO_APP.replace('ITEMS.append(raw.split("=", 1)[1])  # MODE',
+                           "from urllib.parse import parse_qs\n        ITEMS.append(" + mode + ")")
+    value = "2409400 <&> 240940"
+    checks = parse_checks({"checks": [
+        {"name": "add", "method": "POST", "path": "/add", "form": {"item": value}, "expect_text": ""},
+        {"name": "list", "path": "/", "expect_text": value}]})
+    checks[1]["expect_escaped"] = True  # tower-only flag, set after validation like contract_checks
+    return next(ln for ln in _live(tmp_path, app, checks).summary.splitlines() if ln.startswith("- list:"))
+
+
+def test_escaped_once_passes(tmp_path):  # 6z (run 30): XSS, over-escaping and encoding in one deciding check
+    assert "PASS" in _shown(tmp_path, 'html.escape(parse_qs(raw)["item"][0])')
+
+
+def test_unescaped_user_text_fails_with_an_xss_hint(tmp_path):
+    line = _shown(tmp_path, 'parse_qs(raw)["item"][0]')
+    assert "FAIL" in line and "html.escape" in line and "unescaped" in line
+
+
+def test_text_escaped_twice_fails_with_a_hint(tmp_path):  # run 29: escape on save and again on show
+    line = _shown(tmp_path, 'html.escape(html.escape(parse_qs(raw)["item"][0]))')
+    assert "FAIL" in line and "more than once" in line
+
+
+def test_model_checks_cannot_set_expect_escaped():  # 6z review r1: tower-only flag
+    c = parse_checks({"checks": [{"name": "l", "path": "/", "expect_text": "a", "expect_escaped": True}]})
+    assert "expect_escaped" not in c[0]
+
+
+def test_escaped_list_plus_a_raw_copy_fails(tmp_path):  # 6z review r1: a raw banner is still XSS
+    app = ECHO_APP.replace('"<ul>" +', '"<p>last: " + (parse_qs(LAST[0])["item"][0] if LAST else "") + "</p><ul>" +')
+    app = app.replace("ITEMS = []", "ITEMS = []\nLAST = []").replace(
+        'ITEMS.append(raw.split("=", 1)[1])  # MODE',
+        'LAST[:] = [raw]\n        ITEMS.append(html.escape(parse_qs(raw)["item"][0]))')
+    app = app.replace("import html, os", "import html, os\nfrom urllib.parse import parse_qs")
+    value = "2409400 <&> 240940"
+    checks = parse_checks({"checks": [
+        {"name": "add", "method": "POST", "path": "/add", "form": {"item": value}, "expect_text": ""},
+        {"name": "list", "path": "/", "expect_text": value}]})
+    checks[1]["expect_escaped"] = True
+    line = next(ln for ln in _live(tmp_path, app, checks).summary.splitlines() if ln.startswith("- list:"))
+    assert "FAIL" in line and "unescaped" in line
+
+
+def test_numeric_entities_count_as_escaped_once(tmp_path):
+    assert "PASS" in _shown(tmp_path, 'parse_qs(raw)["item"][0].replace("&", "&#38;").replace("<", "&#60;")'
+                                      '.replace(">", "&#x3e;")')
+
+
+def test_text_escaped_three_times_gets_the_hint(tmp_path):  # run 29
+    assert "more than once" in _shown(tmp_path, 'html.escape(html.escape(html.escape(parse_qs(raw)["item"][0])))')
 
 
 def test_html_escaped_text_counts_as_shown(tmp_path):
@@ -435,3 +489,23 @@ def test_control_characters_leave_check_names():
 def test_a_blank_optional_field_keeps_the_check():  # 6s review r1 #3: a later GET depends on this POST
     (c,) = parse_checks(_post({"item": "milk", "note": ""}))
     assert c["form"] == {"item": "milk", "note": ""}
+
+
+def test_json_list_page_is_not_held_to_html_escaping(tmp_path):  # 6z review r2: raw '<' is harmless in JSON
+    app = ECHO_APP.replace("self.end_headers()", 'self.send_header("Content-Type", "application/json")\n        '
+                           'self.end_headers()').replace(
+        '("<ul>" + "".join(f"<li>{i}</li>" for i in ITEMS) + "</ul>")', "json.dumps(ITEMS)").replace(
+        'ITEMS.append(raw.split("=", 1)[1])  # MODE', 'ITEMS.append(parse_qs(raw)["item"][0])').replace(
+        "import html, os", "import html, json, os\nfrom urllib.parse import parse_qs")
+    value = "2409400 <&> 240940"
+    checks = parse_checks({"checks": [
+        {"name": "add", "method": "POST", "path": "/add", "form": {"item": value}, "expect_text": ""},
+        {"name": "list", "path": "/", "expect_text": value}]})
+    checks[1]["expect_escaped"] = True
+    line = next(ln for ln in _live(tmp_path, app, checks).summary.splitlines() if ln.startswith("- list:"))
+    assert "PASS" in line
+
+
+def test_raw_text_in_a_comment_still_fails(tmp_path):  # 6z review r3: '-->' breaks out of a comment
+    assert "unescaped" in _shown(tmp_path, '(ITEMS.append("<!-- " + parse_qs(raw)["item"][0] + " -->") or '
+                                           'html.escape(parse_qs(raw)["item"][0]))')
