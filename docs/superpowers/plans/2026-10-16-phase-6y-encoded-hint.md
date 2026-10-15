@@ -25,3 +25,4 @@ The tower's hint said only "decode form data with parse_qs", which it already di
 ## Deferred minors (r2)
 - Hint always names quote_plus even for the %20 (quote) form.
 - Encoded value split by tags, written as an entity, or only in textarea/input value: no hint.
+| 29 | guestbook | PASS (approved) | — | gate objected; app over-escapes (&amp;amp;) |
