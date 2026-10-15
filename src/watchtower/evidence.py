@@ -58,3 +58,20 @@ def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:
         f"- QA: {qa_line}",
         f"- security scan: {scan}",
     ])
+
+
+def model_objection(verdict, package, f3, f4, sec) -> list[str]:
+    """6v (run 22): the small model gate's reasons when it is the ONLY thing against the app — the package
+    validates, F3 started it, the tower's own F4 checks decided and passed, and the F5 scan passed. The
+    coder cannot fix a phantom, so these go to the owner. [] in every other case: nothing changes."""
+    if verdict.passed or package.validate() or None in (f3, f4, sec):
+        return []
+    qa = f4.checks_run[-1]
+    if not (f3.checks_run[-1]["pass"] and qa["pass"] and qa.get("decide") and sec.checks_run[-1]["pass"]):
+        return []
+    return [str(r)[:200] for r in verdict.reasons][:5] or ["no reason given"]
+
+
+def objection_note(reasons: list[str], ceo_note: str) -> str:
+    return ("F5 gate (small model) objected though every tower check passed: " + "; ".join(reasons)
+            + "; the owner decides" + (f". CEO: {ceo_note}" if ceo_note else ""))[:900]

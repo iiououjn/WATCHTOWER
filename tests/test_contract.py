@@ -181,3 +181,41 @@ def test_the_failing_headline_marks_advisory_checks():  # 6u review r2 M-3
     results = [{"name": "[tower] add", "pass": False, "detail": "500"}, {"name": "empty", "pass": False, "detail": "x"}]
     line = qa_headline(results, False, decide=1)
     assert line.startswith("QA checks FAILED (1/1 tower): [tower] add: 500") and "advisory failing: empty" in line
+
+
+def _gate_says_no(app_tower, routes_extra):
+    from conftest import APP_REPLIES
+    arch = dict(APP_REPLIES["f2.architect"][0])
+    arch["routes"] = arch["routes"] + routes_extra
+    return app_tower({"f2.architect": [arch], "f5.dev_gate": [
+        {"pass": False, "reasons": ["The user views all items in the todo list."], "send_back_to": "code"}]})
+
+
+def test_a_lone_model_objection_goes_to_the_owner_not_the_coder(app_tower, conn):  # 6v, run 22
+    from watchtower.engine.governor.approvals import Approvals
+    runner, model, sandbox, job = _gate_says_no(
+        app_tower, [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}])
+    out = runner.start(job.id, extra={"auto_approve": True})
+    pending = Approvals(conn).pending_for(job.id)
+    assert out.status == "paused" and pending.kind == "signoff"
+    assert "CEO recommends: REJECT" in pending.summary and "objected though every tower check passed" in pending.summary
+    assert "The user views all items" in pending.summary and model.calls.count("f5.dev_gate") == 1
+    runner.close()
+
+
+def test_without_tower_checks_the_gate_still_sends_back(app_tower):  # 6v: nothing changes without proof
+    runner, model, sandbox, job = _gate_says_no(app_tower, [])
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "paused" and model.calls.count("f5.dev_gate") == 4
+    runner.close()
+
+
+def test_a_real_failure_is_never_escalated(app_tower):  # 6v: the XSS probe found raw HTML (run 23)
+    from conftest import APP_REPLIES
+    arch = dict(APP_REPLIES["f2.architect"][0])
+    arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
+    hit = [{"post": "/add", "field": "item", "page": "GET /"}]
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, xss=[hit])
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "paused" and "objected" not in (out.reason or "")
+    runner.close()

@@ -21,7 +21,8 @@ from watchtower.engine.model_socket import BadModelOutput
 from watchtower.floors.f3_build.office import F3Office
 from watchtower.floors.f5_oversight.office import OversightOffice
 from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
-from watchtower.evidence import _evidence, _finding_query, _reference, _status_query  # noqa: F401 — re-export
+from watchtower.evidence import (  # noqa: F401 — re-export
+    _evidence, _finding_query, _reference, _status_query, model_objection, objection_note)
 from watchtower.floors.f5_oversight.oversight import security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
 from watchtower.floors.f2_dev.handoff import board_line, f2_handoff, for_gate, static_feedback
@@ -200,12 +201,16 @@ class TowerPipeline:
             verdict = gate.check(spec, package, DEV_ROUTES, notes)
             self._bus.publish("gate.verdict", {"floor": "dev", "attempt": attempt, "passed": verdict.passed,
                                                "reasons": verdict.reasons, "route": verdict.route}, job_id)
+            objection = model_objection(verdict, package, f3, f4, sec)  # 6v: only the model is against it
             self._post(data, "f5", "done" if verdict.passed else "issue", "gate passed the app" if verdict.passed
-                       else f"gate sent back to {verdict.route}: {'; '.join(verdict.reasons)[:200]}")
-            if verdict.passed:
+                       else f"gate objected; all tower checks passed, owner decides: {'; '.join(objection)[:160]}"
+                       if objection else f"gate sent back to {verdict.route}: {'; '.join(verdict.reasons)[:200]}")
+            if verdict.passed or objection:
                 self._retro(data, oversight, passed=True)
                 evidence = _evidence(package.checks_run, self._g.security_fail_on)
                 ceo_ok, ceo_note = CEO(r["ceo"], ask).recommend(spec, evidence, audit)
+                if objection:  # the owner signs off even under --yes, with the objection in front of them
+                    ceo_ok, ceo_note = False, objection_note(objection, ceo_note)
                 return {"dev": package.to_dict(), "files": ws.files(), "workspace": str(ws.root),
                         "entry": plan["entry"], "manifest": manifest_of(ws.root, ws.files()),
                         "evidence": evidence, "ceo": {"approve": ceo_ok, "note": ceo_note},
