@@ -8,6 +8,8 @@ import re
 from watchtower.floors.f4_qa_deploy.qafloor import parse_checks
 
 MAX_ADD_ROUTES = 2
+QA_ADVISORY = ("small-model QA checks failed (advisory) but the tower's contract checks passed: "
+               "judge the app on the contract checks and the spec")
 _DESTRUCTIVE = re.compile(r"delete|remove|clear|done|toggle|edit|update|complete", re.IGNORECASE)
 _ID_FIELD = re.compile(r"^(id|index|\w+_id)$", re.IGNORECASE)
 

@@ -77,7 +77,9 @@ APP_REPLIES = {
 class FakeSandbox:
     """Sandbox stand-in: unittest and smoke results are scripted."""
 
-    def __init__(self, root, test_ok=True, http="200", unavailable=False, qa_ok=True, probe=200, xss=None):
+    def __init__(self, root, test_ok=True, http="200", unavailable=False, qa_ok=True, probe=200, xss=None,
+                 qa_fn=None):
+        self.qa_fn = qa_fn  # checks -> results, for per-check QA outcomes (6u)
         self.root, self.test_ok, self.http, self.unavailable, self.calls = root, test_ok, http, unavailable, []
         self.qa_ok, self.probe, self.xss = qa_ok, probe, xss if xss is not None else [[]]
 
@@ -98,10 +100,12 @@ class FakeSandbox:
             line = '{"run": 2, "skipped": 0, "failures": %d, "errors": 0}' % (0 if ok else 1)
             return SandboxResult(0 if ok else 1, "WATCHTOWER_TESTS " + line + "\n", "FAILED\n" if not ok else "", False)
         if command[:2] == ["python", "-c"] and "WATCHTOWER_QA" in command[2]:
+            if self.qa_fn is not None:
+                return SandboxResult(0, "WATCHTOWER_QA " + json.dumps(self.qa_fn(json.loads(command[4]))) + "\n", "", False)
             ok = self.qa_ok if isinstance(self.qa_ok, bool) else self.qa_ok.pop(0)
             detail = "" if ok else "expected 200 with 'Todo', got 500: KeyError item"
-            return SandboxResult(0, 'WATCHTOWER_QA [{"name": "home", "pass": %s, "status": 200, "detail": "%s"}]\n'
-                                 % ("true" if ok else "false", detail), "", False)
+            results = [{"name": c["name"], "pass": ok, "status": 200, "detail": detail} for c in json.loads(command[4])]
+            return SandboxResult(0, "WATCHTOWER_QA " + json.dumps(results) + "\n", "", False)
         if command[:2] == ["python", "-c"] and "WATCHTOWER_XSS" in command[2]:
             hits = self.xss.pop(0) if len(self.xss) > 1 else self.xss[0]
             return SandboxResult(0, "WATCHTOWER_XSS " + json.dumps({"answered": 2, "hits": hits}) + "\n", "", False)
