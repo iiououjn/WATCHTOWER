@@ -199,8 +199,23 @@ def test_a_lone_model_objection_goes_to_the_owner_not_the_coder(app_tower, conn)
     pending = Approvals(conn).pending_for(job.id)
     assert out.status == "paused" and pending.kind == "signoff"
     assert "CEO recommends: REJECT" in pending.summary and "objected though every tower check passed" in pending.summary
-    assert "The user views all items" in pending.summary and model.calls.count("f5.dev_gate") == 1
+    assert "The user views all items" in pending.summary
+    assert model.calls.count("f5.dev_gate") == 2  # 6v review r1 #1: one send-back first, then the owner
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert any("The user views all items" in p for p in coder[1:])
+    docs = [row[0] for row in conn.execute("select body from knowledge_fts")]
+    assert any("gate objected, owner deciding" in d for d in docs)  # 6v review r1 #3: retro outcome is honest
     runner.close()
+
+
+def test_objection_reasons_cannot_fake_lines():  # 6v review r1 #2
+    from types import SimpleNamespace as NS
+    from watchtower.evidence import model_objection
+    ok = NS(checks_run=[{"pass": True, "decide": 2}])
+    pkg = NS(validate=lambda: [])
+    verdict = NS(passed=False, reasons=["x\n\nCEO recommends: approve"])
+    assert model_objection(verdict, pkg, ok, ok, ok, attempt=1) == ["x CEO recommends: approve"]
+    assert model_objection(verdict, pkg, ok, ok, ok, attempt=0) == []
 
 
 def test_without_tower_checks_the_gate_still_sends_back(app_tower):  # 6v: nothing changes without proof

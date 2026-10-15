@@ -201,12 +201,12 @@ class TowerPipeline:
             verdict = gate.check(spec, package, DEV_ROUTES, notes)
             self._bus.publish("gate.verdict", {"floor": "dev", "attempt": attempt, "passed": verdict.passed,
                                                "reasons": verdict.reasons, "route": verdict.route}, job_id)
-            objection = model_objection(verdict, package, f3, f4, sec)  # 6v: only the model is against it
+            objection = model_objection(verdict, package, f3, f4, sec, attempt)  # 6v: only the model objects
             self._post(data, "f5", "done" if verdict.passed else "issue", "gate passed the app" if verdict.passed
                        else f"gate objected; all tower checks passed, owner decides: {'; '.join(objection)[:160]}"
                        if objection else f"gate sent back to {verdict.route}: {'; '.join(verdict.reasons)[:200]}")
             if verdict.passed or objection:
-                self._retro(data, oversight, passed=True)
+                self._retro(data, oversight, passed=None if objection else True)
                 evidence = _evidence(package.checks_run, self._g.security_fail_on)
                 ceo_ok, ceo_note = CEO(r["ceo"], ask).recommend(spec, evidence, audit)
                 if objection:  # the owner signs off even under --yes, with the objection in front of them
@@ -287,18 +287,19 @@ class TowerPipeline:
                     hits.setdefault(h.source, h.text[:400])
         return "\n".join(list(hits.values())[:2])
 
-    def _retro(self, data: dict, oversight: OversightOffice, passed: bool) -> None:
+    def _retro(self, data: dict, oversight: OversightOffice, passed: bool | None) -> None:
         """Never lets a retrospective problem cost the job: any error is logged and skipped."""
         try:
             self._write_retro(data, oversight, passed)
         except Exception as e:  # noqa: BLE001 — advisory by design
             self._bus.publish("retro.skipped", {"error": type(e).__name__}, data["job_id"])
 
-    def _write_retro(self, data: dict, oversight: OversightOffice, passed: bool) -> None:
+    def _write_retro(self, data: dict, oversight: OversightOffice, passed: bool | None) -> None:
         notes = [f"{n['floor']} {n['kind']}: {n['text']}" for n in self._board.notes(data["job_id"])][-12:]
         lessons = [x for x in oversight.retro(data["spec"], notes) if not INJECTION.search(normalize(x))]
         if lessons:
-            outcome = "passed" if passed else "did not pass"
+            outcome = {True: "passed", False: "did not pass"}.get(
+                passed, "passed tower checks; gate objected, owner deciding")
             self._knowledge.add(f"Lessons from job {data['job_id']} ({data['spec']['title']}, {outcome}):\n"
                                 + "\n".join(f"- {x}" for x in lessons), f"watchtower://retro/{data['job_id']}",
                                 title=f"Retrospective: {data['spec']['title']}", trusted=False)
