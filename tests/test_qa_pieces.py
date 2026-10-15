@@ -36,3 +36,19 @@ def test_the_board_line_names_the_failing_checks():  # runs 17-19: the board sai
     line = qa_headline(results)
     assert line.startswith("QA checks FAILED (2/3): add: RemoteDisconnected") and "list: expected 200" in line
     assert len(line) <= 300 and qa_headline([{"name": "a", "pass": True}]) == "QA checks passed (1/1)"
+
+
+def test_pieces_must_be_visible_text_not_attributes_or_title(tmp_path):  # 6t review r1 #1
+    app = ECHO_APP.replace('self.wfile.write(("<ul>" + "".join(f"<li>{i}</li>" for i in ITEMS) + "</ul>").encode())',
+                           'self.wfile.write(("<title>" + " ".join(ITEMS) + "</title><h1>Todo</h1>"\n'
+                           '                          "<input name=item value=" + " ".join(ITEMS) + "><ul></ul>").encode())')
+    assert app != ECHO_APP
+    assert _list(tmp_path, "<h1>Todo</h1><ul><li>milk</li></ul>", app)["pass"] is False
+
+
+def test_a_page_escaping_only_its_brackets_fails_a_markup_check(tmp_path):  # 6t review r1 #2
+    app = ECHO_APP.replace('self.wfile.write(("<ul>" + "".join(f"<li>{i}</li>" for i in ITEMS) + "</ul>").encode())',
+                           'self.wfile.write("".join(f"&lt;li>{i}&lt;/li>" for i in ITEMS).encode())')
+    assert app != ECHO_APP
+    assert _list(tmp_path, "<li>milk</li><li>eggs</li>", app)["pass"] is False
+

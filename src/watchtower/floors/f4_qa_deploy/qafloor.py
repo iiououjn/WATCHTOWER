@@ -60,8 +60,12 @@ for c in json.loads(sys.argv[2]):
     # runs 18-19: text glued from page pieces (tags, or lines joined by newlines) passes when each
     # piece is on the page and none of its tags shows escaped (a page escaping its own markup is still broken)
     pieces = [t.strip() for t in re.split(r"<[^>]*>|\\n|\\\\n", want) if t.strip()]
-    split_ok = len(pieces) > 1 and all(shown(t) for t in pieces) and not any(
-        html.escape(t, quote=False) in body for t in re.findall(r"<[^>]*>", want))
+    # pieces must be visible text: text between tags, never attributes, <title>, <style> or <script>
+    nodes = re.split(r"<[^>]*>", re.sub(r"(?is)<(title|style|script)\\b.*?</\\1\\s*>", " ", body))
+    in_node = lambda t: any(t in n or html.escape(t) in n or html.escape(t, quote=False) in n for n in nodes)
+    names = set(re.findall(r"</?\\s*([A-Za-z][A-Za-z0-9]*)", want))
+    split_ok = len(pieces) > 1 and all(in_node(t) for t in pieces) and not any(
+        re.search(r"&lt;/?\\s*" + n + r"\\b", body, re.I) for n in names)
     ok = status == c["expect_status"] and (whole or split_ok)
     if not ok and not detail:
         coded = [e for e in dict.fromkeys((urllib.parse.quote_plus(want), urllib.parse.quote(want)))
