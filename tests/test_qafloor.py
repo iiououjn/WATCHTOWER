@@ -352,7 +352,25 @@ def test_a_form_value_shown_still_url_encoded_is_named(tmp_path):
         {"name": "list", "path": "/", "expect_text": "New todo & more"}]})
     pkg = _live(tmp_path, ECHO_APP, checks)
     line = next(ln for ln in pkg.summary.splitlines() if ln.startswith("- list:"))
-    assert "URL-encoded" in line and "parse_qs" in line and line.index("URL-encoded") < 120
+    assert "URL-encoded" in line and "parse_qs" in line and "quote_plus" in line and line.index("URL-encoded") < 120
+
+
+HREF_APP = """import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"<a href='/x?t=New+todo'>open</a>")
+HTTPServer(("127.0.0.1", int(os.environ["WT_PORT"])), H).serve_forever()
+"""
+
+
+def test_url_encoded_text_only_inside_a_link_gets_no_hint(tmp_path):
+    """6y review r1: quote() is right inside an href; the hint must look at visible text only."""
+    checks = parse_checks({"checks": [{"name": "list", "path": "/", "expect_text": "New todo"}]})
+    line = next(ln for ln in _live(tmp_path, HREF_APP, checks).summary.splitlines() if ln.startswith("- list:"))
+    assert "FAIL" in line and "URL-encoded" not in line
 
 
 def test_html_escaped_text_counts_as_shown(tmp_path):
