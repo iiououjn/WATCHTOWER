@@ -43,7 +43,7 @@ def _qa(tmp_path, routes, store=STORE, title="My <b>Todo</b>"):
 
 def test_applies_to_a_plain_add_and_list_contract(tmp_path):
     plan, owned = apply(_plan(TODO), "Todo", Workspace(tmp_path))
-    assert owned == {"app.py"} and (tmp_path / "app.py").exists()
+    assert "app.py" in owned and "html.py" in owned and (tmp_path / "app.py").exists()
     assert [f["path"] for f in plan["files"]] == ["app.py", "store.py", "test_store.py"]
     assert "add(entry" in plan["files"][1]["purpose"] and "items()" in plan["files"][1]["purpose"]
     compile((tmp_path / "app.py").read_text(), "app.py", "exec")
@@ -123,3 +123,37 @@ def test_tower_writes_the_server_and_tells_the_coder_the_store_contract(app_towe
     assert coder and "store.py" in coder[0] and "add(entry)" in coder[0]
     assert "written by the tower" in Workspace(sandbox.workspace(job.id)).read("app.py")
     runner.close()
+
+
+def test_list_page_off_root_still_answers_root(tmp_path):  # 7a review r1: F3 and deploy probe GET /
+    routes = [{"method": "GET", "path": "/todos", "fields": [], "shows": "All todos"},
+              {"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
+    assert _qa(tmp_path, routes).checks_run[-1]["pass"] is True
+    assert "if path == LIST_PAGE or" in (tmp_path / "app.py").read_text()
+
+
+def test_unsafe_entries_and_query_paths_keep_the_coder_path(tmp_path):
+    for entry in ("src/app.py", "Store.py", "TEST_STORE.py", "html.py", "json.py"):
+        assert apply(_plan(TODO, entry), "T", Workspace(tmp_path))[1] == set(), entry
+    routes = [{**TODO[0], "path": "/?view=all"}, TODO[1]]
+    assert apply(_plan(routes), "T", Workspace(tmp_path))[1] == set()
+
+
+def test_replan_without_the_skeleton_removes_the_tower_server(tmp_path):
+    ws = Workspace(tmp_path)
+    _, owned = apply(_plan(TODO), "T", ws)
+    routes = TODO + [{"method": "POST", "path": "/delete", "fields": ["item"], "shows": ""}]
+    _, again = apply(_plan(routes), "T", ws, previous=owned)
+    assert again == set() and "app.py" not in ws.files()
+    ws.write("app.py", "coder's own")  # never delete a file the tower did not write
+    apply(_plan(routes), "T", ws, previous={"app.py"})
+    assert ws.read("app.py") == "coder's own"
+
+
+def test_coder_cannot_shadow_modules_the_server_imports(tmp_path):
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    _, floor.owned = apply(_plan(TODO), "T", Workspace(tmp_path))
+    for path in ("html.py", "urllib/parse.py", "traceback.py"):
+        notes = floor._write([{"path": path, "content": "x"}])
+        assert path not in Workspace(tmp_path).files() and any("store.py" in n for n in notes), path

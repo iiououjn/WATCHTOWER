@@ -353,7 +353,7 @@ class TowerPipeline:
             except ADVISORY_ERRORS:  # the C-suite is advisory: a failed re-plan keeps the plan we have
                 self._post(data, "f2", "issue", "re-plan for the CTO failed; keeping the first plan")
         ws = Workspace(self._sandbox.workspace(data["job_id"]))
-        plan, dev.owned = apply_skeleton(plan, data["spec"]["title"], ws)
+        plan, dev.owned = apply_skeleton(plan, data["spec"]["title"], ws, previous=dev.owned)
         if dev.owned:  # 7a: runs 26-31 failed on HTTP plumbing; for add-and-list apps the tower writes the server
             self._post(data, "f2", "doing", f"tower wrote the web server {plan['entry']}; the coder writes store.py")
         return plan

@@ -439,8 +439,9 @@ class DevFloor:
         for f in (files if isinstance(files, list) else [])[:MAX_FILES_PER_ROUND + 5]:
             if not isinstance(f, dict):
                 continue
-            if str(PurePosixPath(str(f.get("path", "")).strip())).lower() in {o.lower() for o in self.owned}:
-                notes.append(f"{str(f.get('path'))[:100]!r} is the tower's web server and was not changed: "
+            given = PurePosixPath(str(f.get("path", "")).strip())
+            if {str(given).lower(), given.parts[0].lower() if given.parts else ""} & {o.lower() for o in self.owned}:
+                notes.append(f"{str(f.get('path'))[:100]!r} belongs to the tower's web server and was not changed: "
                              f"write {STORE} (add and items) instead")
                 continue
             if f.get("delete") is not True:

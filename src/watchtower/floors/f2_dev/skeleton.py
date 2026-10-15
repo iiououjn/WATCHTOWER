@@ -3,10 +3,15 @@ server and the coder writes only plain Python: store.add(entry) and store.items(
 plumbing the 7B kept getting wrong one piece per attempt (imports, quote_plus, XSS, items not shown)."""
 from __future__ import annotations
 
+import sys
+from pathlib import PurePosixPath
+
 from watchtower.engine.workspace import Workspace
 from watchtower.floors.f4_qa_deploy.contract import contract_checks
 
 STORE, STORE_TESTS = "store.py", "test_store.py"
+SHADOWS = {"html.py", "os.py", "traceback.py", "http", "urllib"}  # what the server imports: a coder copy would win
+MARK = '"""Web server written by the tower.'
 
 TEMPLATE = '''"""Web server written by the tower. Do not edit: write store.py (add(entry) and items())."""
 import html
@@ -54,7 +59,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlparse(self.path).path
         try:
-            if path == LIST_PAGE:
+            if path == LIST_PAGE or (path == "/" and "/" not in (LIST_PAGE, FORM_PAGE)):
                 link = "" if FORM_PAGE == LIST_PAGE else '<p><a href="' + html.escape(FORM_PAGE) + '">Add</a></p>'
                 body = (form_html() if FORM_PAGE == LIST_PAGE else link) + items_html()
             elif path == FORM_PAGE:
@@ -100,22 +105,38 @@ def _store_purpose(fields: list[str]) -> str:
             "dicts, oldest first (a module-level list is fine)")[:200]
 
 
-def apply(plan: dict, title: str, ws: Workspace) -> tuple[dict, set[str]]:
+def _drop_stale(ws: Workspace, previous, keep: str = "") -> None:
+    """A re-plan without the skeleton (or with a new entry): remove the tower's old server so a unit rewrites
+    it (7a review r1). Only a file that still carries the tower's mark: never the coder's own."""
+    for path in previous:
+        if path != keep and path.endswith(".py") and path in ws.files() and ws.read(path).startswith(MARK):
+            ws.delete(path)
+
+
+def _fits(plan: dict, checks: list[dict]) -> bool:
+    entry = plan["entry"]
+    paths = [c["path"] for c in checks[:3]]
+    return ("/" not in entry and entry.lower() not in (STORE, STORE_TESTS)
+            and entry[:-3] not in sys.stdlib_module_names and not any("?" in p for p in paths)
+            and all((r["method"], r["path"]) in {("GET", paths[2]), ("GET", paths[0]), ("POST", paths[1])}
+                    for r in plan["routes"]))
+
+
+def apply(plan: dict, title: str, ws: Workspace, previous=frozenset()) -> tuple[dict, set[str]]:
     """(plan, owned paths). Unchanged plan and no owned paths unless the contract is exactly add-and-list."""
     routes = plan["routes"]
     checks, _ = contract_checks(routes, "000000")
-    if not checks:
+    if not checks or not _fits(plan, checks):
+        _drop_stale(ws, previous)
         return plan, set()
     form_page, add, page = checks[0]["path"], checks[1]["path"], checks[2]["path"]
     fields = list(checks[1]["form"])
-    allowed = {("GET", page), ("GET", form_page), ("POST", add)}
     entry = plan["entry"]
-    if any((r["method"], r["path"]) not in allowed for r in routes) or entry in (STORE, STORE_TESTS):
-        return plan, set()
+    _drop_stale(ws, previous, keep=entry)
     config = "\n".join(f"{k} = {v!r}" for k, v in (("TITLE", str(title)[:100]), ("FIELDS", fields),
                        ("LIST_PAGE", page), ("FORM_PAGE", form_page), ("ADD_PATH", add)))
     ws.write(entry, TEMPLATE.replace("__CONFIG__", config))
     files = [{"path": entry, "purpose": "web server, written by the tower: do not change it"},
              {"path": STORE, "purpose": _store_purpose(fields)},
              {"path": STORE_TESTS, "purpose": "unittest tests for store.add and store.items"}]
-    return {**plan, "files": files}, {entry}
+    return {**plan, "files": files}, {entry} | SHADOWS
