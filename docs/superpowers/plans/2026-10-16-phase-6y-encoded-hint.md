@@ -21,3 +21,7 @@ The tower's hint said only "decode form data with parse_qs", which it already di
 | 26 | todo | FAIL | F3/F4 | parse_qs NameError (fixed 6x) |
 | 27 | guestbook | PASS (approved) | — | — |
 | 28 | todo | FAIL | F4 | quote_plus on display (6y) |
+
+## Deferred minors (r2)
+- Hint always names quote_plus even for the %20 (quote) form.
+- Encoded value split by tags, written as an entity, or only in textarea/input value: no hint.
