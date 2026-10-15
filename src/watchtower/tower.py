@@ -26,6 +26,8 @@ from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
 from watchtower.floors.f5_oversight.oversight import is_failing as _failing, security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
 from watchtower.floors.f2_dev.handoff import board_line, f2_handoff, for_gate, static_feedback
+from watchtower.engine.advisory import ADVISORY_ERRORS
+from watchtower.floors.f4_qa_deploy.contract import QA_ADVISORY, coder_token, contract_checks, fresh_token
 from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, qa_headline, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.beacon.glass import INJECTION, normalize
@@ -145,13 +147,14 @@ class TowerPipeline:
             def on_unit(i: int, n: int, paths: list[str]) -> None:
                 written.append(i)
                 self._post(data, "f2", "doing", f"coder unit {i}/{n} written: {', '.join(paths)}")
-            unit_notes = dev.write_units(spec, plan, qa_round.coder_checks, on_unit=on_unit) if units_due else []
+            coder_qa = contract_checks(plan["routes"], coder_token(job_id))[0] + qa_round.coder_checks  # tower first
+            unit_notes = dev.write_units(spec, plan, coder_qa, on_unit=on_unit) if units_due else []
             units_due = False
             present = {p.lower() for p in ws.files()}
             missing = [f["path"] for f in plan["files"] if f["path"].lower() not in present]
             if written and missing:
                 unit_notes.append(f"planned files still missing: {', '.join(missing[:8])}; write them")
-            package = dev.build(spec, plan, unit_notes + list(feedback), qa_round.coder_checks,  # unit notes first: never cut
+            package = dev.build(spec, plan, unit_notes + list(feedback), coder_qa,  # unit notes first: never cut
                                 test_first=bool(written) and not feedback and not missing)
             f3, f4, sec, audit, notes = None, None, None, "", ()
             tests_ok = bool(package.checks_run and package.checks_run[-1].get("pass"))
@@ -167,11 +170,18 @@ class TowerPipeline:
                 self._handoff(data, "f3", attempt, f3.checks_run[-1]["pass"], f3.open_questions)
                 self._post(data, "f3", "done" if f3.checks_run[-1]["pass"] else "issue", f3.summary.splitlines()[0])
                 if f3.checks_run[-1]["pass"]:
-                    f4 = run_qa(run, plan["entry"], qa_round.ensure(plan["routes"], ws.snapshot()))
+                    tower_qa, decide = contract_checks(plan["routes"], fresh_token())  # a token the coder never saw
+                    try:
+                        model_qa = qa_round.ensure(plan["routes"], ws.snapshot())
+                    except ADVISORY_ERRORS:  # the small model failed: the tower's checks still decide
+                        if not tower_qa:
+                            raise
+                        model_qa = []
+                    f4 = run_qa(run, plan["entry"], tower_qa + model_qa, decide=decide)
                     self._handoff(data, "f4", attempt, f4.checks_run[-1]["pass"], f4.open_questions)
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
-                               qa_headline(f4.checks_run[-1].get("results") or [],
-                                           f4.checks_run[-1]["pass"]), known=f4.summary[:1500])
+                               qa_headline(f4.checks_run[-1].get("results") or [], f4.checks_run[-1]["pass"],
+                                           decide), known=f4.summary[:1500])
                 if f4 is not None and f4.checks_run[-1]["pass"]:  # Floor 5 office: security scan, then spec audit
                     sec = security_package(xss_probe(run, plan["entry"], plan["routes"])  # probe first: never cut
                                            + security_scan(ws.root, ws.files()), self._g.security_fail_on)
@@ -182,6 +192,8 @@ class TowerPipeline:
                         audit = oversight.audit(spec, focus, ws.snapshot(3000), f4.summary)
                 later = [p for p in (f3, f4, sec) if p is not None]
                 f2_summary, f2_questions, notes = for_gate(package.summary, package.open_questions, tests_ok)
+                notes += (QA_ADVISORY,) if f4 is not None and f4.checks_run[-1]["pass"] and f4.checks_run[-1].get(
+                    "advisory_failed") else ()
                 package = WorkPackage("dev", "\n\n".join([f2_summary] + [p.summary for p in later]
                                                          + ([f"Oversight audit:\n{audit}"] if audit else []))
                                       + f"\n\nCode:\n{ws.snapshot(3000)}", ws.files(), [],
@@ -469,6 +481,10 @@ def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:
         scan = f"{'pass' if sec.get('pass') else 'FAIL'} ({serious} serious, {len(findings) - serious} minor)"
     qa_line = (f"{sum(r.get('pass') is True for r in results)}/{len(results)} checks passed" if results
                else "no QA checks ran")
+    if qa.get("decide") and len(results) > qa["decide"]:  # 6u: the tower's checks decide, the rest are advisory
+        d, a = results[:qa["decide"]], results[qa["decide"]:]
+        qa_line = (f"{'pass' if qa.get('pass') else 'FAIL'} (tower checks {sum(r.get('pass') is True for r in d)}/"
+                   f"{len(d)}; advisory {sum(r.get('pass') is True for r in a)}/{len(a)} passed)")
     return "\n".join([
         f"- coder unit tests (advisory): {'pass' if tests.get('pass') else 'FAIL'}",
         f"- app answered HTTP {http.get('status')}",

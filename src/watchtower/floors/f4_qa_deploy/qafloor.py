@@ -151,7 +151,9 @@ def test_first_text(text: str, shows: set[str]) -> str:
         pieces = [p for p in map(str.strip, _MARKUP.split(text)) if p]
         text = pieces[0] if len(pieces) == 1 and not _ESCAPED.search(pieces[0]) and re.search(r"\w{2,}",
                                                                                             pieces[0]) else ""
-    return "" if len(text.split()) > MAX_TEXT_WORDS or " ".join(text.lower().split()) in shows else text
+    plain = lambda t: " ".join(t.lower().split()).rstrip(".!?:;,")  # run 21: the description ended with "."
+    copied = plain(text) in {plain(s) for s in shows}
+    return "" if len(text.split()) > MAX_TEXT_WORDS or copied else text
 
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
@@ -254,21 +256,27 @@ def parse_checks(reply, known: str | None = None) -> list[dict]:
     return checks
 
 
-def qa_headline(results: list[dict], passed: bool = True) -> str:
+def qa_headline(results: list[dict], passed: bool | None = None, decide: int = 0) -> str:
     """The board's F4 line: which checks failed and why, in one line (runs 17-19 showed only 'QA checks FAILED:').
-    `passed` is the run's own verdict: a timed-out run fails even when every check it reported passed."""
-    bad = [r for r in results if r.get("pass") is not True]
-    if not bad and not passed:
-        return f"QA checks FAILED (0/{len(results)}): the QA run timed out or its result was incomplete"
-    head = f"QA checks {'FAILED' if bad else 'passed'} ({len(bad) if bad else len(results)}/{len(results)})"
+    `passed` is the run's own verdict (a timed-out run fails even when every reported check passed); with
+    `decide`, only the first `decide` checks (the tower's, 6u) count and the rest are named as advisory."""
+    deciding, advisory = (results[:decide], results[decide:]) if decide else (results, [])
+    bad = [r for r in deciding if r.get("pass") is not True]
+    soft = "; ".join(str(r.get("name"))[:40] for r in advisory if r.get("pass") is not True)
+    tail = f"; advisory failing: {soft}" if soft else ""
+    tag = " tower" if decide else ""
+    if not bad and passed is False:
+        return f"QA checks FAILED (0/{len(deciding)}{tag}): the QA run timed out or its result was incomplete"
     if not bad:
-        return head
-    return (head + ": " + "; ".join(f"{str(r.get('name'))[:40]}: {str(r.get('detail') or '')[:80]}"
-                                    for r in bad))[:300]
+        return f"QA checks passed ({len(deciding)}/{len(deciding)}{tag}){tail}"[:300]
+    return (f"QA checks FAILED ({len(bad)}/{len(deciding)}{tag}): "
+            + "; ".join(f"{str(r.get('name'))[:40]}: {str(r.get('detail') or '')[:80]}" for r in bad) + tail)[:300]
 
 
-def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[dict]) -> WorkPackage:
-    """Floor 4: run the QA checks against the app inside the sandbox. No model involved. Zero checks never pass."""
+def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[dict],
+           decide: int = 0) -> WorkPackage:
+    """Floor 4: run the QA checks against the app inside the sandbox. No model involved. Zero checks never pass.
+    With `decide`, only the first `decide` checks (the tower's, 6u) decide; later failures are advisory."""
     if not checks:
         return WorkPackage("f4", "QA checks FAILED:\n- no QA checks to run", [entry], [],
                            [{"check": "qa", "pass": False, "results": []}], ["no QA checks"])
@@ -288,9 +296,13 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
         app_log = json.loads(logs[-1]) if logs else output
     except ValueError:
         app_log = output
-    passed = not result.timed_out and all(r.get("pass") is True for r in results)
+    complete = len(results) == len(checks)  # else results is the one 'runner result missing' row: it decides
+    deciding = results[:decide] if decide and complete else results
+    passed = not result.timed_out and all(r.get("pass") is True for r in deciding)
+    advisory = {i for i, r in enumerate(results) if decide and complete and i >= decide and r.get("pass") is not True}
     hints = _same_request_hints(checks, results)
-    lines = [f"- {r.get('name')}: {'PASS' if r.get('pass') is True else 'FAIL'}{hints.get(i, '')} "
+    lines = [f"- {r.get('name')}: {'PASS' if r.get('pass') is True else 'FAIL'}"
+             f"{' (advisory)' if i in advisory else ''}{hints.get(i, '')} "
              f"{str(r.get('detail') or '')[:300]}" for i, r in enumerate(results)]
     error = "" if passed else app_error(str(app_log))  # first: the coder sees only the head of this summary
     coded = next((r.get("name") for r in results if str(r.get("detail") or "").startswith("the page shows it still URL")), None)
@@ -300,7 +312,8 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
     summary = f"QA checks {'passed' if passed else 'FAILED'}:\n" + (error + "\n" if error else "") + "\n".join(lines)
     if not passed:
         summary += f"\nApp output:\n{str(app_log)[-800:]}"
-    return WorkPackage("f4", summary, [entry], [], [{"check": "qa", "pass": passed, "results": results}],
+    return WorkPackage("f4", summary, [entry], [], [{"check": "qa", "pass": passed, "results": results,
+                                                     "advisory_failed": len(advisory), "decide": decide}],
                        [] if passed else ["QA checks failed"])
 
 
