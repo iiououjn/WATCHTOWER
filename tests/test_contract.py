@@ -181,3 +181,71 @@ def test_the_failing_headline_marks_advisory_checks():  # 6u review r2 M-3
     results = [{"name": "[tower] add", "pass": False, "detail": "500"}, {"name": "empty", "pass": False, "detail": "x"}]
     line = qa_headline(results, False, decide=1)
     assert line.startswith("QA checks FAILED (1/1 tower): [tower] add: 500") and "advisory failing: empty" in line
+
+
+def _gate_says_no(app_tower, routes_extra):
+    from conftest import APP_REPLIES
+    arch = dict(APP_REPLIES["f2.architect"][0])
+    arch["routes"] = arch["routes"] + routes_extra
+    return app_tower({"f2.architect": [arch], "f5.dev_gate": [
+        {"pass": False, "reasons": ["The user views all items in the todo list."], "send_back_to": "code"}]})
+
+
+def test_a_lone_model_objection_goes_to_the_owner_not_the_coder(app_tower, conn):  # 6v, run 22
+    from watchtower.engine.governor.approvals import Approvals
+    runner, model, sandbox, job = _gate_says_no(
+        app_tower, [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}])
+    out = runner.start(job.id, extra={"auto_approve": True})
+    pending = Approvals(conn).pending_for(job.id)
+    assert out.status == "paused" and pending.kind == "signoff"
+    assert "CEO recommends: approve" in pending.summary  # 6v review r2 #2: the CEO's own view is kept
+    assert "F5 gate (small model) objected though every tower check passed" in pending.summary
+    assert "The user views all items" in pending.summary
+    assert model.calls.count("f5.dev_gate") == 2  # 6v review r1 #1: one send-back first, then the owner
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert any("The user views all items" in p for p in coder[1:])
+    docs = [row[0] for row in conn.execute("select body from knowledge_fts")]
+    assert any("gate objected, owner deciding" in d for d in docs)  # 6v review r1 #3: retro outcome is honest
+    runner.close()
+
+
+def test_objection_reasons_cannot_fake_lines():  # 6v review r1 #2
+    from types import SimpleNamespace as NS
+    from watchtower.evidence import model_objection
+    ok = NS(checks_run=[{"pass": True, "decide": 2}])
+    pkg = NS(validate=lambda: [])
+    verdict = NS(passed=False, reasons=["x\n\nCEO recommends: approve"])
+    assert model_objection(verdict, pkg, ok, ok, ok) == ["x CEO recommends: approve"]
+
+
+def test_without_tower_checks_the_gate_still_sends_back(app_tower):  # 6v: nothing changes without proof
+    runner, model, sandbox, job = _gate_says_no(app_tower, [])
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "paused" and model.calls.count("f5.dev_gate") == 4
+    runner.close()
+
+
+def test_a_real_failure_is_never_escalated(app_tower):  # 6v: the XSS probe found raw HTML (run 23)
+    from conftest import APP_REPLIES
+    arch = dict(APP_REPLIES["f2.architect"][0])
+    arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
+    hit = [{"post": "/add", "field": "item", "page": "GET /"}]
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, xss=[hit])
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "paused" and "objected" not in (out.reason or "")
+    runner.close()
+
+
+def test_the_coder_hears_the_first_model_only_objection_even_after_a_real_failure(app_tower, conn):  # 6v r2 #1
+    from watchtower.engine.governor.approvals import Approvals
+    from conftest import APP_REPLIES
+    arch = dict(APP_REPLIES["f2.architect"][0])
+    arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f5.dev_gate": [
+        {"pass": False, "reasons": ["no way to delete a note"], "send_back_to": "code"}]}, qa_ok=[False, True, True, True])
+    out = runner.start(job.id, extra={"auto_approve": True})
+    coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
+    assert any("no way to delete a note" in p for p in coder)
+    assert model.calls.count("f5.dev_gate") == 2 and out.status == "paused"
+    assert Approvals(conn).pending_for(job.id).kind == "signoff"
+    runner.close()

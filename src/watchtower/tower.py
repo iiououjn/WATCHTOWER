@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import re
 import shlex
-from http import HTTPStatus
 from pathlib import Path
 from typing import Callable
 
@@ -23,10 +21,11 @@ from watchtower.engine.model_socket import BadModelOutput
 from watchtower.floors.f3_build.office import F3Office
 from watchtower.floors.f5_oversight.office import OversightOffice
 from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
-from watchtower.floors.f5_oversight.oversight import is_failing as _failing, security_package, security_scan
+from watchtower.evidence import (  # noqa: F401 — re-export
+    _evidence, _finding_query, _reference, _status_query, model_objection, objection_note)
+from watchtower.floors.f5_oversight.oversight import security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
 from watchtower.floors.f2_dev.handoff import board_line, f2_handoff, for_gate, static_feedback
-from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.floors.f4_qa_deploy.contract import QA_ADVISORY, coder_token, contract_checks, fresh_token
 from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, qa_headline, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
@@ -141,6 +140,7 @@ class TowerPipeline:
         qa_round = QARound(qa_office, qa, spec)
         qa_round.reset(self._plan_qa(data, plan, qa_office))
         expect = f3_office.expect(spec, plan["routes"])
+        model_heard = False  # 6v: has the coder already heard a model-only gate objection?
         for attempt in range(self._g.max_send_backs + 1):
             written: list[int] = []  # F2 workers write the missing planned files first (MVP unit first)
 
@@ -202,15 +202,20 @@ class TowerPipeline:
             verdict = gate.check(spec, package, DEV_ROUTES, notes)
             self._bus.publish("gate.verdict", {"floor": "dev", "attempt": attempt, "passed": verdict.passed,
                                                "reasons": verdict.reasons, "route": verdict.route}, job_id)
+            lone = model_objection(verdict, package, f3, f4, sec)  # 6v: only the model objects
+            objection = lone if lone and (model_heard or attempt == self._g.max_send_backs) else []
+            model_heard = model_heard or bool(lone)  # the coder hears the first one (send-back below)
             self._post(data, "f5", "done" if verdict.passed else "issue", "gate passed the app" if verdict.passed
-                       else f"gate sent back to {verdict.route}: {'; '.join(verdict.reasons)[:200]}")
-            if verdict.passed:
-                self._retro(data, oversight, passed=True)
+                       else f"gate objected; all tower checks passed, owner decides: {'; '.join(objection)[:160]}"
+                       if objection else f"gate sent back to {verdict.route}: {'; '.join(verdict.reasons)[:200]}")
+            if verdict.passed or objection:
+                self._retro(data, oversight, passed=None if objection else True)
                 evidence = _evidence(package.checks_run, self._g.security_fail_on)
                 ceo_ok, ceo_note = CEO(r["ceo"], ask).recommend(spec, evidence, audit)
                 return {"dev": package.to_dict(), "files": ws.files(), "workspace": str(ws.root),
                         "entry": plan["entry"], "manifest": manifest_of(ws.root, ws.files()),
                         "evidence": evidence, "ceo": {"approve": ceo_ok, "note": ceo_note},
+                        "objection": objection_note(objection) if objection else "",  # owner signs off
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
                                    "Note: written by a local AI and tested only inside the sandbox — untested on "
                                    "your Mac. Read the code before running it.\n"
@@ -245,7 +250,7 @@ class TowerPipeline:
         """Lifecycle: final audit → CEO recommendation → owner sign-off → done. Nothing is released until the
         owner signs off; --yes signs off automatically unless the CEO recommends rejecting."""
         ceo = data.get("ceo") or {}
-        if data.get("auto_approve") and ceo.get("approve") is not False:
+        if data.get("auto_approve") and ceo.get("approve") is not False and not data.get("objection"):
             return {"signoff_id": None}
         answer = data["answer"].replace(  # deploying needs a release, and a release needs this sign-off first
             f"Safer — deploy it isolated, with no internet: watchtower deploy {data['job_id']}",
@@ -255,7 +260,8 @@ class TowerPipeline:
         note = f" — {ceo['note']}" if ceo.get("note") else ""
         return {"signoff_id": self._approvals.request(data["job_id"], "signoff",
                                                      f"{answer}\n\n{spec}Evidence:\n{data['evidence']}\n\n"
-                                                     f"CEO recommends: {verdict}{note}")}
+                                                     f"CEO recommends: {verdict}{note}"
+                                                     + (f"\n{data['objection']}" if data.get("objection") else ""))}
 
     def _signoff(self, data: dict) -> dict:
         if data.get("signoff_id") is not None:
@@ -284,18 +290,19 @@ class TowerPipeline:
                     hits.setdefault(h.source, h.text[:400])
         return "\n".join(list(hits.values())[:2])
 
-    def _retro(self, data: dict, oversight: OversightOffice, passed: bool) -> None:
+    def _retro(self, data: dict, oversight: OversightOffice, passed: bool | None) -> None:
         """Never lets a retrospective problem cost the job: any error is logged and skipped."""
         try:
             self._write_retro(data, oversight, passed)
         except Exception as e:  # noqa: BLE001 — advisory by design
             self._bus.publish("retro.skipped", {"error": type(e).__name__}, data["job_id"])
 
-    def _write_retro(self, data: dict, oversight: OversightOffice, passed: bool) -> None:
+    def _write_retro(self, data: dict, oversight: OversightOffice, passed: bool | None) -> None:
         notes = [f"{n['floor']} {n['kind']}: {n['text']}" for n in self._board.notes(data["job_id"])][-12:]
         lessons = [x for x in oversight.retro(data["spec"], notes) if not INJECTION.search(normalize(x))]
         if lessons:
-            outcome = "passed" if passed else "did not pass"
+            outcome = {True: "passed", False: "did not pass"}.get(
+                passed, "passed tower checks; gate objected, owner deciding")
             self._knowledge.add(f"Lessons from job {data['job_id']} ({data['spec']['title']}, {outcome}):\n"
                                 + "\n".join(f"- {x}" for x in lessons), f"watchtower://retro/{data['job_id']}",
                                 title=f"Retrospective: {data['spec']['title']}", trusted=False)
@@ -438,58 +445,3 @@ class TowerPipeline:
         hits = sorted(hits[:3], key=lambda h: -glass.credibility(h.source))  # step 3: credible sources first
         return "\n".join(("[credible] " if glass.credibility(h.source) == 2 else "")  # outside the data: unforgeable
                          + untrusted(h.source, h.text[:CONTEXT_CHARS]) for h in hits)
-
-
-def _reference(glass: str, text: str) -> list[str]:
-    return [f"Reference for this failure (from the web through Glass {glass}; may be wrong):\n{text}"] if text else []
-
-
-def _status_query(check: dict) -> str:
-    """F4 lookup: the HTTP status of the first failing QA check, as words (never the app's output)."""
-    for r in check.get("results") or []:
-        status = r.get("status")
-        if not r.get("pass") and isinstance(status, int) and 100 <= status <= 599:
-            try:
-                return f"HTTP {status} {HTTPStatus(status).phrase} python http.server"
-            except ValueError:
-                return f"HTTP {status} python http.server"
-    return ""
-
-
-def _finding_query(check: dict, fail_on) -> str:
-    """F5 lookup: the Bandit test id of the first failing finding (secrets need no lookup)."""
-    for f in check.get("findings") or []:
-        if f.get("tool") == "bandit" and _failing(f, fail_on) and re.fullmatch(r"B\d{3}", str(f.get("id"))):
-            return f"bandit {f['id']} python"
-    return ""
-
-
-def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:
-    """Sign-off evidence built from the checks' own results — never from text the app could print."""
-    last = {}
-    for c in checks:
-        last[c.get("check")] = c
-    tests, http, qa, sec = last.get("tests", {}), last.get("http", {}), last.get("qa", {}), last.get("security", {})
-    probe = last.get("routes", {}).get("results") or []
-    results = qa.get("results") or []
-    findings = sec.get("findings") or []
-    serious = sum(_failing(f, fail_on) for f in findings)
-    unknown = sum(f.get("severity") == "UNKNOWN" for f in findings)
-    if unknown:
-        scan = f"INCOMPLETE — a scanner did not run (see watchtower doctor); {serious} serious found"
-    else:
-        scan = f"{'pass' if sec.get('pass') else 'FAIL'} ({serious} serious, {len(findings) - serious} minor)"
-    qa_line = (f"{sum(r.get('pass') is True for r in results)}/{len(results)} checks passed" if results
-               else "no QA checks ran")
-    if qa.get("decide") and len(results) > qa["decide"]:  # 6u: the tower's checks decide, the rest are advisory
-        d, a = results[:qa["decide"]], results[qa["decide"]:]
-        qa_line = (f"{'pass' if qa.get('pass') else 'FAIL'} (tower checks {sum(r.get('pass') is True for r in d)}/"
-                   f"{len(d)}; advisory {sum(r.get('pass') is True for r in a)}/{len(a)} passed)")
-    return "\n".join([
-        f"- coder unit tests (advisory): {'pass' if tests.get('pass') else 'FAIL'}",
-        f"- app answered HTTP {http.get('status')}",
-        *([f"- full app: {sum(isinstance(r.get('status'), int) and r['status'] < 500 and r['status'] != 404 for r in probe)}"
-           f"/{len(probe)} contract routes answered"] if probe else []),
-        f"- QA: {qa_line}",
-        f"- security scan: {scan}",
-    ])
