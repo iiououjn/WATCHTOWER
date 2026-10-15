@@ -29,16 +29,14 @@ def fresh_token() -> str:
     return f"{secrets.randbelow(1_000_000):06d}"
 
 
-_NOT_TEXT = {"id", "index", "count", "qty", "quantity", "amount", "price", "total", "number", "num", "age", "date",
-             "due", "day", "time", "email", "mail", "password", "pass", "url", "link", "phone", "priority",
-             "status", "type", "category", "done", "completed", "checked", "is", "has", "q", "query", "search",
-             "token", "csrf", "rating", "score", "year"}
+_MODIFIERS = {"new", "my", "your", "user", "guest", "first", "last", "full", "short", "long", "main", "the"}
 
 
 def _plain_text(field: str) -> bool:
-    """'new_item', 'user_name', 'messageText' are text; 'item_count', 'dueDate', 'todo_id' are not (6w, run 24)."""
+    """'new_item', 'user_name', 'messageText' are text; 'item_count', 'item_cost', 'dueDate', 'todo_id' are not:
+    every name part must be a text word or a harmless modifier (6w, run 24; review r1)."""
     parts = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", field).lower().split("_")
-    return any(p in _TEXT for p in parts) and not any(p in _NOT_TEXT for p in parts)
+    return any(p in _TEXT for p in parts) and all(p in _TEXT or p in _MODIFIERS for p in parts)
 
 
 def _adds(route: dict) -> bool:
@@ -55,8 +53,11 @@ def contract_checks(routes: list[dict], token: str) -> tuple[list[dict], int]:
     if not pages or route is None:
         return [], 0
     page = pages[0]["path"]
+    forms = [r for r in routes if r["method"] == "GET" and not r["fields"] and _FORM.search(r["shows"])
+             and r["path"] != page]
+    form_page = forms[0]["path"] if forms else page  # 6w review r1: the form may live on its own page
     values = {f: f"{token}{i} {token}" for i, f in enumerate(route["fields"])}
-    raw = [{"name": f"[tower] GET {page} has the add form"[:80], "method": "GET", "path": page, "form": {},
+    raw = [{"name": f"[tower] GET {form_page} has the add form"[:80], "method": "GET", "path": form_page, "form": {},
             "expect_status": 200, "expect_text": "",
             "expect_form": {"action": route["path"], "fields": route["fields"]}}]
     raw += [{"name": f"[tower] POST {route['path']} adds"[:80], "method": "POST", "path": route["path"],

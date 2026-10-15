@@ -71,19 +71,28 @@ for c in json.loads(sys.argv[2]):
     ok = status == c["expect_status"] and (whole or split_ok)
     spec = c.get("expect_form")  # 6w (run 25): a browser user needs a real form to add anything
     if ok and spec:
-        forms = []
+        forms, inside = [], []
 
         class Forms(html.parser.HTMLParser):
             def handle_starttag(self, tag, attrs):
                 a = dict(attrs)
-                if tag == "form":
-                    act = urllib.parse.urlparse(a.get("action") or c["path"]).path or c["path"]
-                    forms.append((act, (a.get("method") or "get").lower(), set()))
-                elif tag in ("input", "textarea", "select") and forms and a.get("name"):
+                if tag == "form":  # resolved as a browser would: relative, absolute, empty (= this page)
+                    act = urllib.parse.urlparse(urllib.parse.urljoin(base + c["path"], a.get("action") or "")).path
+                    forms.append((act.rstrip("/") or "/", (a.get("method") or "get").lower(), set()))
+                    inside[:] = [True]
+                elif tag in ("input", "textarea", "select") and inside and a.get("name"):
                     forms[-1][2].add(a["name"])
-        Forms().feed(seen)
-        ok = any(act == spec["action"] and m == "post" and set(spec["fields"]) <= names for act, m, names in forms)
-        if not ok:
+
+            def handle_endtag(self, tag):
+                if tag == "form":
+                    inside[:] = []  # inputs after </form> submit nothing
+        try:
+            Forms().feed(seen)
+        except Exception as e:  # odd HTML fails this check, never the whole QA run
+            detail = "the page HTML could not be parsed: " + type(e).__name__
+        target = spec["action"].rstrip("/") or "/"
+        ok = any(act == target and m == "post" and set(spec["fields"]) <= names for act, m, names in forms)
+        if not ok and not detail:
             detail = (f"the page has no <form method='post' action='{spec['action']}'> with inputs named "
                       f"{', '.join(spec['fields'])}; found forms: {[(a, m, sorted(n)) for a, m, n in forms][:3]}")
     if not ok and not detail:

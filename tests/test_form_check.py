@@ -49,3 +49,37 @@ def test_fields_are_classified_by_name_parts():  # run 24: new_item
         return contract_checks([LIST, {"method": "POST", "path": "/add", "fields": fields, "shows": ""}], "1")[1]
     assert tower(["new_item"]) == tower(["user_name", "messageText"]) == 3
     assert tower(["item_count"]) == tower(["dueDate"]) == tower(["todo_id"]) == 0
+
+
+def _with(page_html):
+    return ECHO_APP.replace('self.wfile.write(("<ul>"', f"self.wfile.write(('{page_html}' + \"<ul>\"")
+
+
+def test_a_relative_or_slashed_action_counts(tmp_path):  # 6w review r1 #2, #6
+    for action in ("add", "./add", "/add/", "http://127.0.0.1/add?x=1"):
+        assert _form_check(tmp_path, _with(FORM.replace('action="/add"', f'action="{action}"')))["pass"] is True, action
+
+
+def test_inputs_after_the_form_closed_do_not_count(tmp_path):  # 6w review r1 #4
+    page = '<form method="post" action="/add"><button>Add</button></form><input name="item">'
+    assert _form_check(tmp_path, _with(page))["pass"] is False
+
+
+def test_broken_html_fails_the_check_not_the_run(tmp_path):  # 6w review r1 #5
+    page = '<![if !IE]><form method="post" action="/add"><input name="item"></form>'
+    result = _form_check(tmp_path, _with(page))
+    assert result["results"][0]["name"] == "form"  # the run printed its result line
+
+
+def test_the_form_check_runs_on_the_form_page_when_there_is_one():  # 6w review r1 #1
+    routes = [LIST, {"method": "GET", "path": "/new", "fields": [], "shows": "a form to add an item"},
+              {"method": "POST", "path": "/add", "fields": ["item"], "shows": ""}]
+    checks, decide = contract_checks(routes, "1")
+    assert checks[0]["path"] == "/new" and checks[2]["path"] == "/"
+
+
+def test_compound_typed_fields_are_not_text():  # 6w review r1 #3
+    def tower(fields):
+        return contract_checks([LIST, {"method": "POST", "path": "/add", "fields": fields, "shows": ""}], "1")[1]
+    assert tower(["item_name", "item_cost"]) == tower(["task_deadline"]) == tower(["note_color"]) == 0
+    assert tower(["new_item"]) == tower(["user_name"]) == tower(["first_name", "message"]) == 3
