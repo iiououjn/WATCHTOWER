@@ -151,7 +151,9 @@ def test_first_text(text: str, shows: set[str]) -> str:
         pieces = [p for p in map(str.strip, _MARKUP.split(text)) if p]
         text = pieces[0] if len(pieces) == 1 and not _ESCAPED.search(pieces[0]) and re.search(r"\w{2,}",
                                                                                             pieces[0]) else ""
-    return "" if len(text.split()) > MAX_TEXT_WORDS or " ".join(text.lower().split()) in shows else text
+    plain = lambda t: " ".join(t.lower().split()).rstrip(".!?:;,")  # run 21: the description ended with "."
+    copied = plain(text) in {plain(s) for s in shows}
+    return "" if len(text.split()) > MAX_TEXT_WORDS or copied else text
 
 
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
