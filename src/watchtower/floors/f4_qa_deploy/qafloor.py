@@ -100,8 +100,8 @@ for c in json.loads(sys.argv[2]):
     if not ok and not detail:
         coded = [e for e in dict.fromkeys((urllib.parse.quote_plus(want), urllib.parse.quote(want)))
                  if e != want and e in body]
-        hint = (f"the page shows it still URL-encoded ({coded[0][:60]!r}): decode form data with "
-                "urllib.parse.parse_qs; " if want and coded else "")
+        hint = (f"the page shows it still URL-encoded ({coded[0][:60]!r}): decode with "
+                "urllib.parse.parse_qs and never quote_plus() it again; " if want and coded else "")
         detail = f"{hint}expected {c['expect_status']} with {want!r}, got {status}: {body[:300]}"
     results.append({"name": c["name"], "pass": ok, "status": status, "detail": detail})
 try:
@@ -342,7 +342,8 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
     coded = next((r.get("name") for r in results if str(r.get("detail") or "").startswith("the page shows it still URL")), None)
     if coded is not None:  # run 14: one line, at the head, however long the failing lines before it are
         error += (("\n" if error else "") + f"Form data: check {str(coded)[:40]!r} shows a value still URL-encoded "
-                  "(spaces as + or %20): decode POST bodies with urllib.parse.parse_qs.")
+                  "(spaces as + or %20): parse_qs already decodes POST bodies; never call quote()/quote_plus() on text "
+                  "you store or show. In HTML use html.escape(text).")
     summary = f"QA checks {'passed' if passed else 'FAILED'}:\n" + (error + "\n" if error else "") + "\n".join(lines)
     if not passed:
         summary += f"\nApp output:\n{str(app_log)[-800:]}"

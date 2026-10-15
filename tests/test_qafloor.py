@@ -384,6 +384,16 @@ def test_the_url_encoded_hint_reaches_the_head_of_the_summary():
     assert summary.splitlines()[1].startswith("Form data:")
 
 
+def test_url_encoded_hint_names_quote_plus_and_html_escape():
+    """Run 28: the coder used parse_qs but wrapped the text in quote_plus() on save and display; the hint said
+    only 'decode with parse_qs', which it already did, for 4 attempts."""
+    checks = [_c("list", {}, 200, "New todo", "GET", "/")]
+    qa = [{"name": "list", "pass": False, "status": 200,
+           "detail": "the page shows it still URL-encoded ('New+todo'): x"}]
+    head = run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py", checks).summary.splitlines()[1]
+    assert "quote_plus" in head and "html.escape" in head and len(head) <= 300
+
+
 def _post(form, status=200, name="add"):
     return {"checks": [{"name": name, "method": "POST", "path": "/add", "form": form, "expect_status": status,
                         "expect_text": "added"}]}
