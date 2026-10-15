@@ -25,7 +25,7 @@ TEXT_NOTE = ("\nYour last checks had no usable expect_text. expect_text must be 
 # Runs INSIDE the sandbox. argv: entry, checks-JSON. Starts the app, runs each check in order against it,
 # prints one WATCHTOWER_QA line with the results, then the app's log tail.
 QA_SCRIPT = """\
-import html, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+import html, html.parser, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 port = os.environ.get("WT_PORT", "8000")
 base = "http://127.0.0.1:" + port
 log = open("/tmp/app.log", "wb")
@@ -44,13 +44,13 @@ for _ in range(40):
 results = []
 for c in json.loads(sys.argv[2]):
     data = urllib.parse.urlencode(c["form"]).encode() if c["method"] == "POST" else None
-    status, body, detail = None, "", ""
+    status, body, detail, url = None, "", "", base + c["path"]
     try:
         with urllib.request.urlopen(urllib.request.Request(base + c["path"], data=data, method=c["method"]),
                                     timeout=3) as r:
-            status, body = r.status, r.read(200000).decode(errors="replace")
+            status, body, url = r.status, r.read(200000).decode(errors="replace"), r.geturl()
     except urllib.error.HTTPError as e:
-        status, body = e.code, e.read(200000).decode(errors="replace")
+        status, body, url = e.code, e.read(200000).decode(errors="replace"), e.geturl() or url
     except Exception as e:
         detail = type(e).__name__ + ": " + str(e)[:200]
     want = c["expect_text"]  # escaped text renders the same in a browser: "Tom &amp; Jerry" shows "Tom & Jerry"
@@ -69,6 +69,34 @@ for c in json.loads(sys.argv[2]):
     split_ok = len(pieces) > 1 and all(in_node(t) for t in pieces) and not any(
         re.search(r"&lt;/?\\s*" + n + r"\\b", seen, re.I) for n in names)
     ok = status == c["expect_status"] and (whole or split_ok)
+    spec = c.get("expect_form")  # 6w (run 25): a browser user needs a real form to add anything
+    if ok and spec:
+        forms, inside = [], []
+
+        class Forms(html.parser.HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                a = dict(attrs)
+                if tag == "form" and inside:
+                    return  # a browser ignores a <form> inside an open form
+                if tag == "form":  # resolved as a browser would, against the page reached after redirects
+                    act = urllib.parse.urlparse(urllib.parse.urljoin(url, a.get("action") or "")).path
+                    forms.append((act.rstrip("/") or "/", (a.get("method") or "get").lower(), set()))
+                    inside[:] = [True]
+                elif tag in ("input", "textarea", "select") and inside and a.get("name"):
+                    forms[-1][2].add(a["name"])
+
+            def handle_endtag(self, tag):
+                if tag == "form":
+                    inside[:] = []  # inputs after </form> submit nothing
+        try:
+            Forms().feed(seen)
+        except Exception as e:  # odd HTML fails this check, never the whole QA run
+            detail, forms = "the page HTML could not be parsed: " + type(e).__name__, []
+        target = urllib.parse.urlparse(spec["action"]).path.rstrip("/") or "/"
+        ok = any(act == target and m == "post" and set(spec["fields"]) <= names for act, m, names in forms)
+        if not ok and not detail:
+            detail = (f"the page has no <form method='post' action='{spec['action']}'> with inputs named "
+                      f"{', '.join(spec['fields'])}; found forms: {[(a, m, sorted(n)) for a, m, n in forms][:3]}")
     if not ok and not detail:
         coded = [e for e in dict.fromkeys((urllib.parse.quote_plus(want), urllib.parse.quote(want)))
                  if e != want and e in body]
@@ -177,8 +205,14 @@ def _check(raw) -> dict | None:
     if status < 400 and form and all(not v.strip() for v in form.values()):
         return None  # run 17: nothing but blanks must succeed — no correct app passes it; 4xx is a real check
     name = _CONTROL.sub("", _str(raw.get("name"), 80) or "")
-    return {"name": name or path, "method": method, "path": path, "form": dict(form),
-            "expect_status": status, "expect_text": _str(raw.get("expect_text"), 200) or ""}
+    check = {"name": name or path, "method": method, "path": path, "form": dict(form),
+             "expect_status": status, "expect_text": _str(raw.get("expect_text"), 200) or ""}
+    want = raw.get("expect_form")  # 6w: the page must offer a POST form to this action with these inputs
+    if (isinstance(want, dict) and isinstance(want.get("action"), str) and _PATH.fullmatch(want["action"])
+            and isinstance(want.get("fields"), list) and 0 < len(want["fields"]) <= 6
+            and all(isinstance(f, str) and _FIELD.fullmatch(f) for f in want["fields"])):
+        check["expect_form"] = {"action": want["action"], "fields": list(want["fields"])}
+    return check
 
 
 _FIELD = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,30}")
