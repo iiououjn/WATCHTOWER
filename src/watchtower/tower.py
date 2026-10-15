@@ -140,6 +140,7 @@ class TowerPipeline:
         qa_round = QARound(qa_office, qa, spec)
         qa_round.reset(self._plan_qa(data, plan, qa_office))
         expect = f3_office.expect(spec, plan["routes"])
+        model_heard = False  # 6v: has the coder already heard a model-only gate objection?
         for attempt in range(self._g.max_send_backs + 1):
             written: list[int] = []  # F2 workers write the missing planned files first (MVP unit first)
 
@@ -201,7 +202,9 @@ class TowerPipeline:
             verdict = gate.check(spec, package, DEV_ROUTES, notes)
             self._bus.publish("gate.verdict", {"floor": "dev", "attempt": attempt, "passed": verdict.passed,
                                                "reasons": verdict.reasons, "route": verdict.route}, job_id)
-            objection = model_objection(verdict, package, f3, f4, sec, attempt)  # 6v: only the model objects
+            lone = model_objection(verdict, package, f3, f4, sec)  # 6v: only the model objects
+            objection = lone if lone and (model_heard or attempt == self._g.max_send_backs) else []
+            model_heard = model_heard or bool(lone)  # the coder hears the first one (send-back below)
             self._post(data, "f5", "done" if verdict.passed else "issue", "gate passed the app" if verdict.passed
                        else f"gate objected; all tower checks passed, owner decides: {'; '.join(objection)[:160]}"
                        if objection else f"gate sent back to {verdict.route}: {'; '.join(verdict.reasons)[:200]}")
@@ -209,11 +212,10 @@ class TowerPipeline:
                 self._retro(data, oversight, passed=None if objection else True)
                 evidence = _evidence(package.checks_run, self._g.security_fail_on)
                 ceo_ok, ceo_note = CEO(r["ceo"], ask).recommend(spec, evidence, audit)
-                if objection:  # the owner signs off even under --yes, with the objection in front of them
-                    ceo_ok, ceo_note = False, objection_note(objection, ceo_note)
                 return {"dev": package.to_dict(), "files": ws.files(), "workspace": str(ws.root),
                         "entry": plan["entry"], "manifest": manifest_of(ws.root, ws.files()),
                         "evidence": evidence, "ceo": {"approve": ceo_ok, "note": ceo_note},
+                        "objection": objection_note(objection) if objection else "",  # owner signs off
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
                                    "Note: written by a local AI and tested only inside the sandbox — untested on "
                                    "your Mac. Read the code before running it.\n"
@@ -248,7 +250,7 @@ class TowerPipeline:
         """Lifecycle: final audit → CEO recommendation → owner sign-off → done. Nothing is released until the
         owner signs off; --yes signs off automatically unless the CEO recommends rejecting."""
         ceo = data.get("ceo") or {}
-        if data.get("auto_approve") and ceo.get("approve") is not False:
+        if data.get("auto_approve") and ceo.get("approve") is not False and not data.get("objection"):
             return {"signoff_id": None}
         answer = data["answer"].replace(  # deploying needs a release, and a release needs this sign-off first
             f"Safer — deploy it isolated, with no internet: watchtower deploy {data['job_id']}",
@@ -258,7 +260,8 @@ class TowerPipeline:
         note = f" — {ceo['note']}" if ceo.get("note") else ""
         return {"signoff_id": self._approvals.request(data["job_id"], "signoff",
                                                      f"{answer}\n\n{spec}Evidence:\n{data['evidence']}\n\n"
-                                                     f"CEO recommends: {verdict}{note}")}
+                                                     f"CEO recommends: {verdict}{note}"
+                                                     + (f"\n{data['objection']}" if data.get("objection") else ""))}
 
     def _signoff(self, data: dict) -> dict:
         if data.get("signoff_id") is not None:
