@@ -8,6 +8,9 @@ MAX_FILE_BYTES = 100_000
 MAX_FILES = 30
 
 
+TOWER_MARK = '"""Web server written by the tower.'
+
+
 class WorkspaceError(ValueError):
     pass
 
@@ -78,6 +81,9 @@ class Workspace:
         parts, used = [], 0
         for name in self.files():
             body = (self.root / name).read_text(errors="replace")
+            if body.startswith(TOWER_MARK):  # 7a: the tower's own server, as a stub: the coder's files stay in view
+                body = "\n".join([body.splitlines()[0]] + re.findall(r"(?m)^[A-Z_]+ = .*$", body)[:6]
+                                  + ["(rest of the tower's web server not shown)"]) + "\n"
             room = max_chars - used
             if room <= 200:
                 parts.append("(truncated: more files not shown)")

@@ -6,24 +6,32 @@ from __future__ import annotations
 import sys
 from pathlib import PurePosixPath
 
-from watchtower.engine.workspace import Workspace
+import html
+
+from watchtower.engine.workspace import TOWER_MARK, Workspace
 from watchtower.floors.f4_qa_deploy.contract import contract_checks
 
 STORE, STORE_TESTS = "store.py", "test_store.py"
-SHADOWS = {"html.py", "os.py", "traceback.py", "http", "urllib"}  # what the server imports: a coder copy would win
-MARK = '"""Web server written by the tower.'
+SHADOWS = {"html.py", "os.py", "traceback.py", "http", "urllib", "store"}  # 'store/' would shadow store.py  # what the server imports: a coder copy would win
+MARK = TOWER_MARK
 
 TEMPLATE = '''"""Web server written by the tower. Do not edit: write store.py (add(entry) and items())."""
-import html
-import os
-import traceback
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+import sys
 
-import store
+HERE = sys.path.pop(0)  # the standard library first: a file named http.py or copy.py here must not replace it
+import html  # noqa: E402
+import os  # noqa: E402
+import threading  # noqa: E402
+import traceback  # noqa: E402
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
+from urllib.parse import parse_qs, urlparse  # noqa: E402
+
+sys.path.insert(0, HERE)
+import store  # noqa: E402
 
 __CONFIG__
 MAX_BODY = 100_000
+LOCK = threading.Lock()  # one request at a time touches the store: a JSON-file store stays whole
 
 
 def form_html():
@@ -35,7 +43,10 @@ def form_html():
 
 def items_html():
     rows = []
-    for item in store.items():
+    with LOCK:
+        saved = store.items() or []
+        saved = list(saved.values() if isinstance(saved, dict) else saved)
+    for item in saved:
         if isinstance(item, dict):
             text = " - ".join(html.escape(str(item.get(f, ""))) for f in FIELDS)
         else:
@@ -45,6 +56,7 @@ def items_html():
 
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = 15  # a slow or lying client cannot hold a thread forever
     def send_page(self, status, body, location=None):
         data = ("<!doctype html><html><head><meta charset=\\"utf-8\\"><title>" + html.escape(TITLE)
                 + "</title></head><body><h1>" + html.escape(TITLE) + "</h1>" + body + "</body></html>").encode()
@@ -85,7 +97,8 @@ class Handler(BaseHTTPRequestHandler):
         if not all(entry.values()):
             return self.send_page(400, "<p>Please fill in every field.</p>" + form_html())
         try:
-            store.add(entry)
+            with LOCK:
+                store.add(entry)
         except Exception:
             traceback.print_exc()
             return self.send_page(500, "<p>Server error</p>")
@@ -100,9 +113,14 @@ if __name__ == "__main__":
 
 
 def _store_purpose(fields: list[str]) -> str:
-    keys = ", ".join(fields)
-    return (f"plain Python, no web code: add(entry) saves one dict with keys {keys}; items() returns all saved "
-            "dicts, oldest first (a module-level list is fine)")[:200]
+    keys = ", ".join(fields)[:60]
+    return (f"no web code: add(entry) keeps a dict ({keys}) as given (the server escapes it) in memory, a "
+            "module-level list, never files; items() returns them oldest first")[:200]
+
+
+def page_text(title: str) -> str:
+    """What F3 can expect on the tower's home page: the title, when HTML shows it unchanged."""
+    return title if title and html.escape(title) == title else ""
 
 
 def _drop_stale(ws: Workspace, previous, keep: str = "") -> None:
@@ -133,7 +151,7 @@ def apply(plan: dict, title: str, ws: Workspace, previous=frozenset()) -> tuple[
     fields = list(checks[1]["form"])
     entry = plan["entry"]
     _drop_stale(ws, previous, keep=entry)
-    config = "\n".join(f"{k} = {v!r}" for k, v in (("TITLE", str(title)[:100]), ("FIELDS", fields),
+    config = "\n".join(f"{k} = {v!r}" for k, v in (("TITLE", str(title).encode("utf-8", "replace").decode()[:100]), ("FIELDS", fields),
                        ("LIST_PAGE", page), ("FORM_PAGE", form_page), ("ADD_PATH", add)))
     ws.write(entry, TEMPLATE.replace("__CONFIG__", config))
     files = [{"path": entry, "purpose": "web server, written by the tower: do not change it"},

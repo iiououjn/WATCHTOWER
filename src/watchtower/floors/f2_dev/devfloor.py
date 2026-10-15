@@ -379,7 +379,10 @@ class DevFloor:
 
     def _problems(self) -> list[str]:
         """The tower's own static checks on the files on disk: they block the F2 handoff (phase 6s)."""
-        return handler_state_problems(self._ws) + (import_problems(self._ws) if self._stdlib_only else [])
+        found = handler_state_problems(self._ws) + (import_problems(self._ws) if self._stdlib_only else [])
+        return [f"write {STORE} with add(entry) and items(): the tower's web server imports it"
+                if self.owned and p.endswith(f"imports {STORE[:-3]} (not in the Python standard library)") else p
+                for p in found]
 
     def _diagnose_tests(self, report: str) -> str:
         """Floor 2 HR, only when the coder is stuck: plain words on why the same tests keep failing. Advisory."""

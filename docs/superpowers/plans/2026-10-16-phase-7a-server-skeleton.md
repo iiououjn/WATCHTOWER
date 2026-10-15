@@ -34,3 +34,10 @@ server itself; the 7B writes plain Python: `store.add(entry)` and `store.items()
 3. Owned guard: delete, case variants (App.py), ./app.py, path normalisation.
 4. Re-plan to a non-skeleton plan; tower checks still pass against the template with a correct store.
 5. Coder prompt: store contract visible in the first unit prompt.
+
+## Reviews: r1 6 fixed; r2 (flow) 5 of 7 fixed; r3 (security) 5 of 6 fixed.
+Deferred:
+- No CSRF token / Host check (local app on 127.0.0.1; owner-only).
+- Unit order: test_store.py is written before store.py (F2 rounds fix it).
+- No cap on items rendered (memory bound only).
+- F3 smoke test flake seen once in a full-suite run; did not reproduce.

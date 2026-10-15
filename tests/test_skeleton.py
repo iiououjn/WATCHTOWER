@@ -35,7 +35,7 @@ def _qa(tmp_path, routes, store=STORE, title="My <b>Todo</b>"):
     plan, owned = apply(_plan(routes), title, Workspace(tmp_path))
     (tmp_path / "store.py").write_text(store)
     checks, decide = contract_checks(routes, "240940")
-    proc = subprocess.run([sys.executable, "-c", QA_SCRIPT, plan["entry"], json.dumps(checks)], cwd=tmp_path,
+    proc = subprocess.run([sys.executable, "-I", "-c", QA_SCRIPT, plan["entry"], json.dumps(checks)], cwd=tmp_path,
                           capture_output=True, text=True, timeout=60, env={**os.environ, "WT_PORT": str(_port())})
     return run_qa(lambda cmd: SandboxResult(proc.returncode, proc.stdout, proc.stderr, False), plan["entry"],
                   checks, decide=decide)
@@ -122,6 +122,7 @@ def test_tower_writes_the_server_and_tells_the_coder_the_store_contract(app_towe
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
     assert coder and "store.py" in coder[0] and "add(entry)" in coder[0]
     assert "written by the tower" in Workspace(sandbox.workspace(job.id)).read("app.py")
+    assert "f3.lead" not in model.calls  # 7a review r2: F3 expects the title, not a model guess
     runner.close()
 
 
@@ -157,3 +158,56 @@ def test_coder_cannot_shadow_modules_the_server_imports(tmp_path):
     for path in ("html.py", "urllib/parse.py", "traceback.py"):
         notes = floor._write([{"path": path, "content": "x"}])
         assert path not in Workspace(tmp_path).files() and any("store.py" in n for n in notes), path
+
+
+def test_coder_modules_named_like_the_stdlib_cannot_replace_it(tmp_path):  # 7a review r3
+    (tmp_path / "http.py").write_text("raise SystemExit('shadowed')\n")
+    (tmp_path / "copy.py").write_text("raise SystemExit('shadowed')\n")
+    assert _qa(tmp_path, TODO).checks_run[-1]["pass"] is True
+
+
+def test_store_package_and_robustness(tmp_path):
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    _, floor.owned = apply(_plan(TODO), "T", Workspace(tmp_path))
+    floor._write([{"path": "store/x.py", "content": "x"}])
+    assert "store/x.py" not in Workspace(tmp_path).files()
+    source = (tmp_path / "app.py").read_text()
+    assert "timeout = 15" in source and "LOCK" in source
+
+
+def test_a_lone_surrogate_title_still_serves(tmp_path):
+    assert _qa(tmp_path, TODO, title="Todo \ud800").checks_run[-1]["pass"] is True
+
+
+def test_snapshot_shows_the_tower_server_as_a_stub(tmp_path):  # 7a review r2: store.py must stay visible
+    ws = Workspace(tmp_path)
+    apply(_plan(TODO), "Todo", ws)
+    ws.write("store.py", STORE)
+    snap = ws.snapshot(1500)
+    assert "ENTRIES = []" in snap and "ADD_PATH = '/add'" in snap and "def items_html" not in snap
+
+
+def test_store_contract_says_raw_text_in_memory():
+    from watchtower.floors.f2_dev.skeleton import _store_purpose
+    text = _store_purpose(["item"])
+    assert "as given" in text and "memory" in text and "files" in text and len(text) <= 200
+
+
+def test_page_text_for_f3_is_the_title_when_it_reads_the_same():
+    from watchtower.floors.f2_dev.skeleton import page_text
+    assert page_text("Todo List") == "Todo List" and page_text("Tom & Jerry") == ""
+
+
+def test_items_as_a_dict_render_its_values(tmp_path):
+    store = "E = {}\n\ndef add(entry):\n    E[len(E)] = entry\n\ndef items():\n    return E\n"
+    assert _qa(tmp_path, TODO, store).checks_run[-1]["pass"] is True
+
+
+def test_missing_store_problem_names_store_py(tmp_path):
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    _, floor.owned = apply(_plan(TODO), "T", Workspace(tmp_path))
+    problems = floor._problems()
+    assert problems and all("not in the Python standard library" not in p for p in problems)
+    assert any("write store.py" in p for p in problems)
