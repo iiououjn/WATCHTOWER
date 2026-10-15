@@ -312,7 +312,7 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
     if not passed:
         summary += f"\nApp output:\n{str(app_log)[-800:]}"
     return WorkPackage("f4", summary, [entry], [], [{"check": "qa", "pass": passed, "results": results,
-                                                     "advisory_failed": len(advisory)}],
+                                                     "advisory_failed": len(advisory), "decide": decide}],
                        [] if passed else ["QA checks failed"])
 
 

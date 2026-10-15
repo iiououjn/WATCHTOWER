@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import shlex
 from http import HTTPStatus
 from pathlib import Path
@@ -146,7 +147,7 @@ class TowerPipeline:
             def on_unit(i: int, n: int, paths: list[str]) -> None:
                 written.append(i)
                 self._post(data, "f2", "doing", f"coder unit {i}/{n} written: {', '.join(paths)}")
-            contract = contract_checks(plan["routes"], job_id[:6])  # 6u: the deciding F4 checks, shown to the coder first
+            contract = contract_checks(plan["routes"], job_id[:6])[0]  # 6u: the deciding F4 checks, shown to the coder first
             unit_notes = dev.write_units(spec, plan, contract + qa_round.coder_checks, on_unit=on_unit) if units_due else []
             units_due = False
             present = {p.lower() for p in ws.files()}
@@ -169,8 +170,14 @@ class TowerPipeline:
                 self._handoff(data, "f3", attempt, f3.checks_run[-1]["pass"], f3.open_questions)
                 self._post(data, "f3", "done" if f3.checks_run[-1]["pass"] else "issue", f3.summary.splitlines()[0])
                 if f3.checks_run[-1]["pass"]:
-                    f4 = run_qa(run, plan["entry"], contract + qa_round.ensure(plan["routes"], ws.snapshot()),
-                                decide=len(contract))
+                    tower_qa, decide = contract_checks(plan["routes"], secrets.token_hex(3))  # fresh: never seen
+                    try:
+                        model_qa = qa_round.ensure(plan["routes"], ws.snapshot())
+                    except BadModelOutput:  # the small model wrote nothing usable: the tower's checks still decide
+                        if not tower_qa:
+                            raise
+                        model_qa = []
+                    f4 = run_qa(run, plan["entry"], tower_qa + model_qa, decide=decide)
                     self._handoff(data, "f4", attempt, f4.checks_run[-1]["pass"], f4.open_questions)
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
                                qa_headline(f4.checks_run[-1].get("results") or [],
@@ -185,7 +192,8 @@ class TowerPipeline:
                         audit = oversight.audit(spec, focus, ws.snapshot(3000), f4.summary)
                 later = [p for p in (f3, f4, sec) if p is not None]
                 f2_summary, f2_questions, notes = for_gate(package.summary, package.open_questions, tests_ok)
-                notes += (QA_ADVISORY,) if f4 is not None and f4.checks_run[-1].get("advisory_failed") else ()
+                notes += (QA_ADVISORY,) if f4 is not None and f4.checks_run[-1]["pass"] and f4.checks_run[-1].get(
+                    "advisory_failed") else ()
                 package = WorkPackage("dev", "\n\n".join([f2_summary] + [p.summary for p in later]
                                                          + ([f"Oversight audit:\n{audit}"] if audit else []))
                                       + f"\n\nCode:\n{ws.snapshot(3000)}", ws.files(), [],
@@ -473,6 +481,10 @@ def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:
         scan = f"{'pass' if sec.get('pass') else 'FAIL'} ({serious} serious, {len(findings) - serious} minor)"
     qa_line = (f"{sum(r.get('pass') is True for r in results)}/{len(results)} checks passed" if results
                else "no QA checks ran")
+    if qa.get("decide") and len(results) > qa["decide"]:  # 6u: the tower's checks decide, the rest are advisory
+        d, a = results[:qa["decide"]], results[qa["decide"]:]
+        qa_line = (f"{'pass' if qa.get('pass') else 'FAIL'} (tower checks {sum(r.get('pass') is True for r in d)}/"
+                   f"{len(d)}; advisory {sum(r.get('pass') is True for r in a)}/{len(a)} passed)")
     return "\n".join([
         f"- coder unit tests (advisory): {'pass' if tests.get('pass') else 'FAIL'}",
         f"- app answered HTTP {http.get('status')}",
