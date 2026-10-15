@@ -152,9 +152,10 @@ def _bound(tree: ast.AST) -> tuple[set[str], set[str], set[str]] | None:
     return names, {p for p in plain if p in names}, dotted
 
 
-def repair_imports(source: str) -> tuple[str, list[str]]:
+def repair_imports(source: str, skip: frozenset[str] = frozenset()) -> tuple[str, list[str]]:
     """Add a missing standard import the coder used as `os.path…` but never imported (bound nowhere in the file).
-    Static only: the file is parsed, never run. Returns the new text and the modules added."""
+    Static only: the file is parsed, never run. Returns the new text and the modules added. `skip`: bare names a sibling file defines (6x review r2: a
+    stdlib import must not hide `from util import escape`, which repair_names adds)."""
     if len(source) > MAX_REPAIR_BYTES:
         return source, []
     try:
@@ -168,6 +169,7 @@ def repair_imports(source: str) -> tuple[str, list[str]]:
         return source, []
     bound, plain, dotted = found
     wanted: set[str] = set()
+    poisoned: set[str] = set()
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)):
             continue
@@ -181,11 +183,11 @@ def repair_imports(source: str) -> tuple[str, list[str]]:
         if _has(name, attr):
             wanted.add(name)
         else:
-            wanted = set()  # a use that is not this module (datetime.now): add no module import, bare names may still be
-            break
+            poisoned.add(name)  # a use that is not this module (datetime.now): no import of it, the rest still repaired
+    wanted -= poisoned
     used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
     by_module: dict[str, list[str]] = {}
-    for name in sorted(used & set(BARE) - bound):
+    for name in sorted(used & set(BARE) - bound - skip):
         by_module.setdefault(BARE[name], []).append(name)
     froms = [f"from {m} import {', '.join(names)}" for m, names in sorted(by_module.items())]
     if not wanted and not froms:
@@ -197,6 +199,11 @@ def repair_imports(source: str) -> tuple[str, list[str]]:
 def _insert(source: str, tree: ast.Module, new: list[str]) -> str:
     """Add lines after a module docstring and any __future__ imports, keeping the file's line breaks."""
     after = 0
+    head = source.splitlines()[:2]
+    if head and head[0].startswith("#!"):  # a shebang and a coding cookie must stay on lines 1-2
+        after = 1
+    if len(head) > after and head[after].lstrip().startswith("#") and "coding" in head[after]:
+        after += 1
     for stmt in tree.body:
         if (isinstance(stmt, ast.ImportFrom) and stmt.module == "__future__") or (
                 stmt is tree.body[0] and isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)
@@ -275,6 +282,18 @@ def repair_main(source: str) -> tuple[str, str | None]:
     if len(text.encode("utf-8", "replace")) > MAX_REPAIR_BYTES:  # never grow a file past what Workspace takes
         return source, None
     return text, name
+
+
+def sibling_names(ws, path: str) -> frozenset[str]:
+    """Top-level functions and classes the other workspace .py files define: BARE names among them are the
+    coder's own, never the stdlib's."""
+    out: set[str] = set()
+    for f in ws.files():
+        if f.endswith(".py") and f != path:
+            tree = _parse(ws.read(f))
+            if tree is not None:
+                out |= _top_names(tree)
+    return frozenset(out)
 
 
 def _top_names(tree: ast.Module) -> set[str]:

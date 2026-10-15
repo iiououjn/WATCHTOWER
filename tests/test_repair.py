@@ -245,3 +245,35 @@ def test_bare_name_that_is_an_attribute_or_keyword_is_left_alone():
 def test_module_use_that_is_not_a_module_still_gets_bare_imports():
     fixed, added = repair_imports("x = datetime.now()\nq = parse_qs(s)\n")
     assert added == ["from urllib.parse import parse_qs"] and fixed.startswith("from urllib.parse import parse_qs\n")
+
+
+def test_name_a_sibling_defines_is_not_imported_from_the_stdlib():
+    src = "print(escape('<'))\n"
+    assert repair_imports(src, frozenset({"escape"})) == (src, [])
+
+
+def test_shebang_and_coding_cookie_stay_first():
+    src = "#!/usr/bin/env python3\n# -*- coding: latin-1 -*-\nx = parse_qs('a')\n"
+    fixed, _ = repair_imports(src)
+    assert fixed == "#!/usr/bin/env python3\n# -*- coding: latin-1 -*-\nfrom urllib.parse import parse_qs\nx = parse_qs('a')\n"
+
+
+def test_one_non_module_use_drops_only_that_module():
+    fixed, added = repair_imports("urllib.parse.quote(x)\ndatetime.now()\nparse_qs(y)\n")
+    assert added == ["urllib.parse", "from urllib.parse import parse_qs"]
+
+
+def test_bare_name_bound_by_any_construct_is_left_alone():
+    for src in ("[escape for escape in 'ab']\nescape\n", "with open('f') as escape:\n    escape\n",
+                "for escape in 'ab':\n    escape\n", "if (escape := 1):\n    escape\n",
+                "try:\n    pass\nexcept OSError as escape:\n    escape\n"):
+        assert repair_imports(src)[1] == []
+
+
+def test_mixed_repair_is_ordered_and_idempotent():
+    src = '"""Doc."""\nfrom __future__ import annotations\nos.getcwd()\nparse_qs(1)\n'
+    fixed, added = repair_imports(src)
+    assert added == ["os", "from urllib.parse import parse_qs"]
+    assert fixed == ('"""Doc."""\nfrom __future__ import annotations\nimport os\n'
+                     'from urllib.parse import parse_qs\nos.getcwd()\nparse_qs(1)\n')
+    assert repair_imports(fixed)[1] == []

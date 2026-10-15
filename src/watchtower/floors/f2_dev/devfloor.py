@@ -15,7 +15,7 @@ from watchtower.engine.sandbox import SandboxResult
 from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_NOTE,  # noqa: F401 (re-export)
                                                _capped, _failure_note, _failure_rows, _problem_note, failures,
                                                stuck_note)
-from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings
+from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings, sibling_names
 from watchtower.floors.f2_dev.lint import handler_state_problems, idiom_notes
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
@@ -448,7 +448,7 @@ class DevFloor:
                     started = None
                     if path.endswith(".py"):
                         content, lines = repair_strings(content)
-                        content, added = repair_imports(content)
+                        content, added = repair_imports(content, sibling_names(self._ws, path))
                         if str(PurePosixPath(path.strip())) == entry:  # run 10: run() defined, never called, the app exited at once
                             content, started = repair_main(content)
                     try:
