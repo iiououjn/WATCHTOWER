@@ -15,7 +15,7 @@ from watchtower.engine.sandbox import SandboxResult
 from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_NOTE,  # noqa: F401 (re-export)
                                                _capped, _failure_note, _failure_rows, _problem_note, failures,
                                                stuck_note)
-from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings
+from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings, sibling_names
 from watchtower.floors.f2_dev.lint import handler_state_problems, idiom_notes
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
@@ -448,7 +448,7 @@ class DevFloor:
                     started = None
                     if path.endswith(".py"):
                         content, lines = repair_strings(content)
-                        content, added = repair_imports(content)
+                        content, added = repair_imports(content, sibling_names(self._ws, path))
                         if str(PurePosixPath(path.strip())) == entry:  # run 10: run() defined, never called, the app exited at once
                             content, started = repair_main(content)
                     try:
@@ -464,7 +464,8 @@ class DevFloor:
                         notes.append(f"Auto-repaired {path} line(s) {', '.join(map(str, lines))} of what you sent: a line "
                                      "break inside a one-line string was joined as \\n. Keep one-line strings on one line.")
                     if added:
-                        notes.append(f"Auto-repaired: added the missing import {', '.join(added)} to {path}.")
+                        shown = "; ".join(f"`{m if m.startswith('from ') else 'import ' + m}`" for m in added)
+                        notes.append(f"Auto-repaired: added the missing {shown} to {path}.")
                     if started:  # after the write: a rejected file was not repaired
                         notes.append(f"Auto-repaired: {path} never started its server; added "
                                      f'`if __name__ == "__main__": {started}()` at the end.')
