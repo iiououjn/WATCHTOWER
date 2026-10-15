@@ -29,3 +29,8 @@ no attempts left. Run 29 shipped text escaped three times. Problems surface one 
 | run | prompt | result | floor | cause |
 |---|---|---|---|---|
 | 30 | todo | FAIL | F5 | XSS after 6y fixed encoding on attempt 4 (6z) |
+
+## Review r1 (8 findings): fixed 1,3,4,5,6. Deferred minors:
+- Attribute XSS untested (value has no quotes); F5 probe still covers it.
+- Tag-stripping app fails with only the generic detail (no "stripped" hint).
+- Coder prompt: untrusted() escaping runs after the QA_CHARS cap; 4+ fields can cut model checks.

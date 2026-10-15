@@ -379,7 +379,8 @@ def _shown(tmp_path, mode):
     value = "2409400 <&> 240940"
     checks = parse_checks({"checks": [
         {"name": "add", "method": "POST", "path": "/add", "form": {"item": value}, "expect_text": ""},
-        {"name": "list", "path": "/", "expect_text": value, "expect_escaped": True}]})
+        {"name": "list", "path": "/", "expect_text": value}]})
+    checks[1]["expect_escaped"] = True  # tower-only flag, set after validation like contract_checks
     return next(ln for ln in _live(tmp_path, app, checks).summary.splitlines() if ln.startswith("- list:"))
 
 
@@ -394,13 +395,36 @@ def test_unescaped_user_text_fails_with_an_xss_hint(tmp_path):
 
 def test_text_escaped_twice_fails_with_a_hint(tmp_path):  # run 29: escape on save and again on show
     line = _shown(tmp_path, 'html.escape(html.escape(parse_qs(raw)["item"][0]))')
-    assert "FAIL" in line and "twice" in line
+    assert "FAIL" in line and "more than once" in line
 
 
-def test_expect_escaped_survives_validation():
-    c = parse_checks({"checks": [{"name": "l", "path": "/", "expect_text": "a", "expect_escaped": True},
-                                 {"name": "m", "path": "/", "expect_text": "a", "expect_escaped": "yes"}]})
-    assert c[0].get("expect_escaped") is True and "expect_escaped" not in c[1]
+def test_model_checks_cannot_set_expect_escaped():  # 6z review r1: tower-only flag
+    c = parse_checks({"checks": [{"name": "l", "path": "/", "expect_text": "a", "expect_escaped": True}]})
+    assert "expect_escaped" not in c[0]
+
+
+def test_escaped_list_plus_a_raw_copy_fails(tmp_path):  # 6z review r1: a raw banner is still XSS
+    app = ECHO_APP.replace('"<ul>" +', '"<p>last: " + (parse_qs(LAST[0])["item"][0] if LAST else "") + "</p><ul>" +')
+    app = app.replace("ITEMS = []", "ITEMS = []\nLAST = []").replace(
+        'ITEMS.append(raw.split("=", 1)[1])  # MODE',
+        'LAST[:] = [raw]\n        ITEMS.append(html.escape(parse_qs(raw)["item"][0]))')
+    app = app.replace("import html, os", "import html, os\nfrom urllib.parse import parse_qs")
+    value = "2409400 <&> 240940"
+    checks = parse_checks({"checks": [
+        {"name": "add", "method": "POST", "path": "/add", "form": {"item": value}, "expect_text": ""},
+        {"name": "list", "path": "/", "expect_text": value}]})
+    checks[1]["expect_escaped"] = True
+    line = next(ln for ln in _live(tmp_path, app, checks).summary.splitlines() if ln.startswith("- list:"))
+    assert "FAIL" in line and "unescaped" in line
+
+
+def test_numeric_entities_count_as_escaped_once(tmp_path):
+    assert "PASS" in _shown(tmp_path, 'parse_qs(raw)["item"][0].replace("&", "&#38;").replace("<", "&#60;")'
+                                      '.replace(">", "&#x3e;")')
+
+
+def test_text_escaped_three_times_gets_the_hint(tmp_path):  # run 29
+    assert "more than once" in _shown(tmp_path, 'html.escape(html.escape(html.escape(parse_qs(raw)["item"][0])))')
 
 
 def test_html_escaped_text_counts_as_shown(tmp_path):

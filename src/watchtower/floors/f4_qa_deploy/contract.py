@@ -64,5 +64,8 @@ def contract_checks(routes: list[dict], token: str) -> tuple[list[dict], int]:
     raw += [{"name": f"[tower] POST {route['path']} adds"[:80], "method": "POST", "path": route["path"],
             "form": values, "expect_status": 200, "expect_text": ""}]
     raw += [{"name": f"[tower] GET {page} shows {f}"[:80], "method": "GET", "path": page, "form": {},
-             "expect_status": 200, "expect_text": v, "expect_escaped": True} for f, v in values.items()]
-    return parse_checks({"checks": raw}), 3
+             "expect_status": 200, "expect_text": v} for f, v in values.items()]
+    checks = parse_checks({"checks": raw})
+    for c in checks[2:]:  # tower-only flag: parse_checks never takes it from a model's JSON (6z review r1)
+        c["expect_escaped"] = True
+    return checks, 3
