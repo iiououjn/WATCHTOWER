@@ -464,7 +464,8 @@ class DevFloor:
                         notes.append(f"Auto-repaired {path} line(s) {', '.join(map(str, lines))} of what you sent: a line "
                                      "break inside a one-line string was joined as \\n. Keep one-line strings on one line.")
                     if added:
-                        notes.append(f"Auto-repaired: added the missing import {', '.join(added)} to {path}.")
+                        shown = "; ".join(f"`{m if m.startswith('from ') else 'import ' + m}`" for m in added)
+                        notes.append(f"Auto-repaired: added the missing {shown} to {path}.")
                     if started:  # after the write: a rejected file was not repaired
                         notes.append(f"Auto-repaired: {path} never started its server; added "
                                      f'`if __name__ == "__main__": {started}()` at the end.')

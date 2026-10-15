@@ -240,3 +240,8 @@ def test_bare_names_group_per_module_and_skip_bound():
 
 def test_bare_name_that_is_an_attribute_or_keyword_is_left_alone():
     assert repair_imports("self.escape = 1\nx = obj.parse_qs\nf(escape=1)\n")[1] == []
+
+
+def test_module_use_that_is_not_a_module_still_gets_bare_imports():
+    fixed, added = repair_imports("x = datetime.now()\nq = parse_qs(s)\n")
+    assert added == ["from urllib.parse import parse_qs"] and fixed.startswith("from urllib.parse import parse_qs\n")

@@ -348,7 +348,7 @@ def test_missing_standard_import_is_added_and_the_coder_told(tmp_path):
     script = Script({"f2.coder": [{"files": [APP, {"path": "test_app.py", "content": body}]}]})
     dev(tmp_path, script, Runner([FAILED]), rounds=2).build(SPEC, PLAN3, [])
     assert Workspace(tmp_path).read("test_app.py") == "import os\n" + body
-    assert "added the missing import os to test_app.py" in script.prompts["f2.coder"][1]
+    assert "added the missing `import os` to test_app.py" in script.prompts["f2.coder"][1]
 
 
 def test_a_reply_that_changes_nothing_is_called_out(tmp_path):

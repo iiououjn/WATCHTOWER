@@ -181,7 +181,8 @@ def repair_imports(source: str) -> tuple[str, list[str]]:
         if _has(name, attr):
             wanted.add(name)
         else:
-            return source, []  # a use that is not this module (datetime.now): leave the file alone
+            wanted = set()  # a use that is not this module (datetime.now): add no module import, bare names may still be
+            break
     used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
     by_module: dict[str, list[str]] = {}
     for name in sorted(used & set(BARE) - bound):
