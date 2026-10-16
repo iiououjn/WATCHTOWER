@@ -84,3 +84,51 @@ def test_waits_then_gives_up(parts):
             with sched.agent("b", "j", wait_seconds=1.0):
                 pass
     assert slept == [0.5, 0.5]
+
+
+def test_default_wait_outlasts_a_long_model_call(parts):
+    # 8b (A-F10): model calls took 78-327 s; a 30 s wait made a second job skip or pause at once
+    settings, memory, bus = parts
+    now, slept = [0.0], []
+
+    def sleep(s):
+        slept.append(s)
+        now[0] += s
+    sched = Scheduler(settings, memory, bus, sleep=sleep, clock=lambda: now[0])
+    with Scheduler(settings, memory, bus).agent("a", "j"):
+        with pytest.raises(SchedulerBusy, match="600"):
+            with sched.agent("b", "j"):
+                pass
+    assert settings.slot_wait_s == 600 and sum(slept) >= 600
+
+
+def test_cleanup_errors_never_replace_the_real_error(parts):
+    # 8b (A-F11): LowMemory must pause the job even when saving the context then fails
+    import sqlite3
+    from watchtower.engine.model_socket import LowMemory
+    settings, memory, bus = parts
+
+    def broken_save(*a):
+        raise sqlite3.OperationalError("database is locked")
+    memory.save = broken_save
+    with pytest.raises(LowMemory):
+        with Scheduler(settings, memory, bus).agent("a", "j"):
+            raise LowMemory("9% free")
+    with Scheduler(settings, memory, bus).agent("b", "j"):  # no error in flight: cleanup failure is only reported
+        pass
+    assert [e.detail["agent"] for e in bus.events(job_id="j", topic="agent.cleanup_failed")] == ["a", "b"]
+
+
+def test_a_failing_idle_event_never_replaces_the_real_error(parts):
+    from watchtower.engine.model_socket import LowMemory
+    settings, memory, bus = parts
+    real = bus.publish
+
+    def publish(topic, payload, job_id=None):
+        if topic == "agent.idle":
+            raise OSError("disk full")
+        return real(topic, payload, job_id)
+    bus.publish = publish
+    with pytest.raises(LowMemory):
+        with Scheduler(settings, memory, bus).agent("a", "j"):
+            raise LowMemory("9% free")

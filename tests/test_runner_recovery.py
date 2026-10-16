@@ -4,7 +4,7 @@ import os
 import signal
 
 from runner_kit import *  # noqa: F403 — helpers and fixtures
-from runner_kit import env, topics  # noqa: F401
+from runner_kit import app_tower, env, topics  # noqa: F401
 
 
 def test_running_job_with_a_free_lock_resumes_without_force(env):
@@ -94,3 +94,24 @@ def test_an_unexpected_error_pauses_with_the_error_recorded(env):
     assert error["type"] == "OperationalError" and "database is locked" in error["error"]
     assert "runner.py:" in error["where"]
     assert runner.resume(job.id).status == "done"
+
+
+def test_a_busy_slot_pauses_an_advisory_role_instead_of_skipping_it(app_tower):
+    # 8b (A-F10): a second job used to lose HR/QA-office/memo roles silently when the slot stayed busy
+    from contextlib import contextmanager
+    from watchtower.engine.advisory import ADVISORY_ERRORS
+    from watchtower.engine.scheduler import SchedulerBusy
+    assert SchedulerBusy not in ADVISORY_ERRORS
+    runner, model, sandbox, job = app_tower()
+    real = runner._scheduler.agent
+
+    @contextmanager
+    def agent(agent_id, job_id, *a, **kw):
+        if agent_id == "f3.lead":  # advisory: the Build Lead's expected text
+            raise SchedulerBusy("all 1 agent slot(s) busy; another job is running — resume this one later")
+        with real(agent_id, job_id, *a, **kw) as session:
+            yield session
+    runner._scheduler.agent = agent
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert out.status == "paused" and "another job is running" in out.reason
+    runner.close()

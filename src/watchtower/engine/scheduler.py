@@ -45,19 +45,32 @@ class Scheduler:
         self._slot_dir.mkdir(parents=True, exist_ok=True)
 
     @contextmanager
-    def agent(self, agent_id: str, job_id: str, wait_seconds: float = 30.0) -> Iterator[AgentSession]:
-        slot = self._acquire(wait_seconds)
+    def agent(self, agent_id: str, job_id: str, wait_seconds: float | None = None) -> Iterator[AgentSession]:
+        slot = self._acquire(self._s.slot_wait_s if wait_seconds is None else wait_seconds)
         try:
             session = AgentSession(agent_id, job_id, self._memory.load(agent_id, job_id) or {})
             self._bus.publish("agent.wake", {"agent": agent_id}, job_id)
             try:
                 yield session
             finally:
-                self._memory.save(agent_id, job_id, session.context)
-                self._bus.publish("agent.idle", {"agent": agent_id}, job_id)
+                self._idle(session)
         finally:
             fcntl.flock(slot, fcntl.LOCK_UN)
             slot.close()
+
+    def _idle(self, session: AgentSession) -> None:
+        """Save the context and say so. A failure here is reported, never raised: it must not replace the
+        error in flight (a LowMemory that should pause would become a 'database is locked')."""
+        try:
+            self._memory.save(session.agent_id, session.job_id, session.context)
+            self._bus.publish("agent.idle", {"agent": session.agent_id}, session.job_id)
+        except Exception as e:  # noqa: BLE001 — cleanup is best effort by design
+            try:
+                self._bus.publish("agent.cleanup_failed", {"agent": session.agent_id,
+                                                           "error": f"{type(e).__name__}: {str(e)[:200]}"},
+                                  session.job_id)
+            except Exception:  # noqa: BLE001 — the audit log itself is unavailable: nothing more to do
+                pass
 
     def _acquire(self, wait_seconds: float) -> TextIO:
         deadline = self._clock() + wait_seconds
