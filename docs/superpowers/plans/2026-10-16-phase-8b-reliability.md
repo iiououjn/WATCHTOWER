@@ -136,3 +136,13 @@ Every new guard was mutation-checked: removing it makes its test fail.
   charged its seconds before the interrupt goes on. The Lookout's per-floor search counter is in the dev
   checkpoint, so a resumed `--research` job keeps the cap.
 - Each fix has a test that failed first; every guard was mutation-checked on its own.
+
+## Review r4
+
+- Fixed (minor): a job that paused before LangGraph saved its first checkpoint (for example, a failed
+  `job.started` publish) is ended `failed` on resume with "nothing to resume ... start a new job". Before,
+  `Workflow.resume` raised `KeyError` and the catch-all paused it again, so every resume looped. `Workflow`
+  gains `has_checkpoint`; the runner checks it under the job lock before driving.
+- Fixed (minor): the malformed-reply branch writes its `model_error` audit inside the same best-effort guard
+  as the budget charge, so a locked audit DB keeps `ModelUnavailable('malformed response')` (Review Focus 4).
+- Each fix has a test that failed first for the right reason; both guards were mutation-checked.

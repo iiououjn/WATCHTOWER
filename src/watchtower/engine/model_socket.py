@@ -256,9 +256,10 @@ class ModelSocket:
         except (AttributeError, IndexError, TypeError) as e:
             try:  # review r3: a malformed reply took its time too: charged, so a resume loop meets the cap
                 self._budget.record(job_id, seconds=seconds)
+                self._audit.append("model_socket", "model_error", {"model": model, "error": "malformed response"},
+                                   job_id)
             except Exception:  # noqa: BLE001 — the malformed-reply error is what the owner needs
                 pass
-            self._audit.append("model_socket", "model_error", {"model": model, "error": "malformed response"}, job_id)
             raise ModelUnavailable(f"{model} returned a malformed response") from e
         usd = 0.0 if local else _litellm_cost(resp)
         self._budget.record(job_id, tokens=pt + ct, seconds=seconds, usd=usd)  # over the cap: kept; next check stops

@@ -148,3 +148,22 @@ def test_a_busy_slot_pauses_an_advisory_role_instead_of_skipping_it(app_tower):
     out = runner.start(job.id, extra={"auto_approve": True})
     assert out.status == "paused" and "another job is running" in out.reason
     runner.close()
+
+
+def test_a_job_paused_before_its_first_checkpoint_fails_on_resume(env):
+    # review r4: no graph state to resume from; it must end, not pause again on a KeyError
+    runner, jobs, bus, model, unloaded, job = env
+    real = bus.publish
+
+    def publish(topic, payload, job_id=None):
+        if topic == "job.started":
+            raise OSError("disk full")
+        return real(topic, payload, job_id)
+
+    bus.publish = publish
+    assert runner.start(job.id, "small").status == "paused"
+    bus.publish = real
+    out = runner.resume(job.id)
+    assert out.status == "failed" and "start a new job" in out.reason
+    assert jobs.get(job.id).status == "failed"
+    assert model.calls == {"plan": 0, "answer": 0}

@@ -140,6 +140,9 @@ class JobRunner:
             job = self._jobs.get(job_id)
             if job.status not in {"paused", "running"}:
                 raise ValueError(f"job {job_id} is {job.status}; only paused jobs can be resumed")
+            if not self._wfs[job.pipeline].has_checkpoint(job_id):  # review r4: it stopped before its first step
+                return self._end(job_id, "failed", "nothing to resume: it stopped before any step was saved; "
+                                                   "start a new job")
 
             def go() -> WorkflowResult:
                 self._jobs.clear_pause(job_id)

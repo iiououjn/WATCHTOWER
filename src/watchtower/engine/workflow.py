@@ -88,8 +88,11 @@ class Workflow:
         self._progress.execute("DELETE FROM step_progress WHERE thread_id=?", (job_id,))  # a fresh run starts clean
         return self._invoke({"job_id": job_id, "data": data}, job_id)
 
+    def has_checkpoint(self, job_id: str) -> bool:
+        return bool(self._graph.get_state(self._config(job_id)).values)
+
     def resume(self, job_id: str) -> WorkflowResult:
-        if not self._graph.get_state(self._config(job_id)).values:
+        if not self.has_checkpoint(job_id):
             raise KeyError(job_id)
         return self._invoke(None, job_id)
 

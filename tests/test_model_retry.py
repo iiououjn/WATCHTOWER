@@ -234,3 +234,18 @@ def test_an_interrupted_call_is_charged_its_time(conn, settings):
     with pytest.raises(KeyboardInterrupt):  # still the interrupt: the runner pauses on it
         sock.ask("small", [{"role": "user", "content": "x"}], "t")
     assert budget.usage("t")["used_seconds"] == 90
+
+
+def test_a_locked_audit_while_recording_a_malformed_reply_keeps_its_error(conn, settings):
+    # review r4: the malformed path guards its audit append like the transient path does
+    malformed = __import__("types").SimpleNamespace(choices=[], usage=None)
+    sock, calls, budget = timed_socket(conn, settings, [malformed], max_seconds=3600)
+    real = sock._audit.append
+
+    def append(actor, action, *a, **kw):
+        if action == "model_error":
+            raise sqlite3.OperationalError("database is locked")
+        return real(actor, action, *a, **kw)
+    sock._audit.append = append
+    with pytest.raises(ModelUnavailable, match="malformed"):
+        sock.ask("small", [{"role": "user", "content": "x"}], "t")
