@@ -16,7 +16,8 @@ from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_N
                                                _capped, _failure_note, _failure_rows, _problem_note, failures,
                                                stuck_note)
 from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings, sibling_names
-from watchtower.floors.f2_dev.skeleton import ONLY_NOTE, STORE, STORE_NOTE, STORE_TESTS, store_problems
+from watchtower.floors.f2_dev.skeleton import (ONLY_NOTE, SAFE, SAFE_TESTS, STORE, STORE_NOTE, STORE_TESTS,
+                                               store_problems)
 from watchtower.floors.f2_dev.lint import handler_state_problems, idiom_notes
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
@@ -288,16 +289,19 @@ class DevFloor:
                 carry = ["Floor 2 HR reviewed your code and asked for changes:\n" + _capped("f2.hr", verdict[1], 800)]
                 notes += carry  # kept through a garbled reply
                 continue
+            tests = STORE_TESTS if self.owned else "test_*.py"  # 8c (C-H2): only test_store.py is accepted
             if not has_tests:
-                notes.append("There are no unittest files yet: add test_*.py with real tests.")
+                notes.append(f"There are no unittest files yet: add {tests} with real tests.")
             elif not ran_tests:
-                notes.append("unittest found 0 tests: name test files test_*.py, put test classes in "
+                notes.append(f"unittest found 0 tests: name test files {tests}, put test classes in "
                              "unittest.TestCase subclasses, and name methods test_*.")
             elif real < 2:
                 notes.append(f"unittest ran only {real} test: write at least 2 real tests of the app's behaviour.")
-            if has_tests and not imports_app:
-                notes.append("Your tests import nothing from the app: import the app's own functions or handler "
-                             "(e.g. from app import ...) and test what they do.")
+            if has_tests and not imports_app:  # app.py is the tower's server: importing it is rejected
+                notes.append(f"Your tests import nothing from the app: in {STORE_TESTS}, `import store` and test "
+                             "store.add(entry) and store.items()." if self.owned else "Your tests import nothing "
+                             "from the app: import the app's own functions or handler (e.g. from app import ...) "
+                             "and test what they do.")
             found = failures(result.stderr or "")
             failing = sorted({f"{f['id']}:{f['test']}" for f in found})
             stuck = bool(failing) and failing == last_failing
@@ -370,6 +374,13 @@ class DevFloor:
         return [f"Auto-repaired: added `{line}` to {entry}; it used those names without importing them."
                 for line in added]
 
+    def _may_import(self, path: str) -> frozenset[str] | None:
+        """What auto-repair may add (8c, C-H2): under the skeleton only what store_problems accepts; store.py never
+        gets html (STORE_NOTE: the server escapes)."""
+        if not self.owned:
+            return None
+        return frozenset(SAFE - {"html"} if path == STORE else SAFE_TESTS)
+
     def _ensure_packages(self) -> None:
         """unittest discovery only enters folders that are packages: add empty __init__.py where missing."""
         folders = {PurePosixPath(f).parent for f in self._ws.files() if f.endswith(".py")}
@@ -416,7 +427,8 @@ class DevFloor:
                     started = None
                     if path.endswith(".py"):
                         content, lines = repair_strings(content)
-                        content, added = repair_imports(content, sibling_names(self._ws, path))
+                        content, added = repair_imports(content, sibling_names(self._ws, path),
+                                                        self._may_import(path))
                         if str(PurePosixPath(path.strip())) == entry:  # run 10: run() defined, never called, the app exited at once
                             content, started = repair_main(content)
                     try:

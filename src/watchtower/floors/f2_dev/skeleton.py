@@ -180,7 +180,8 @@ def _scan(name: str, safe: set[str], tree: ast.Module) -> list[str]:
                    next((f"imports {a.name} from {mod}" for a in node.names if a.name == "*"
                          or a.name.startswith("_") and mod != "__future__" or a.name in DANGER - safe), ""))
         elif isinstance(node, ast.Attribute):
-            why = f"uses .{node.attr}" if (node.attr.startswith("_") or node.attr in BANNED
+            private = node.attr.startswith("__") or node.attr.startswith("_") and not test  # 8c: store._x in tests
+            why = f"uses .{node.attr}" if (private or node.attr in BANNED
                                            or node.attr in DANGER - safe) else ""
         elif isinstance(node, ast.Name):
             n = node.id
