@@ -97,7 +97,7 @@ def _report(outcome: RunOutcome, conn) -> None:
 @app.command()
 def ask(
     prompt: str,
-    tier: str = typer.Option("small", help="Model tier: small | work | review"),
+    tier: str = typer.Option("small", help="Model tier: small | work"),
     max_tokens: Optional[int] = typer.Option(None, min=1, help="Token budget for this job"),
 ):
     """Quick question to one model (checkpointed plan → answer); no floors involved."""

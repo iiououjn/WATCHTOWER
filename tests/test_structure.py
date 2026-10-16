@@ -32,3 +32,10 @@ def test_removed_dependencies_stay_removed(dep):
 def test_roles_carry_no_tool_permissions():  # the Tool Hub is deferred: a role has no tools to grant
     assert "tools" not in {f.name for f in dataclasses.fields(Role)}
     assert not [p.name for p in ROLES_DIR.rglob("*.yaml") if "\ntools:" in p.read_text()]
+
+
+def test_every_model_tier_is_used_by_a_role():  # A-F19: a tier no role uses is config nobody reads
+    from watchtower.config import DEFAULT_TIERS
+    from watchtower.roles import load_roles
+    used = {r.tier for r in load_roles(tiers=DEFAULT_TIERS).values()}
+    assert set(DEFAULT_TIERS) == used
