@@ -46,4 +46,5 @@ Deferred:
 | run | prompt | result | floor | cause |
 |---|---|---|---|---|
 | 31 | todo | FAIL | F4 | pre-7a: XSS on last attempt |
-| 32 | todo | PENDING (approve rec.) | — | gate/CEO false objection |
+| 32 | todo | PASS (owner approved) | — | gate/CEO objections were false |
+| 33 | guestbook | FAIL | F4 | coder html.escape'd in store.py; server escapes again (double) x4 |
