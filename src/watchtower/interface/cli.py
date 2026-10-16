@@ -150,7 +150,7 @@ def resume(
         typer.echo(f"Error: no job {job_id}", err=True)
         raise typer.Exit(2)
     except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
+        typer.echo(_clean(f"Error: {e}"), err=True)
         raise typer.Exit(2)
     finally:
         runner.close()
@@ -396,7 +396,7 @@ def approve(job_id: str, reject: bool = typer.Option(False, "--reject", help="Re
     try:
         outcome = runner.resume(job_id)
     except (KeyError, ValueError) as e:
-        typer.echo(f"Error: {e}", err=True)
+        typer.echo(_clean(f"Error: {e}"), err=True)
         typer.echo(f"Approval recorded. Resume with: watchtower resume {job_id}", err=True)
         raise typer.Exit(2)
     finally:
@@ -420,7 +420,7 @@ def beacon(query: str, pages: int = typer.Option(3, min=1, max=10)):
     try:
         docs = make_beacon(settings, conn).research(query, None)
     except SearchUnavailable as e:
-        typer.echo(f"Beacon paused: {e}", err=True)
+        typer.echo(_clean(f"Beacon paused: {e}"), err=True)
         raise typer.Exit(3)
     for e in audit.since(before, actor="beacon"):
         if e.action in ("beacon_skip", "glass_reject"):

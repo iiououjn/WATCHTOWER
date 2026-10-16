@@ -153,7 +153,9 @@ class Deployer:
         rows = [] if current is None else self._conn.execute(
             "SELECT id FROM deployments WHERE name=? AND status='replaced' AND id<? ORDER BY id DESC",
             (name, current.id)).fetchall()
-        target = next((self._get(r["id"]) for r in rows if self._image_exists(self._get(r["id"]).image)), None)
+        signed = Approvals(self._conn).signed_off  # 8a review r1: rollback must not reopen what deploy refuses
+        target = next((d for d in (self._get(r["id"]) for r in rows)
+                       if signed(d.job_id) and self._image_exists(d.image)), None)
         if target is None:  # checked before anything is stopped
             raise DeployError(f"nothing to roll back to for {name!r}")
         try:

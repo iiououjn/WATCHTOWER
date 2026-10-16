@@ -6,7 +6,7 @@ from typing import Callable
 
 from watchtower.floors.framework import WorkPackage, untrusted_code
 from watchtower.engine.model_socket import BadModelOutput
-from watchtower.engine.sandbox import SandboxResult
+from watchtower.engine.sandbox import EMIT, SandboxResult, tagged
 from watchtower.roles import Role
 
 MAX_CHECKS = 8
@@ -24,7 +24,7 @@ TEXT_NOTE = ("\nYour last checks had no usable expect_text. expect_text must be 
 
 # Runs INSIDE the sandbox. argv: entry, checks-JSON. Starts the app, runs each check in order against it,
 # prints one WATCHTOWER_QA line with the results, then the app's log tail.
-QA_SCRIPT = """\
+QA_SCRIPT = EMIT + """\
 import html, html.parser, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 port = os.environ.get("WT_PORT", "8000")
 base = "http://127.0.0.1:" + port
@@ -127,10 +127,9 @@ except Exception:
 log.close()
 # the app's own output is JSON-encoded on one line, so nothing it prints can pose as a result line; it goes first
 # and unescaped (escaping grows non-ASCII text 6x) so the sandbox's output tail always keeps the result line
-print("WATCHTOWER_LOG " + json.dumps(open(log.name, "rb").read().decode(errors="replace")[-4000:], ensure_ascii=False))
-print("WATCHTOWER_QA " + json.dumps(results))
+emit("WATCHTOWER_LOG", js(open(log.name, "rb").read().decode(errors="replace")[-4000:]))
+emit("WATCHTOWER_QA", js(results))
 """
-_RESULT = re.compile(r"^WATCHTOWER_QA (.*)$", re.M)
 _LOG = re.compile(r"^WATCHTOWER_LOG (.*)$", re.M)
 _FRAME = re.compile(r'^\s+File "([^"]+)", line (\d+), in (\S+)')
 _EXC_LINE = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception|Exit|Warning): ")
@@ -335,9 +334,9 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
                            [{"check": "qa", "pass": False, "results": []}], ["no QA checks"])
     result = run(["python", "-I", "-c", QA_SCRIPT, entry, json.dumps(checks)])
     output = (result.stdout or "") + (result.stderr or "")
-    found = _RESULT.findall(output)
+    found = tagged(output, "WATCHTOWER_QA")  # review r1: the tag exactly once anywhere, not an anchored line
     try:  # 8a: the app shares the runner's uid; it can print a line, then kill the runner (exit 137)
-        results = json.loads(found[0]) if len(found) == 1 and result.exit_code == 0 else None
+        results = json.loads(found) if found is not None and result.exit_code == 0 else None
     except ValueError:
         results = None
     if (not isinstance(results, list) or not all(isinstance(r, dict) for r in results)

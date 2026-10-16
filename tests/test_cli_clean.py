@@ -48,3 +48,28 @@ def test_a_cpo_error_is_cleaned(monkeypatch):
                         lambda self, job_id: (_ for _ in ()).throw(RuntimeError("x " + HOSTILE)))
     out = runner.invoke(cli.app, ["research", "compare lighthouse lenses"]).output
     assert "continuing without questions" in out and shown(out)
+
+
+def test_a_beacon_pause_is_cleaned(monkeypatch):  # review r1: the search error text can carry web content
+    class Down:
+        def research(self, query, job_id):
+            raise cli.SearchUnavailable("down " + HOSTILE)
+    monkeypatch.setattr(cli, "make_beacon", lambda settings, conn: Down())
+    out = runner.invoke(cli.app, ["beacon", "lenses"]).output
+    assert "Beacon paused: down" in out and shown(out)
+
+
+@pytest.mark.parametrize("args", [["resume", "j1"], ["approve", "j1"]])
+def test_a_resume_error_is_cleaned(monkeypatch, args):  # review r1: the error can quote stored job data
+    use_roles(monkeypatch)
+    monkeypatch.setattr(cli.JobRunner, "resume", lambda self, job_id, **kw: (_ for _ in ()).throw(
+        ValueError("stuck " + HOSTILE)))
+    if args[0] == "approve":
+        conn = connect(load_settings().db_path)
+        job = JobStore(conn).create("todo")
+        JobStore(conn).set_status(job.id, "paused", "waiting")
+        approvals = cli.Approvals(conn)
+        approvals.request(job.id, "signoff", "app")
+        args = ["approve", job.id]
+    out = runner.invoke(cli.app, args).output
+    assert "Error: stuck" in out and shown(out)

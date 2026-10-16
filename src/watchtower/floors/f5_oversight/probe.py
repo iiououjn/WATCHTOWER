@@ -4,13 +4,14 @@ import json
 import re
 from typing import Callable
 
-from watchtower.engine.sandbox import SandboxResult
+from watchtower.engine.sandbox import EMIT, SandboxResult, tagged
 
 # Runs INSIDE the sandbox. argv: entry, plan-JSON {"posts": [{"path", "fields", "marker"}], "gets": [path]}.
 # F5's HTML-injection worker, by code: post a harmless tag into every form field, then read every page. A page
 # that returns the tag raw (not escaped) would run attacker HTML in a browser. The app's own output goes to a log
-# file; a line it writes to this script's stdout anyway makes two lines or a killed script: both fail (8a).
-XSS_SCRIPT = """\
+# file; a result tag it writes to this script's stdout anyway, even spliced onto the real line, makes two tags or
+# a killed script: both fail (8a, review r1).
+XSS_SCRIPT = EMIT + """\
 import json, os, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 port = os.environ.get("WT_PORT", "8000")
 base = "http://127.0.0.1:" + port
@@ -69,10 +70,9 @@ try:
 except Exception:
     p.kill()
 log.close()
-print("WATCHTOWER_XSS " + json.dumps({"answered": answered, "hits": hits, "slow": sorted(set(slow))[:5],
-                                      "partial": time.time() > deadline}))
+emit("WATCHTOWER_XSS", js({"answered": answered, "hits": hits, "slow": sorted(set(slow))[:5],
+                          "partial": time.time() > deadline}))
 """
-_RESULT = re.compile(r"^WATCHTOWER_XSS (.*)$", re.M)
 _PATH = re.compile(r"/[A-Za-z0-9._~/-]{0,80}")
 MAX_POSTS, MAX_GETS = 8, 8
 
@@ -99,9 +99,9 @@ def xss_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: lis
     plan = {"posts": [{"path": r["path"], "markers": {f: f"<i>wtprobe{n}x{k}</i>" for k, f in enumerate(r["fields"])}}
                       for n, r in enumerate(posts)], "gets": gets}
     result = run(["python", "-I", "-c", XSS_SCRIPT, entry, json.dumps(plan)])  # -I: app files can't shadow json
-    found = _RESULT.findall((result.stdout or "") + (result.stderr or ""))
+    found = tagged((result.stdout or "") + (result.stderr or ""), "WATCHTOWER_XSS")  # review r1: exactly once anywhere
     try:
-        out = json.loads(found[0]) if len(found) == 1 and result.exit_code == 0 and not result.timed_out else None
+        out = json.loads(found) if found is not None and result.exit_code == 0 and not result.timed_out else None
     except ValueError:
         out = None
     hits = out.get("hits") if isinstance(out, dict) else None

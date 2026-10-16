@@ -59,6 +59,31 @@ class SandboxResult:
     timed_out: bool
 
 
+# Prepended to every in-sandbox harness (8a review r1). The app shares the harness's uid and can write to its
+# stdout: a forged line plus one byte with no newline makes the real line start mid-line. emit() writes each tower
+# line on a fresh line in one write; js() writes "_" as _ inside the JSON, so no value (app log, page text,
+# route path) can contain a tag: every tag in the output is either the harness's own or a forgery.
+EMIT = """\
+import json, sys
+def js(value):
+    return json.dumps(value, ensure_ascii=False).replace("_", "\\\\u005f")
+def emit(tag, text):
+    sys.stdout.flush()
+    sys.stdout.write("\\n" + tag + " " + text + "\\n")
+    sys.stdout.flush()
+"""
+
+
+def tagged(output: str, tag: str) -> str | None:
+    """The rest of the line after `tag`, only when `tag` appears exactly once anywhere in the output (8a review r1).
+    Counted as a substring, never as a line start: an anchored match missed the real line spliced after a forged
+    one, so the forgery was the only match."""
+    if output.count(tag) != 1:
+        return None
+    rest = output[output.index(tag) + len(tag):]
+    return rest[1:].split("\n", 1)[0] if rest.startswith(" ") else None
+
+
 class Sandbox:
     """Runs agent code in a locked-down Docker container. The job's workspace is mounted READ-ONLY and
     copied into a 64 MB in-memory scratch dir, so executed code can never change, plant or fill files on

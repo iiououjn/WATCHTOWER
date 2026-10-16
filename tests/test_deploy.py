@@ -244,6 +244,17 @@ def test_rollback_skips_targets_whose_image_is_gone_before_stopping_anything(set
     assert not any(c[:3] == ["docker", "rm", "-f"] for c in docker.calls[before:])
 
 
+def test_rollback_never_reactivates_a_job_the_owner_never_signed_off(setup, conn):
+    dep, docker, _ = setup()
+    dep.deploy("job1")
+    dep.deploy("job1")
+    conn.execute("UPDATE approvals SET status='rejected'")  # as if job1 was released by --yes before 8a
+    before = len(docker.calls)
+    with pytest.raises(DeployError, match="nothing to roll back"):
+        dep.rollback("app")
+    assert not any(c[:2] == ["docker", "run"] for c in docker.calls[before:])
+
+
 def test_prune_never_deletes_rollback_targets_for_failed_deploys(setup):
     answers = [True, True, False, True, False, True, False, True, True]  # each failure: new, then restore
     dep, docker, _ = setup(health=lambda port: answers.pop(0))

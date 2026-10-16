@@ -54,11 +54,15 @@ D-M7 (security); E-A6, E-T2, E-S5, E-S7 (tests/stack). Baseline `uv run pytest -
 - *A structural fix: the checker in its own uid or container.* Not feasible inside the current sandbox design:
   the container runs `--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges`, so the harness cannot
   start the app under another uid, and `--network none` leaves no way for a checker container to reach the app.
-  **Ruling:** do the now-fix (exit 0 + exactly one line). It defeats the audited attack: killing the harness
-  gives exit 137 (FAIL); not killing it gives two lines (FAIL). **Remaining path:** a same-uid app that can
-  `ptrace` the harness or the container's PID 1 (`timeout`) can still rewrite them. **Structural step (later
-  phase):** run the app and the checker in separate containers on a per-run `--internal` network, the checker
-  image holding only the harness. Cost if wrong: a hostile app with ptrace can still forge F3/F4/F5 evidence;
+  **Ruling:** do the now-fix (exit 0 + the result tag exactly once). It defeats the audited attack: killing the
+  harness gives exit 137 (FAIL); not killing it gives two tags (FAIL). *Corrected in review r1:* "two lines" was
+  wrong. A forged line plus one byte with no newline makes the real line start mid-line, and the anchored `^TAG`
+  match then saw only the forgery. The tag is now counted as a substring anywhere in stdout+stderr
+  (`sandbox.tagged`), every harness writes each line on a fresh line in one flushed write (`EMIT`), and every
+  JSON value is written with `_` as `\u005f` so app text (log, page body, route path) can never hold a tag.
+  **Remaining path:** a same-uid app that can `ptrace` the harness or the container's PID 1 (`timeout`) can
+  still rewrite them. **Structural step (later phase):** run the app and the checker in separate containers on
+  a per-run `--internal` network, the checker image holding only the harness. Cost if wrong: a hostile app with ptrace can still forge F3/F4/F5 evidence;
   Docker and the owner's read (now mandatory, change 3) remain the boundary.
 - *Mark the harness non-dumpable (`PR_SET_DUMPABLE 0`) as a cheap step.* It blocks `/proc/<ppid>/fd` and ptrace
   of the harness but not of PID 1, so it does not close the remaining path. **Ruling:** not done here; part of
@@ -87,6 +91,10 @@ D-M7 (security); E-A6, E-T2, E-S5, E-S7 (tests/stack). Baseline `uv run pytest -
 - *`--yes` legacy path:* a checkpoint saved before 8a with no `signoff_id` reuses the job's latest sign-off row or
   requests one, then waits. The request step and this path each have their own test (either alone would hold).
 - Reviews: 3 rounds (security).
+- *Review r1 (1 critical, 2 minor).* Critical: spliced-line forgery of the QA/XSS/probe/smoke result (ruling
+  above corrected; four splice tests, a stray-byte test and an `EMIT` test, each guard mutation-checked).
+  Minor: `rollback` skips targets whose job has no approved sign-off (same rule as `deploy`); the resume/approve
+  `Error:` and `Beacon paused:` echoes go through `_clean`. Deferred minors: none.
 
 ## Review Focus
 
@@ -112,3 +120,4 @@ D-M7 (security); E-A6, E-T2, E-S5, E-S7 (tests/stack). Baseline `uv run pytest -
 
 Seven task commits, each RED first; every new guard mutation-checked (removing it fails its test).
 `uv run pytest -q` → 1132 passed (baseline 1097; +35 tests), on Python 3.12.12.
+Review r1: `uv run pytest -q` → 1146 passed.
