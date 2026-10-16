@@ -21,7 +21,6 @@ from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.governor.budget import Budget
 from watchtower.engine.jobs import JobStore
 from watchtower.engine.knowledge import Knowledge
-from watchtower.engine.memory import ContextStore
 from watchtower.engine.model_socket import ModelSocket
 from watchtower.engine.runner import JobRunner, RunOutcome, owner_alive
 from watchtower.engine.sandbox import Sandbox
@@ -70,7 +69,7 @@ def _runner(settings: Settings, conn) -> JobRunner:
     audit = AuditLog(conn)
     bus = Bus(audit)
     socket = build_socket(settings, Budget(conn), audit)
-    return JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus,
+    return JobRunner(settings, conn, socket, Scheduler(settings, bus), bus,
                      sandbox=make_sandbox(settings, conn))
 
 

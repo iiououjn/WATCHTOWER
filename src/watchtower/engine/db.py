@@ -16,13 +16,6 @@ CREATE TABLE IF NOT EXISTS jobs(
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS agent_context(
-    agent_id TEXT NOT NULL,
-    job_id TEXT NOT NULL,
-    data TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    PRIMARY KEY (agent_id, job_id)
-);
 CREATE TABLE IF NOT EXISTS audit_log(
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,

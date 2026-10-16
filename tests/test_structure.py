@@ -9,7 +9,8 @@ import pytest
 from watchtower.roles import ROLES_DIR, Role
 
 ROOT = Path(__file__).resolve().parents[1]
-REMOVED_MODULES = ["watchtower.engine.tools.hub", "watchtower.engine.tools", "watchtower.engine.governor.secrets"]
+REMOVED_MODULES = ["watchtower.engine.tools.hub", "watchtower.engine.tools", "watchtower.engine.governor.secrets",
+                   "watchtower.engine.memory"]
 REMOVED_DEPS = ["mcp", "keyring"]
 
 

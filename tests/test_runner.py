@@ -77,13 +77,6 @@ def test_force_resume_recovers_job_stuck_running(env):
     assert model.calls["plan"] == 1
 
 
-def test_agents_restore_context_per_step(env, conn):
-    runner, jobs, bus, model, unloaded, job = env
-    runner.start(job.id, "small")
-    planner = ContextStore(conn).load("ground.planner", job.id)
-    assert planner["messages"][-1] == {"role": "assistant", "content": "plan-text"}
-
-
 def test_second_ctrl_c_during_cleanup_still_records_status(conn, settings):
     audit = AuditLog(conn)
     bus, budget, jobs = Bus(audit), Budget(conn), JobStore(conn)
@@ -93,7 +86,7 @@ def test_second_ctrl_c_during_cleanup_still_records_status(conn, settings):
 
     socket = ModelSocket(settings, budget, audit, completion_fn=Model(), unload_fn=unload,
                          resident_fn=lambda: ["ollama/llama3.2:3b"], free_ram_fn=lambda: 100)
-    runner = JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus)
+    runner = JobRunner(settings, conn, socket, Scheduler(settings, bus), bus)
     job = jobs.create("x")
     budget.open(job.id, 1000, 600, 0.0)
     assert runner.start(job.id, "small").status == "done"
