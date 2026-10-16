@@ -201,3 +201,19 @@ def test_capped_run_replaces_broken_utf8_and_keeps_the_exit_code():
     proc = capped_run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok\\xff'); sys.exit(3)"],
                       timeout=30)
     assert (proc.returncode, proc.stdout) == (3, "ok�")
+
+
+def test_a_cut_off_output_is_flagged(settings, audit):
+    """Review r2: a result tag evicted from the kept tail must be told apart from one never printed."""
+    def result(**kw):
+        return Sandbox(settings, audit, run=FakeDocker(run_result=SimpleNamespace(returncode=0, **kw))).run("j", ["x"])
+    assert result(stdout="ok", stderr="").truncated is False
+    assert result(stdout="x" * (MAX_OUTPUT + 1), stderr="").truncated is True
+    assert result(stdout="ok", stderr="x" * (MAX_OUTPUT + 1)).truncated is True
+    assert result(stdout="ok", stderr="", truncated=True).truncated is True  # capped_run already dropped bytes
+
+
+def test_capped_run_flags_what_it_dropped():
+    small = capped_run([sys.executable, "-c", "print('hi')"], timeout=30)
+    big = capped_run([sys.executable, "-c", "import sys; sys.stderr.write('é' * 30)"], timeout=30, limit=40)
+    assert small.truncated is False and big.truncated is True  # 60 bytes > 40, though under 40 chars decoded

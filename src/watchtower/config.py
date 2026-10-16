@@ -8,7 +8,7 @@ from pathlib import Path
 # 8a (audit D-M7, E-S7): pinned by digest, so a pull never changes the sandbox and deploy base under the tower.
 # Python 3.14.8, the python:latest the owner already had (no pull, no change to any check).
 SANDBOX_IMAGE = "python:3.14.8@sha256:b9767f56a1cc620aa72d38cc3557d26412e38a4597c92953476136b78894ccbd"
-_PINNED = re.compile(r"[a-z0-9./_-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}")
+_PINNED = re.compile(r"[a-z0-9][a-z0-9./_-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}")  # no leading "-"
 DEFAULT_TIERS = {
     "small": "ollama/llama3.2:3b",
     "work": "ollama/qwen2.5-coder:7b",

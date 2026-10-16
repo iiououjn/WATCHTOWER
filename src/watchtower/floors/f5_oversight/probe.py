@@ -4,7 +4,7 @@ import json
 import re
 from typing import Callable
 
-from watchtower.engine.sandbox import EMIT, SandboxResult, tagged
+from watchtower.engine.sandbox import EMIT, SandboxResult, result_tag
 
 # Runs INSIDE the sandbox. argv: entry, plan-JSON {"posts": [{"path", "fields", "marker"}], "gets": [path]}.
 # F5's HTML-injection worker, by code: post a harmless tag into every form field, then read every page. A page
@@ -70,8 +70,8 @@ try:
 except Exception:
     p.kill()
 log.close()
-emit("WATCHTOWER_XSS", js({"answered": answered, "hits": hits, "slow": sorted(set(slow))[:5],
-                          "partial": time.time() > deadline}))
+emit("WATCHTOWER_XSS", fit({"answered": answered, "hits": hits, "slow": sorted(set(slow))[:5],
+                           "partial": time.time() > deadline}, 9000, "hits"))
 """
 _PATH = re.compile(r"/[A-Za-z0-9._~/-]{0,80}")
 MAX_POSTS, MAX_GETS = 8, 8
@@ -99,7 +99,7 @@ def xss_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: lis
     plan = {"posts": [{"path": r["path"], "markers": {f: f"<i>wtprobe{n}x{k}</i>" for k, f in enumerate(r["fields"])}}
                       for n, r in enumerate(posts)], "gets": gets}
     result = run(["python", "-I", "-c", XSS_SCRIPT, entry, json.dumps(plan)])  # -I: app files can't shadow json
-    found = tagged((result.stdout or "") + (result.stderr or ""), "WATCHTOWER_XSS")  # review r1: exactly once anywhere
+    found = result_tag(result, "WATCHTOWER_XSS")  # review r1-r2: exactly once anywhere, in uncut output
     try:
         out = json.loads(found) if found is not None and result.exit_code == 0 and not result.timed_out else None
     except ValueError:

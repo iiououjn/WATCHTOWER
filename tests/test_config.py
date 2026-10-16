@@ -20,7 +20,8 @@ def test_default_sandbox_image_is_pinned_by_digest(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("image", ["python:latest", "python:3.14", "--privileged", "python@sha256:abc",
-                                   f"python:3.14@{DIGEST}\nRUN curl x", f"-v /:/h python@{DIGEST}"])
+                                   f"python:3.14@{DIGEST}\nRUN curl x", f"-v /:/h python@{DIGEST}",
+                                   f"-v/etc:x@{DIGEST}", f"-eFOO@{DIGEST}"])
 def test_an_unpinned_or_odd_image_override_is_refused(monkeypatch, tmp_path, image):
     monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
     monkeypatch.setenv("WATCHTOWER_SANDBOX_IMAGE", image)

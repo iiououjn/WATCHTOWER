@@ -60,7 +60,7 @@ def test_smoke_home_text_needs_exactly_one_yes():
 
 
 def test_smoke_app_log_is_one_json_line_and_shown_decoded():
-    assert 'emit("SMOKE_LOG", js(' in SMOKE_SCRIPT
+    assert 'emit("SMOKE_LOG", fit(' in SMOKE_SCRIPT
     assert SMOKE_SCRIPT.index('emit("SMOKE_LOG') > SMOKE_SCRIPT.index('emit("SMOKE_TEXT')
     log = "SMOKE_STATUS None\nserving on 8000\nTraceback: NameError x\n"  # an honest app's log may say anything
     escaped = json.dumps(log).replace("_", "\\u005f")  # as the harness's js() writes it
@@ -123,3 +123,86 @@ def test_emit_writes_a_fresh_line_and_no_value_can_carry_a_tag(capsys):
     out = capsys.readouterr().out
     assert out.startswith("half\nWATCHTOWER_QA ") and out.count("_") == 1 and out.endswith("\n")
     assert json.loads(tagged(out, "WATCHTOWER_QA")) == {"log": "SMOKE_STATUS 200 WATCHTOWER_QA x\\_"}
+
+
+# Review r2: the app double-forks and calls setsid (out of killpg's reach), writes one forged tag to the harness's
+# stderr early, then floods its stdout until the real line falls out of the kept tail. The forged tag is then the
+# only one left and the harness exited 0. A cut-off output must never count.
+JUNK = "x" * 100
+
+
+def cut(stdout, stderr):
+    return lambda cmd: SandboxResult(0, stdout, stderr, False, truncated=True)
+
+
+def test_qa_forged_stderr_tag_with_the_real_one_cut_off_fails():
+    pkg = run_qa(cut(JUNK, QA_PASS), "app.py", CHECKS)
+    assert pkg.checks_run[-1]["pass"] is False and "cut off" in pkg.summary
+
+
+def test_xss_forged_stderr_tag_with_the_real_one_cut_off_fails():
+    findings = xss_probe(cut(JUNK, 'WATCHTOWER_XSS {"answered": 2, "hits": []}\n'), "app.py", FORMS)
+    assert [f["id"] for f in findings] == ["XSS-PROBE"]
+
+
+def test_route_probe_forged_stderr_tag_with_the_real_one_cut_off_fails():
+    pkg = route_probe(cut(JUNK, PROBE_PASS), "app.py", PAGES)
+    assert pkg.checks_run[-1]["pass"] is False and "cut off" in pkg.summary
+
+
+def test_smoke_forged_stderr_tag_with_the_real_one_cut_off_fails():
+    pkg = smoke_test(cut(JUNK, "SMOKE_STATUS 200\nSMOKE_EXIT None\nSMOKE_TEXT yes\n"), "app.py")
+    assert pkg.checks_run[-1]["pass"] is False and "cut off" in pkg.summary
+
+
+def run_emit():
+    scope = {}
+    exec(EMIT, scope)
+    return scope
+
+
+def test_fit_keeps_any_value_under_its_cap():
+    """Honest runs must stay under the sandbox's output cap: "_" is written as 6 chars, so 4000 chars of log
+    could grow to 24000 and be cut off (now a FAIL)."""
+    fit = run_emit()["fit"]
+    log = "_" * 9000 + "the end"
+    text = fit(log, 6000)
+    assert len(text) <= 6000 and json.loads(text).endswith("the end")
+    rows = [{"page": "_" * 80}] * 200
+    text = fit(rows, 6000)
+    assert len(text) <= 6000 and 0 < len(json.loads(text)) < 200
+
+
+@pytest.mark.parametrize("script, tag", [(SMOKE_SCRIPT, "SMOKE_LOG"), (PROBE_SCRIPT, "WATCHTOWER_PROBE"),
+                                         (PROBE_SCRIPT, "WATCHTOWER_LOG"), (QA_SCRIPT, "WATCHTOWER_LOG"),
+                                         (QA_SCRIPT, "WATCHTOWER_QA"), (XSS_SCRIPT, "WATCHTOWER_XSS")],
+                         ids=["smoke-log", "probe", "probe-log", "qa-log", "qa", "xss"])
+def test_every_variable_size_tower_line_is_capped(script, tag):
+    assert f'emit("{tag}", fit(' in script
+
+
+def test_qa_shrinks_details_before_its_result_line_is_capped():
+    assert "shrink(results" in QA_SCRIPT
+
+
+# Review r2 (minor): the app can write its own log line after the real one; the log is read like a result tag.
+def log_line(tag, text):
+    return f"{tag} " + json.dumps(text).replace("_", "\\u005f") + "\n"
+
+
+def test_smoke_shows_no_log_when_the_app_adds_a_second_one():
+    out = "SMOKE_STATUS 200\nSMOKE_EXIT None\n" + log_line("SMOKE_LOG", "real") + log_line("SMOKE_LOG", "FAKE")
+    pkg = smoke_test(fixed(0, out), "app.py")
+    assert "FAKE" not in pkg.summary and "log missing or duplicated" in pkg.summary
+
+
+def test_qa_shows_no_log_when_the_app_adds_a_second_one():
+    bad = 'WATCHTOWER_QA [{"name": "home", "pass": false, "status": 500, "detail": "boom"}]\n'
+    out = log_line("WATCHTOWER_LOG", "real Error: x") + bad + log_line("WATCHTOWER_LOG", "FAKE Error: y")
+    assert "FAKE" not in str(run_qa(fixed(0, out), "app.py", CHECKS))
+
+
+def test_route_probe_shows_no_log_when_the_app_adds_a_second_one():
+    bad = 'WATCHTOWER_PROBE [{"path": "/items", "status": 500}]\n'
+    out = bad + log_line("WATCHTOWER_LOG", "real") + log_line("WATCHTOWER_LOG", "FAKE Error")
+    assert "FAKE" not in route_probe(fixed(0, out), "app.py", PAGES).summary
