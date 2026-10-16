@@ -446,6 +446,7 @@ class DevFloor:
                     path, content = str(f.get("path", "")), str(f.get("content", ""))
                     path = entry if entry and str(PurePosixPath(path.strip())).lower() == entry.lower() else path
                     old = next((p for p in self._ws.files() if p != path and p.lower() == path.lower()), None)
+                    path = old if old and path != entry else path  # r1: 'Utils.py' keeps utils.py (import utils)
                     lines: list[int] = []
                     added: list[str] = []
                     started = None
@@ -460,6 +461,7 @@ class DevFloor:
                     except (WorkspaceError, OSError):
                         before = None
                     if old:  # 8c (C-M3): a case-preserving disk kept 'App.py' for every later write of app.py
+                        self._ws.write(old, content)  # r1: a rejected write (over 100 KB) leaves App.py alone
                         self._ws.delete(old)
                     self._ws.write(path, content)
                     if before == content.replace("\r\n", "\n").replace("\r", "\n"):  # read() gives \n only

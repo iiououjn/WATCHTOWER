@@ -178,10 +178,12 @@ def _scan(name: str, safe: set[str], tree: ast.Module) -> list[str]:
             why, fix = next((f"imports {a.name}" for a in node.names if a.name.split(".")[0] not in safe), ""), allowed
         elif isinstance(node, ast.ImportFrom):
             mod = node.module or ""
+            bad = next((a.name for a in node.names if a.name == "*" or a.name.startswith("_") and mod != "__future__"
+                        or a.name in DANGER - safe), "")
             why, fix = ((f"imports {'.' * node.level}{mod}", allowed) if node.level or mod.split(".")[0] not in safe
-                        else (next((f"imports {a.name} from {mod}" for a in node.names if a.name == "*"
-                                    or a.name.startswith("_") and mod != "__future__" or a.name in DANGER - safe), ""),
-                              f"import {mod} itself and use its public names"))
+                        else (f"imports {bad} from {mod}" if bad else "",  # 8c r1: tests may use store._entries
+                              f"import {mod} itself and use {mod}.{bad}" if test and bad.startswith("_")
+                              else f"import {mod} itself and use its public names"))
         elif isinstance(node, ast.Attribute):  # private module aliases (collections._sys) reach sys: store.py only
             dunder, private = node.attr.startswith("__"), node.attr.startswith("_") and not test
             why = f"uses .{node.attr}" if (dunder or private or node.attr in BANNED - {"compile"}  # re.compile

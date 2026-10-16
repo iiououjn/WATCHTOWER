@@ -139,3 +139,30 @@ def test_a_case_only_name_is_written_under_the_planned_name(tmp_path):  # C-M3: 
     assert ws.files() == ["app.py"] and ws.read("app.py") == "x = 1\n"
     floor._write([{"path": "APP.py", "content": "x = 2\n"}], "app.py")
     assert ws.files() == ["app.py"] and ws.read("app.py") == "x = 2\n"
+
+
+def test_a_case_only_name_for_another_file_keeps_the_existing_name(tmp_path):  # 8c review r1: import utils broke
+    ws = Workspace(tmp_path)
+    ws.write("utils.py", "x = 0\n")
+    ws.write("test_app.py", "x = 0\n")
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: verdict())
+    floor._write([{"path": "Utils.py", "content": "x = 1\n"}, {"path": "Test_app.py", "content": "x = 1\n"}], "app.py")
+    assert ws.files() == ["test_app.py", "utils.py"] and ws.read("utils.py") == "x = 1\n"
+
+
+def test_a_rejected_case_only_write_keeps_the_old_file(tmp_path):  # 8c review r1: deleted before a failed write
+    ws = Workspace(tmp_path)
+    ws.write("App.py", "x = 0\n")
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: verdict())
+    notes = floor._write([{"path": "app.py", "content": "x" * 200_000}], "app.py")
+    assert ws.files() == ["App.py"] and ws.read("App.py") == "x = 0\n"
+    assert any("larger than 100 KB" in n for n in notes)
+
+
+def test_a_private_store_import_in_tests_points_at_store_dot_name(tmp_path):  # 8c review r1: "public names"
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    ws.write("store.py", STORE)
+    ws.write("test_store.py", "from store import _entries\n")
+    problem = next(p for p in store_problems(ws) if "_entries" in p)
+    assert "store._entries" in problem and "public" not in problem

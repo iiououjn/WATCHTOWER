@@ -62,8 +62,8 @@ inside the tower: each fix is a code change to the hint or the check, never a ne
 - `build`: a garbled reply re-judges the files on disk with the previous round's test result (files are
   unchanged); an HR objection still pending when rounds run out becomes `hr_question`.
 - `plan`: the fallback to app.py drops the planned file that carried the invalid entry name.
-- `_write`: a path that differs from a planned file / an existing file only by case is written under the
-  planned name, and the old-case file is removed first.
+- `_write`: a path that differs from the entry only by case is written as the entry (the old-case file is
+  removed only after a write to it succeeded); any other case-only name keeps the existing file's name.
 
 ## Critique, counters, rulings
 
@@ -87,6 +87,14 @@ inside the tower: each fix is a code change to the hint or the check, never a ne
    FAIL would send a passing app back. The HR objection is kept as an open question instead. Cost if wrong:
    a pending HR objection reaches the gate as a question it might have resolved.
 8. Reviews: 2 rounds (not a security change; the 7c guard is only made testable, not widened for store.py).
+
+Deferred minors (review r1): `fit()` cannot trim routes' `shows` or the one kept note, so a worst-case plan
+(15 long non-ASCII paths, 8 big routes, big QA) still runs ~200 chars over PROMPT_CHARS; and notes are
+trimmed before QA/plan/spec, not after QA as stated in C-M5. Both need a reworked trim order; batch 4.
+
+Review r1: C-M3 case fix kept non-entry names (`Utils.py` no longer renames utils.py) and writes before it
+deletes (a rejected write leaves App.py); test_store.py's private-import hint now says `store._entries`.
+Two guards mutation-confirmed. Two minors deferred above.
 
 ## Review Focus
 
