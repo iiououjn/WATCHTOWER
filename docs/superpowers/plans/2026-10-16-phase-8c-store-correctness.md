@@ -104,6 +104,12 @@ Review r2: text files keep their last fence (README fix); E-T1 snippets for `.__
 their own mutations; store.py hints drop html; `super().__init__()` is allowed and dunder hints say to use plain
 functions; `annotationlib`/`compression` count as standard library. All new guards mutation-confirmed.
 
+Review r3: under the skeleton the coder gets a store-only system prompt (store.py with add(entry) and items(),
+test_store.py doing `import store`; no PORT, app.py, test_*.py or add_todo), same role id; the no-files retry
+note shows the file the role's own prompt shows (store.py). Minors fixed: a dunder in test_store.py gets a
+test fix, a long module name is cut before the allowed list, and `threading._os` says "remove it" (rename only
+for `self` or the file's own names). All five guards mutation-confirmed.
+
 ## Review Focus
 
 1. Store-first unit order and every owned-mode hint: can any tower sentence still produce rejected code?

@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+from dataclasses import replace
 from fnmatch import fnmatch
 from pathlib import PurePosixPath
 from typing import Callable, Sequence
@@ -16,8 +17,8 @@ from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_N
                                                _capped, _failure_note, _failure_rows, _problem_note, failures,
                                                stuck_note)
 from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings, sibling_names
-from watchtower.floors.f2_dev.skeleton import (ONLY_NOTE, SAFE, SAFE_TESTS, STORE, STORE_NOTE, STORE_TESTS,
-                                               store_problems)
+from watchtower.floors.f2_dev.skeleton import (CODER_PROMPT, ONLY_NOTE, SAFE, SAFE_TESTS, STORE, STORE_NOTE,
+                                               STORE_TESTS, store_problems)
 from watchtower.floors.f2_dev.lint import handler_state_problems, idiom_notes
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
@@ -169,6 +170,12 @@ class DevFloor:
         self._max_rounds = max_rounds
         self.owned: set[str] = set()  # 7a: paths the tower wrote (the web server); the coder never changes them
 
+    @property
+    def _writer(self) -> Role:
+        """The coder; under the skeleton with a store-only system prompt (8c review r3: the web-app one asked for
+        app.py, test_*.py and add_todo, which _write and _contract reject). Same id: memos and the scheduler."""
+        return replace(self._coder, prompt=CODER_PROMPT) if self.owned else self._coder
+
     def plan(self, spec: dict, research: str, feedback: Sequence[str], lessons: str = "", reference: str = "") -> dict:
         note = ("\nThe reviewer rejected the last design:\n" + "\n".join(_capped("gate", str(f), FEEDBACK_ITEM)
                                                                     for f in feedback[:5])) if feedback else ""
@@ -221,7 +228,7 @@ class DevFloor:
             room = room_left(UNIT_PROMPT, parts)
             del parts["files"]
             try:
-                reply = self._ask(self._coder, UNIT_PROMPT.format(
+                reply = self._ask(self._writer, UNIT_PROMPT.format(
                     files=untrusted_code("workspace", self._ws.snapshot(room) or "(none yet)"), **parts))
             except BadModelOutput:  # low memory or a dead model pauses the job, as for any coder call
                 notes.append(f"coder {i} gave no usable reply for {', '.join(paths)}; write those files")
@@ -266,7 +273,7 @@ class DevFloor:
                 notes = []
             else:
                 try:
-                    reply = self._ask(self._coder, CODE_PROMPT.format(
+                    reply = self._ask(self._writer, CODE_PROMPT.format(
                         files=untrusted_code("workspace", self._ws.snapshot(room)), **parts))
                 except BadModelOutput:  # a garbled reply costs this round, not the whole job
                     problems = self._problems()  # files on disk still judged; unchanged, so the last test result

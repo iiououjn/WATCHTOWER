@@ -71,7 +71,15 @@ _FENCE = re.compile(r"^([ \t]*)(`{3,}|~{3,})")
 _TEXT = (".md", ".markdown", ".txt", ".rst")  # _close(): kept to their last fence
 _PATH_OK = re.compile(r"[\w.-]+(?:/[\w.-]+)*\.\w+")
 FILES_NOTE = ("\n\nYour previous reply had no usable files. Reply with one block per file, exactly like this:\n"
-              "### FILE: app.py\n```python\n<the complete file>\n```")
+              "### FILE: {path}\n```python\n<the complete file>\n```")
+
+
+def files_note(messages: list[dict]) -> str:
+    """The retry note shows the file the role's own system prompt shows (8c review r3: a store-only coder was
+    shown app.py, which the tower then rejects); app.py when the system prompt names none."""
+    system = messages[0]["content"] if messages and messages[0].get("role") == "system" else ""
+    path = next((h[1] for h in map(_header, str(system).splitlines()) if h and h[0] == "FILE"), "app.py")
+    return FILES_NOTE.format(path=path)
 
 
 def _clean_path(raw: str) -> str:
@@ -284,7 +292,7 @@ class ModelSocket:
             if out.get("notes") and attempt == retries:  # last try: the coder still hears what went wrong
                 return out
             self._audit.append("model_socket", "bad_files", {"model": reply.model}, job_id)
-            convo = list(messages[:-1]) + [{**messages[-1], "content": messages[-1]["content"] + FILES_NOTE}]
+            convo = list(messages[:-1]) + [{**messages[-1], "content": messages[-1]["content"] + files_note(messages)}]
         raise BadModelOutput(f"{self._s.tiers[tier]} returned no usable files after {retries + 1} tries")
 
     def ask_json(self, tier: str, messages: list[dict], job_id: str, retries: int = 1) -> dict:

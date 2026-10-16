@@ -4,6 +4,7 @@ from devfloor_kit import CODER, SPEC, Script, dev, verdict
 from watchtower.engine.workspace import Workspace
 from watchtower.floors.f2_dev.devfloor import units
 from watchtower.floors.f2_dev.skeleton import apply
+from runner_kit import app_tower  # noqa: F401 — pipeline fixture
 
 ROUTES = [{"method": "GET", "path": "/", "fields": [], "shows": "All todo items and an add form"},
           {"method": "POST", "path": "/add", "fields": ["item"], "shows": "Confirmation message."}]
@@ -166,3 +167,45 @@ def test_a_private_store_import_in_tests_points_at_store_dot_name(tmp_path):  # 
     ws.write("test_store.py", "from store import _entries\n")
     problem = next(p for p in store_problems(ws) if "_entries" in p)
     assert "store._entries" in problem and "public" not in problem
+
+
+def test_under_the_skeleton_no_coder_message_asks_for_a_web_app(app_tower):  # 8c review r3: Review Focus 1
+    from conftest import APP_REPLIES, STORE_CODER
+    arch = dict(APP_REPLIES["f2.architect"][0])
+    arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
+    runner, model, _, job = app_tower({"f2.architect": [arch], "f2.coder": ["I will write it now."] + STORE_CODER})
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    convos = [m for c, m in zip(model.calls, model.messages) if c == "f2.coder"]
+    retries = [m[-1]["content"].split("no usable files", 1)[1] for m in convos if "no usable files" in m[-1]["content"]]
+    assert convos and retries
+    for system in {m[0]["content"] for m in convos}:
+        assert "store.py" in system and "add(entry)" in system and "items()" in system
+        assert not any(bad in system for bad in ("app.py", "test_*.py", "add_todo", "PORT")), system
+    for text in retries + [m[-1]["content"] for m in convos]:
+        assert "test_*.py" not in text and "add_todo" not in text
+    assert all("app.py" not in r and "### FILE: store.py" in r for r in retries)
+    runner.close()
+
+
+def test_the_coder_keeps_its_web_app_prompt_without_the_skeleton(app_tower):  # 8c review r3: only owned mode
+    runner, model, _, job = app_tower()
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    systems = {m[0]["content"] for c, m in zip(model.calls, model.messages) if c == "f2.coder"}
+    assert systems and all("PORT" in s and "### FILE: app.py" in s for s in systems)
+    runner.close()
+
+
+def test_store_problem_fixes_fit_their_file(tmp_path):  # 8c review r3 minors: test dunders, long names, ._os
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    ws.write("store.py", STORE)
+    ws.write("test_store.py", "import store\n\ndef name(x):\n    return type(x).__name__\n")
+    [p] = store_problems(ws)
+    assert "compare values directly" in p and "class" not in p, p
+    ws.write("test_store.py", "import xml.etree.ElementTree\nimport store\n")
+    [p] = store_problems(ws)
+    assert len(p) <= 200 and p.endswith("uuid"), p
+    ws.delete("test_store.py")
+    ws.write("store.py", STORE + "import threading\nX = threading._os\n")
+    [p] = store_problems(ws)
+    assert "uses ._os: remove it" in p and "underscore" not in p, p

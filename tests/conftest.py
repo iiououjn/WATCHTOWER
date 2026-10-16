@@ -44,11 +44,13 @@ class RoleModel:
         self.replies = {k: list(v) for k, v in replies.items()}
         self.calls = []
         self.prompts = []
+        self.messages = []  # 8c review r3: the whole conversation, system prompt included
 
     def __call__(self, **kw):
         role = kw["messages"][0]["content"].split("]")[0].removeprefix("[role:")
         self.calls.append(role)
         self.prompts.append(kw["messages"][-1]["content"])
+        self.messages.append(kw["messages"])
         queue = self.replies[role]
         reply = queue.pop(0) if len(queue) > 1 else queue[0]
         return fake_response(reply if isinstance(reply, str) else json.dumps(reply), 2, 3)
