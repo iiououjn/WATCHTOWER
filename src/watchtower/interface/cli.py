@@ -125,7 +125,7 @@ def ask(
 
 @app.command()
 def pause(job_id: str):
-    """Ask a running job to pause after its current step."""
+    """Ask a running job to pause after its current step or dev attempt."""
     _, conn = _open()
     jobs = JobStore(conn)
     job = jobs.get(job_id)
@@ -135,7 +135,7 @@ def pause(job_id: str):
         raise typer.Exit(2)
     jobs.request_pause(job_id)
     AuditLog(conn).append("owner", "pause_requested", {}, job_id)
-    typer.echo(f"Pause requested; job {job_id} will pause after its current step.")
+    typer.echo(f"Pause requested; job {job_id} will pause after its current step or dev attempt.")
 
 
 @app.command()

@@ -42,12 +42,14 @@ def transient(error: BaseException) -> bool:
     builtins, a status code and class names (MRO), never library types, so it outlives a swap of the client."""
     if isinstance(error, (ConnectionError, TimeoutError)):
         return True
+    if any(cls.__name__ in _TRANSIENT_NAMES for cls in type(error).__mro__):  # before the code: a Timeout is 408
+        return True
     status = getattr(error, "status_code", None)
     if status is None:
         status = getattr(getattr(error, "response", None), "status_code", None)
     if isinstance(status, int) and not isinstance(status, bool):
         return 500 <= status <= 599
-    return any(cls.__name__ in _TRANSIENT_NAMES for cls in type(error).__mro__)
+    return False
 
 
 def parse_json(text: str) -> dict:
@@ -218,6 +220,8 @@ class ModelSocket:
             if attempt:  # a transient failure: back off, then only if the budget still has room
                 self._sleep(RETRY_DELAYS[attempt - 1])
                 self._budget.check(job_id)
+                if local:  # Ollama may have crashed and restarted: read the resident list and RAM again
+                    self._swap_to(model, job_id)
             kwargs.update(self._limits(job_id))
             start = self._clock()
             try:

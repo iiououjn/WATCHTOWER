@@ -1,3 +1,5 @@
+import sqlite3
+
 from runner_kit import *  # noqa: F403 — helpers and fixtures
 
 
@@ -447,3 +449,18 @@ def test_sign_off_names_only_commands_that_work_before_approval(app_tower, conn)
     assert f"After you approve: watchtower deploy {job.id}" in summary
     assert "Safer — deploy it isolated" not in summary
     runner.close()
+
+
+def test_a_failed_outcome_publish_never_hides_the_outcome(env, monkeypatch):
+    runner, jobs, bus, model, unloaded, job = env
+    model.fail_on, model.fail_exc = "answer", ConnectionError
+    real = bus.publish
+
+    def locked(topic, *a, **kw):
+        if topic == "job.paused":
+            raise sqlite3.OperationalError("database is locked")
+        return real(topic, *a, **kw)
+    monkeypatch.setattr(bus, "publish", locked)
+    out = runner.start(job.id, "small")
+    assert out.status == "paused" and "ollama pull" in out.reason  # the pause reason, not the publish error
+    assert jobs.get(job.id).status == "paused"

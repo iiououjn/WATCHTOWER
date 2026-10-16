@@ -202,7 +202,10 @@ class JobRunner:
     def _end(self, job_id: str, status: str, reason: str | None, answer: str | None = None) -> RunOutcome:
         # record the outcome first, so a second Ctrl-C during cleanup cannot leave the job 'running'
         self._jobs.set_status(job_id, status, reason)
-        self._bus.publish(f"job.{status}", {"reason": reason} if reason else {}, job_id)
+        try:
+            self._bus.publish(f"job.{status}", {"reason": reason} if reason else {}, job_id)
+        except Exception:  # noqa: BLE001 — the status row is right; a locked bus must not hide the outcome
+            pass
         try:
             self._socket.unload_all(job_id)
         except KeyboardInterrupt:

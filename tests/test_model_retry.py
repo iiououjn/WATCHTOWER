@@ -6,7 +6,7 @@ from conftest import fake_response
 from watchtower.engine import model_socket
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.governor.budget import Budget, BudgetExceeded
-from watchtower.engine.model_socket import ModelSocket, ModelUnavailable, transient
+from watchtower.engine.model_socket import LowMemory, ModelSocket, ModelUnavailable, transient
 
 
 class APIConnectionError(Exception):  # litellm's name for a dropped connection
@@ -159,3 +159,30 @@ def test_a_reply_that_overshoots_the_budget_is_kept(conn, settings):
     assert budget.usage("o")["used_tokens"] == 5990
     with pytest.raises(BudgetExceeded):  # the cap stops the next call
         sock.ask("small", [{"role": "user", "content": "x"}], "o")
+
+
+def _litellm_errors():
+    litellm = pytest.importorskip("litellm")  # skipped once litellm is swapped out; the stand-ins above remain
+    args = {"message": "x", "model": "m", "llm_provider": "ollama"}
+    return litellm.Timeout(**args), litellm.APIConnectionError(**args), litellm.NotFoundError(**args)
+
+
+def test_real_litellm_errors_are_classified():
+    timeout, dropped, missing = _litellm_errors()
+    assert timeout.status_code == 408  # a timeout carries a 4xx code, so the name has to win over it
+    assert transient(timeout) and transient(dropped) and not transient(missing)
+
+
+def test_a_retry_reads_ram_again_before_reloading(conn, settings):
+    sleeps, ram = [], [100]
+    sock, calls = socket(conn, settings, [], sleeps)
+
+    def crashed():  # Ollama restarted after the first call: low RAM now, and the model is gone
+        ram[0] = 5
+        raise ConnectionResetError("ollama died")
+    script = [crashed, lambda: fake_response("ok", 1, 1)]
+    sock._complete = lambda **kw: (calls.append(kw), script.pop(0)())[1]
+    sock._free_ram = lambda: ram[0]
+    with pytest.raises(LowMemory):
+        sock.ask("small", [{"role": "user", "content": "x"}], "j")
+    assert len(calls) == 1

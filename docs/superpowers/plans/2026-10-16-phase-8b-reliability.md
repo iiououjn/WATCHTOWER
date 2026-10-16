@@ -104,3 +104,15 @@ The job stayed `running`; `resume` refused without `--force`; resume re-ran all 
 - Tests keep the retries but not the backoff seconds (conftest `no_retry_waits`); test_model_retry checks 2 s, 4 s.
 
 Every new guard was mutation-checked: removing it makes its test fail.
+
+## Review r1
+
+- Fixed: `transient()` reads class names before the status code, so `litellm.Timeout` (408) is retried; a test
+  uses real litellm exceptions behind `importorskip`. A local retry runs `_swap_to` again, so RAM and the
+  resident list are re-read after an Ollama crash. `_end` guards its publish like `_record_error`. The pause
+  message names the dev attempt.
+- Deferred minors: (1) `owner_alive()` takes a brief exclusive probe lock, so a `start`/`resume` racing a
+  `status` can fail with "running in another process"; `LOCK_SH` does not help (start's `LOCK_EX` still
+  conflicts), the fix is a retry-once in the start/resume probe. (2) `dev` clears its progress row before
+  LangGraph writes the node checkpoint; a crash in that window re-runs dev from scratch. Move the clear to
+  the next node or to `_invoke` after a done result.

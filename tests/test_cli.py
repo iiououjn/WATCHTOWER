@@ -157,7 +157,7 @@ def test_pause_flags_running_job():
     store.set_status(job.id, "running")
     result = runner.invoke(cli.app, ["pause", job.id])
     assert result.exit_code == 0
-    assert "after its current step" in result.output
+    assert "after its current step or dev attempt" in result.output
     assert store.pause_requested(job.id) is True
 
 
