@@ -279,5 +279,6 @@ def apply(plan: dict, title: str, ws: Workspace, previous=frozenset()) -> tuple[
     ws.write(entry, TEMPLATE.replace("__CONFIG__", config))
     files = [{"path": entry, "purpose": "web server, written by the tower: do not change it"},
              {"path": STORE, "purpose": _store_purpose(fields)},
-             {"path": STORE_TESTS, "purpose": "unittest tests for store.add and store.items"}]
+             {"path": STORE_TESTS, "purpose": "unittest tests: import store; call store.add(entry) and "
+                                                     "store.items()"}]
     return {**plan, "files": files}, {entry} | SHADOWS

@@ -131,10 +131,16 @@ def _plan_path(raw) -> str | None:
     return rel.as_posix() if rel.suffix in ALLOWED_SUFFIXES else None
 
 
-def units(plan: dict) -> list[list[dict]]:
+def units(plan: dict, owned=frozenset()) -> list[list[dict]]:
     """F2 Lead's split, by code: unit 1 is the MVP (entry + test files), then the other planned files in
-    groups of up to 3, in plan order; at most 4 units (the fix loop writes anything left over)."""
+    groups of up to 3, in plan order; at most 4 units (the fix loop writes anything left over). Under the
+    skeleton (8c, run 38) the store comes before its tests: a store written after them copied their names."""
     files = list({f["path"]: f for f in plan["files"]}.values())
+    if owned:
+        mine = [f for f in files if f["path"] != plan["entry"]]
+        split = [[f for f in files if f["path"] == plan["entry"]], [f for f in mine if not _is_test_file(f["path"])],
+                 [f for f in mine if _is_test_file(f["path"])]]
+        return [u[:UNIT_FILES] for u in split if u][:MAX_UNITS]
     first = [f for f in files if f["path"] == plan["entry"]]
     first += [f for f in files if PurePosixPath(f["path"]).name.startswith("test")][:UNIT_FILES - len(first)]
     rest = [f for f in files if f not in first]
@@ -193,7 +199,7 @@ class DevFloor:
         """F2 workers: one coder call per unit that still has missing files, back to back on the coder model.
         A worker writes only its own unit's files; a garbled reply costs that unit (the fix loop catches up)."""
         present = {p.lower() for p in self._ws.files()}  # macOS disks are case-blind: App.py is app.py
-        todo = [[f for f in u if f["path"].lower() not in present] for u in units(plan)]
+        todo = [[f for f in u if f["path"].lower() not in present] for u in units(plan, self.owned)]
         todo = [u for u in todo if u]  # a worker writes only files that do not exist yet: never a fixed one
         qa = _qa_block("Floor 4 QA will run these HTTP checks against the app:\n", qa_checks, bool(self.owned))
         notes: list[str] = []
