@@ -16,7 +16,7 @@ from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_N
                                                _capped, _failure_note, _failure_rows, _problem_note, failures,
                                                stuck_note)
 from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings, sibling_names
-from watchtower.floors.f2_dev.skeleton import STORE
+from watchtower.floors.f2_dev.skeleton import STORE, STORE_NOTE, STORE_TESTS
 from watchtower.floors.f2_dev.lint import handler_state_problems, idiom_notes
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
@@ -128,9 +128,6 @@ def _compact_checks(checks: Sequence[dict]) -> str:
 ESCAPE_NOTE = ('Checks with "expect_escaped": true post text containing <&> (written &lt;&> above). The page '
                "must show it escaped exactly once: html.escape(text) when you build the HTML, not on save.\n")
 
-
-STORE_NOTE = ("The tower's server escapes all text when it builds the page: store.py keeps text exactly as "
-              "given. Never call html.escape or quote on it.\n")  # 7b (run 33): the escape hint made it escape twice
 
 
 def _qa_block(head: str, checks: Sequence[dict], store_only: bool = False) -> str:
@@ -450,6 +447,9 @@ class DevFloor:
                 notes.append(f"{str(f.get('path'))[:100]!r} belongs to the tower's web server and was not changed: "
                              f"write {STORE} (add and items) instead")
                 continue
+            if self.owned and f.get("delete") is not True and str(given).lower() not in (STORE, STORE_TESTS):
+                notes.append(f"File rejected: {str(f.get('path'))[:100]!r}: write only {STORE} and {STORE_TESTS}")
+                continue  # 7c (run 36): a stray AI-written XSS server shipped beside the tower's
             if f.get("delete") is not True:
                 if written >= MAX_FILES_PER_ROUND:  # deletes don't use up the cap; writes beyond it are dropped
                     changed = True  # it sent more than was written: never tell it "unchanged"

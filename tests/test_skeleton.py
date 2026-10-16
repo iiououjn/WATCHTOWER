@@ -269,3 +269,30 @@ def test_a_store_returning_a_lone_surrogate_still_answers(tmp_path):  # 7b revie
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_a_skeleton_coder_writes_only_the_store_and_its_tests(tmp_path):  # 7c (run 36: a stray XSS app.py shipped)
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    _, floor.owned = apply(_plan(TODO), "Todo", Workspace(tmp_path))
+    for path in ("server.py", "test_server.py", "tests/test_store.py", "data.json", "store/__init__.py", "README.md"):
+        notes = floor._write([{"path": path, "content": "x = 1\n"}])
+        assert path not in Workspace(tmp_path).files() and any("store.py" in n for n in notes), path
+    floor._write([{"path": "store.py", "content": STORE}, {"path": "Test_Store.py", "content": "import store\n"}])
+    assert {"store.py", "Test_Store.py"} <= set(Workspace(tmp_path).files())
+
+
+def test_a_skeleton_coder_may_still_delete_a_stray_file(tmp_path):  # 7c
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    _, floor.owned = apply(_plan(TODO), "Todo", Workspace(tmp_path))
+    Workspace(tmp_path).write("server.py", "x = 1\n")
+    floor._write([{"path": "server.py", "delete": True}])
+    assert "server.py" not in Workspace(tmp_path).files()
+
+
+def test_without_the_skeleton_any_file_may_be_written(tmp_path):  # 7c: the coder path is unchanged
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    floor._write([{"path": "server.py", "content": "x = 1\n"}])
+    assert "server.py" in Workspace(tmp_path).files()

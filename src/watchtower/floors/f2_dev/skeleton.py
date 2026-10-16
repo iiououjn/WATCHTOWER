@@ -14,6 +14,8 @@ from watchtower.floors.f4_qa_deploy.contract import contract_checks
 STORE, STORE_TESTS = "store.py", "test_store.py"
 SHADOWS = {"html.py", "os.py", "traceback.py", "http", "urllib", "store"}  # 'store/' would shadow store.py  # what the server imports: a coder copy would win
 MARK = TOWER_MARK
+STORE_NOTE = ("The tower's server escapes all text when it builds the page: store.py keeps text exactly as "
+              "given. Never call html.escape or quote on it.\n")  # 7b (run 33): the escape hint made it escape twice
 
 TEMPLATE = '''"""Web server written by the tower. Do not edit: write store.py (add(entry) and items())."""
 import sys
