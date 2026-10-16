@@ -94,3 +94,13 @@ The job stayed `running`; `resume` refused without `--force`; resume re-ran all 
 6. Overshoot keeps the reply (`Budget.record`).
 7. Unexpected errors pause with the error recorded.
 8. `SchedulerBusy` not advisory; slot wait 600 s; cleanup never masks the error.
+
+## Existing tests whose expectations changed (on purpose)
+
+- `resume` of a `running` job with a free lock no longer needs `--force` (test_runner, test_cli).
+- A `ConnectionError` is tried three times before the pause: three `model_error` rows, `answer` called 4 times.
+- An overshooting reply is returned; the next call raises `BudgetExceeded` (test_budget_exceeded_stops).
+- An unexpected `RuntimeError` pauses (exit 3) instead of failing (test_unexpected_error_never_leaves_job_running).
+- Tests keep the retries but not the backoff seconds (conftest `no_retry_waits`); test_model_retry checks 2 s, 4 s.
+
+Every new guard was mutation-checked: removing it makes its test fail.
