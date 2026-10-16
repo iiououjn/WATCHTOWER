@@ -35,7 +35,7 @@ from watchtower.floors.f4_qa_deploy.releases import Releases, manifest_of, manif
 from watchtower.csuite.ceo import CEO
 from watchtower.csuite.cpo import enough_criteria
 from watchtower.csuite.cto import CTO
-from watchtower.engine.workflow import Step
+from watchtower.engine.workflow import Progress, Step
 from watchtower.guardrails import Guardrails, load_guardrails
 from watchtower.engine.workspace import Workspace
 from watchtower.roles import Role
@@ -110,14 +110,14 @@ class TowerPipeline:
 
     def app_steps(self) -> list[Step]:
         return [Step("spec", self._app_spec), Step("approval", self._approval),
-                Step("research", self._research), Step("dev", self._dev),
+                Step("research", self._research), Step("dev", self._dev, resumable=True),
                 Step("signoff_request", self._signoff_request), Step("signoff", self._signoff)]
 
     def _research(self, data: dict) -> dict:
         return self._f1(data) if data.get("research") else {"f1": None}
 
-    def _dev(self, data: dict) -> dict:
-        job_id, spec, r = data["job_id"], data["spec"], self._roles
+    def _dev(self, data: dict, progress: Progress | None = None) -> dict:
+        progress, job_id, spec, r = progress or Progress.none(), data["job_id"], data["spec"], self._roles
         ask = lambda role, prompt: self._call(role, data, prompt)  # noqa: E731
         ws = Workspace(self._sandbox.workspace(job_id))
         def run(cmd: list[str]):
@@ -137,15 +137,29 @@ class TowerPipeline:
         look = Lookout(self._beacon_factory if online else None, self._knowledge)
         peek = lambda floor, query, hits=2, chars=700: look.ask(  # noqa: E731
             floor, query, job_id, lambda prompt: self._ask(r[f"glass.{floor}"], data, prompt), hits, chars)
-        docs = peek("f2", "python standard library http.server " + spec["title"])
-        plan, feedback = self._approved_plan(data, dev, cto, research, lessons, [], docs), []
-        units_due = True  # F2 workers write units on the first build and after each re-plan, never on a fix
-        focus = oversight.focus(spec)
-        qa_round = QARound(qa_office, qa, spec)
-        qa_round.reset(self._plan_qa(data, plan, qa_office))
-        expect = page_text(spec["title"]) if dev.owned else f3_office.expect(spec, plan["routes"])
-        model_heard = False  # 6v: has the coder already heard a model-only gate objection?
-        for attempt in range(self._g.max_send_backs + 1):
+        qa_round, saved = QARound(qa_office, qa, spec), progress.state
+        if saved:  # 8b: resume after the last finished attempt: no re-plan, the send-back counter is kept
+            plan, feedback, docs, focus, expect = (saved[k] for k in ("plan", "feedback", "docs", "focus", "expect"))
+            dev.owned, units_due, model_heard = set(saved["owned"]), saved["units_due"], saved["model_heard"]
+            qa_round.restore(saved["qa"])
+            self._known.update({(job_id, floor): text for floor, text in saved["known"].items()})
+        else:
+            docs = peek("f2", "python standard library http.server " + spec["title"])
+            plan, feedback = self._approved_plan(data, dev, cto, research, lessons, [], docs), []
+            units_due = True  # F2 workers write units on the first build and after each re-plan, never on a fix
+            focus = oversight.focus(spec)
+            qa_round.reset(self._plan_qa(data, plan, qa_office))
+            expect = page_text(spec["title"]) if dev.owned else f3_office.expect(spec, plan["routes"])
+            model_heard = False  # 6v: has the coder already heard a model-only gate objection?
+
+        def save(next_attempt: int) -> None:  # durable, then the owner's pause acts: no finished attempt is lost
+            progress.save({"attempt": next_attempt, "plan": plan, "feedback": feedback, "docs": docs, "focus": focus,
+                           "expect": expect, "owned": sorted(dev.owned), "units_due": units_due,
+                           "model_heard": model_heard, "qa": qa_round.state(),
+                           "known": {f: t for (j, f), t in self._known.items() if j == job_id}})
+        if not saved:
+            save(0)
+        for attempt in range(saved.get("attempt", 0), self._g.max_send_backs + 1):
             written: list[int] = []  # F2 workers write the missing planned files first (MVP unit first)
 
             def on_unit(i: int, n: int, paths: list[str]) -> None:
@@ -247,6 +261,8 @@ class TowerPipeline:
                 plan, units_due = self._approved_plan(data, dev, cto, research, lessons, feedback, docs), True
                 qa_round.reset(self._plan_qa(data, plan, qa_office))
                 expect = page_text(spec["title"]) if dev.owned else f3_office.expect(spec, plan["routes"])
+            save(attempt + 1)
+        progress.clear()  # out of send-backs: an owner's resume starts a fresh round on purpose
         self._retro(data, oversight, passed=False)
         raise NeedsOwner(f"gate rejected the app {self._g.max_send_backs + 1} times: {'; '.join(feedback)[:300]}")
 
