@@ -162,3 +162,41 @@ def test_workspace_is_mounted_read_only_and_copied_to_capped_scratch(settings, a
     tail = argv[argv.index("python:latest") + 1:]
     assert tail[:4] == ["timeout", "-s", "KILL", "60"] and "cp -a /src/. /work/" in tail[6]
     assert tail[-3:] == ["python", "-m", "unittest"]
+
+
+# 8a (audit D-M2): AI code can print gigabytes inside its time limit; the host keeps only a bounded tail
+import sys  # noqa: E402
+import tracemalloc  # noqa: E402
+
+from watchtower.engine.sandbox import capped_run  # noqa: E402
+
+
+def test_sandbox_captures_through_the_bounded_reader_by_default(settings, audit):
+    assert Sandbox(settings, audit)._run is capped_run
+
+
+def test_capped_run_keeps_a_bounded_tail_of_a_flood():
+    flood = "import sys\nfor _ in range(300): sys.stdout.write('x' * 99_999 + 'y')\nsys.stderr.write('done')"
+    tracemalloc.start()
+    try:
+        proc = capped_run([sys.executable, "-c", flood], capture_output=True, text=True, timeout=60)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert proc.returncode == 0 and proc.stderr == "done" and proc.stdout.endswith("xy")
+    assert MAX_OUTPUT <= len(proc.stdout) <= 4 * MAX_OUTPUT
+    assert peak < 3_000_000  # 30 MB went through; subprocess.run would have held all of it
+
+
+def test_capped_run_times_out_and_kills():
+    import time
+    start = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        capped_run([sys.executable, "-c", "import time; print('hi', flush=True); time.sleep(30)"], timeout=1)
+    assert time.monotonic() - start < 10  # killed, not waited out
+
+
+def test_capped_run_replaces_broken_utf8_and_keeps_the_exit_code():
+    proc = capped_run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok\\xff'); sys.exit(3)"],
+                      timeout=30)
+    assert (proc.returncode, proc.stdout) == (3, "ok�")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,38 @@ from watchtower.engine.governor.audit import AuditLog
 
 MAX_OUTPUT = 20_000
 _JOB_ID = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def capped_run(argv: list[str], *, timeout: float | None = None, limit: int = 4 * MAX_OUTPUT,
+               **_ignored) -> subprocess.CompletedProcess:
+    """subprocess.run(capture_output=True, text=True) that never holds more than `limit` bytes of either stream:
+    one reader thread per pipe keeps only the tail. 8a (audit D-M2): AI code can print gigabytes inside its time
+    limit; capture_output buffered all of it in the tower's memory. Broken UTF-8 is replaced, never raised."""
+    proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    tails = (bytearray(), bytearray())
+
+    def drain(stream, tail: bytearray) -> None:
+        while chunk := stream.read1(65536):
+            tail.extend(chunk)
+            del tail[:-limit]
+
+    pipes = zip((proc.stdout, proc.stderr), tails)
+    readers = [threading.Thread(target=drain, args=pair, daemon=True) for pair in pipes]
+    for reader in readers:
+        reader.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        raise
+    finally:
+        for reader in readers:
+            reader.join(5)
+        proc.stdout.close()
+        proc.stderr.close()
+    out, err = (bytes(tail).decode("utf-8", errors="replace") for tail in tails)
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
 class SandboxUnavailable(Exception):
@@ -31,7 +64,7 @@ class Sandbox:
     copied into a 64 MB in-memory scratch dir, so executed code can never change, plant or fill files on
     the host — only the checked Workspace writer does that. The owner's files are never mounted."""
 
-    def __init__(self, settings: Settings, audit: AuditLog, run: Callable = subprocess.run):
+    def __init__(self, settings: Settings, audit: AuditLog, run: Callable = capped_run):
         self._s = settings
         self._audit = audit
         self._run = run
