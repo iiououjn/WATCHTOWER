@@ -42,3 +42,18 @@ I1 a deep store crashed F2 (RecursionError in the collector) and a parse overflo
 scan: both now report "nested too deeply to check" (scan split into `_scan`). M2 comprehension targets are
 local; M3 bare annotations bind nothing. Deferred (contrived): walrus in defaults/decorators/bases/lambdas,
 `case {**items}`; a conditional def gets a "rename" hint though it still blocks.
+
+## Series 36-39 (7b-7d) — stop rule met
+
+| run | app | result | cause |
+|---|---|---|---|
+| 36 | todo | FAIL (owner rejected) | stray AI-written XSS server shipped → fixed 7c |
+| 37 | guestbook | PASS (owner approved) | gate objection false ("security scan advisory") |
+| 38 | todo | FAIL F3 | list named `items` + `get_items()` → fixed 7d; process died mid-attempt 3 |
+| 38b | todo | PASS (owner approved) | coder unit tests fail (advisory); spec "no page refresh" unmet (tower server redirects) |
+| 39 | tip calc | PASS (owner approved) | non-skeleton; maths right, safe; label doubled, 500 on bad input, naive form parsing |
+
+Every tower bug found is fixed; what remains is model quality. Reliability work stops (no 7e).
+**Known limits:** non-skeleton apps' code quality (run 39); small gate/CEO false objections every run; the
+spec writer promises what the skeleton cannot do (run 34 "permanently", 38b "no refresh"); macOS
+MallocStackLogging noise in run logs. **Next:** whole-project audit, then the dashboard (spec Phase 7).
