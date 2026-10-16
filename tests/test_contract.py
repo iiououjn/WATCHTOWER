@@ -365,3 +365,16 @@ def test_an_incoming_advisory_flag_is_ignored():  # 7b review r1: only run_qa ma
     qa = _status_only([{"name": "home", "pass": True, "status": 200},
                        {"name": "tip", "pass": False, "status": 500, "advisory": True}], [HOME] + CALC)
     assert qa["pass"] is False and "advisory" not in qa["results"][1]
+
+
+def test_the_coder_hears_why_a_status_only_suite_failed():  # 7b review r2 I
+    from watchtower.floors.f4_qa_deploy.qafloor import run_qa
+    pkg = run_qa(_qa([{"name": "tip", "pass": False, "status": 200}]), "app.py", CALC)
+    assert pkg.summary.splitlines()[1].startswith("No page-text check passed")
+
+
+def test_a_timed_out_run_is_named_on_the_board():  # 7b review r2 M4
+    from watchtower.floors.f4_qa_deploy.qafloor import qa_headline
+    line = qa_headline([{"name": "a", "pass": True}, {"name": "tip", "pass": False, "advisory": True}], False,
+                       timed_out=True)
+    assert "timed out" in line

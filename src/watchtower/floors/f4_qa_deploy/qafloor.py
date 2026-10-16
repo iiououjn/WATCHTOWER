@@ -306,7 +306,7 @@ def parse_checks(reply, known: str | None = None) -> list[dict]:
     return checks
 
 
-def qa_headline(results: list[dict], passed: bool | None = None, decide: int = 0) -> str:
+def qa_headline(results: list[dict], passed: bool | None = None, decide: int = 0, timed_out: bool = False) -> str:
     """The board's F4 line: which checks failed and why, in one line (runs 17-19 showed only 'QA checks FAILED:').
     `passed` is the run's own verdict (a timed-out run fails even when every reported check passed); with
     `decide`, only the first `decide` checks (the tower's, 6u) count and the rest are named as advisory."""
@@ -316,7 +316,7 @@ def qa_headline(results: list[dict], passed: bool | None = None, decide: int = 0
     soft = "; ".join(str(r.get("name"))[:40] for r in advisory if r.get("pass") is not True)
     tail = f"; advisory failing: {soft}" if soft else ""
     tag = " tower" if decide else ""
-    if not bad and passed is False and advisory:  # 7b review r1 M3
+    if not bad and passed is False and advisory and not timed_out:  # 7b review r1 M3, r2 M4
         return f"QA checks FAILED: no check with page text passed; {len(advisory)} judged by status only"[:300]
     if not bad and passed is False:
         return f"QA checks FAILED (0/{len(deciding)}{tag}): the QA run timed out or its result was incomplete"
@@ -379,11 +379,15 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
         error += (("\n" if error else "") + f"Form data: check {str(coded)[:40]!r} shows a value still URL-encoded "
                   "(spaces as + or %20): parse_qs already decodes POST bodies; never call quote()/quote_plus() on text "
                   "you store or show (only URLs you build). In HTML use html.escape(text).")
+    if not passed and soft and not result.timed_out and all(r.get("pass") is True for r in deciding):  # r2 I
+        error += (("\n" if error else "")  # after the specific hints: the coder sees only the head
+                  + "No page-text check passed: show the expected text.")
     summary = f"QA checks {'passed' if passed else 'FAILED'}:\n" + (error + "\n" if error else "") + "\n".join(lines)
     if not passed:
         summary += f"\nApp output:\n{str(app_log)[-800:]}"
     return WorkPackage("f4", summary, [entry], [], [{"check": "qa", "pass": passed, "results": results,
-                                                     "advisory_failed": len(advisory), "decide": decide}],
+                                                     "advisory_failed": len(advisory), "decide": decide,
+                                                     "timed_out": bool(result.timed_out)}],
                        [] if passed else ["QA checks failed"])
 
 

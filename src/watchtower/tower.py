@@ -185,7 +185,7 @@ class TowerPipeline:
                     self._handoff(data, "f4", attempt, f4.checks_run[-1]["pass"], f4.open_questions)
                     self._post(data, "f4", "done" if f4.checks_run[-1]["pass"] else "issue",
                                qa_headline(f4.checks_run[-1].get("results") or [], f4.checks_run[-1]["pass"],
-                                           decide), known=f4.summary[:1500])
+                                           decide, f4.checks_run[-1].get("timed_out", False)), known=f4.summary[:1500])
                 if f4 is not None and f4.checks_run[-1]["pass"]:  # Floor 5 office: security scan, then spec audit
                     sec = security_package(xss_probe(run, plan["entry"], plan["routes"])  # probe first: never cut
                                            + security_scan(ws.root, ws.files()), self._g.security_fail_on)

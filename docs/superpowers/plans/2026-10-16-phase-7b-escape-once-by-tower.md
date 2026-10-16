@@ -51,6 +51,11 @@ check from failing a correct app (run 35).
 - *Found:* `test_separate_form_page_and_two_fields_pass` is vacuous — GUEST's `/sign` is "destructive", so
   zero tower checks. Deferred (7b's guestbook test uses `/add`).
 
+- *Review r2 (accepted):* a title-only stub on a numeric app (no echo, every check soft) passes F4 labelled
+  "judged by status only"; choice values ("celsius") count as echo and gate; old escape hints still say
+  html.escape to skeleton coders. Rulings: accept — the first reaches the owner labelled, the second reverts to
+  pre-7b gating, the third is normalised by show(). Cost if wrong: one labelled stub at sign-off.
+
 ## Stop rule
 
 7b is the last reliability phase. Runs 36-39 (todo, guestbook, todo, tip calc). If every remaining failure is
