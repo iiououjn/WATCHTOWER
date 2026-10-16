@@ -348,7 +348,9 @@ EVASIONS = {"from xmlrpc.server import SimpleXMLRPCServer\n": "imports xmlrpc.se
             "eval('1')\n": "uses eval", "f = open('d.json', 'w')\n": "uses open",
             "x = __import__('so' + 'cket')\n": "uses __import__", "import importlib\nim = importlib.import_module\n":
             "imports importlib", "import __main__\n": "imports __main__", "import ctypes\n": "imports ctypes",
-            "def helper(e):\n    e.__class__.__init__.__globals__\n": "uses .__", "from . import x\n": "imports ."}
+            "def helper(e):\n    e.__class__.__init__.__globals__\n": "uses .__", "from . import x\n": "imports .",
+            "def helper(e):\n    return e.__class__\n": "uses .__class__",  # 8c r1: one cause each, so a
+            "import collections\ncollections._sys\n": "uses ._sys"}  # guard removed on its own fails a test
 
 
 def _rejected_for(tmp_path, snippets):  # 8c (E-T1): a valid store plus the snippet, so only _scan can reject it
@@ -474,3 +476,14 @@ def test_the_store_contract_survives_a_deep_store_and_reads_python_scopes(tmp_pa
         assert not any("def items(" in p for p in store_problems(ws)), fine
     ws.write("store.py", base + "X = [(items := 1) for _ in E]\n")  # a walrus in a comprehension binds the module
     assert any("def items(" in p for p in store_problems(ws))
+
+
+def test_store_hints_are_ones_the_store_may_follow(tmp_path):  # 8c review r1 (minors): no html, no broken fix
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    ws.write("store.py", STORE + "import sqlite3\n")
+    assert "html" not in store_problems(ws)[0] and "json" in store_problems(ws)[0]  # STORE_NOTE: never escape
+    ws.write("store.py", STORE + "class Box(list):\n    def __init__(self):\n        super().__init__()\n")
+    assert store_problems(ws) == []  # ordinary class code
+    ws.write("store.py", STORE + "def helper(b):\n    return b.__dict__\n")
+    assert "instead of a class" in store_problems(ws)[0]

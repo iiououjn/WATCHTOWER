@@ -201,7 +201,15 @@ def test_a_prose_fence_after_the_code_is_not_part_of_the_file():  # 8c (audit A-
              "### FILE: index.html\n```html\n<p>x</p>\n```\nOpen it:\n```\nopen index.html\n```\n")
     assert parse_files(reply)["files"] == [{"path": "app.py", "content": "print('hi')\n"},
                                            {"path": "index.html", "content": "<p>x</p>\n"}]
-    md = "### FILE: notes.md\n```markdown\n# A\n```bash\nls\n```\nend\n```\nThat's all.\n```\nx\n```\n"
-    assert parse_files(md)["files"][0]["content"] == "# A\n```bash\nls\n```\nend\n"  # ```lang opens a pair
+    toml = "### FILE: a.toml\n```toml\nx = 1\n```bash\nls\n```\nend\n```\nThat's all.\n```\nx\n```\n"
+    assert parse_files(toml)["files"][0]["content"] == "x = 1\n```bash\nls\n```\nend\n"  # ```lang opens a pair
     broken = "### FILE: app.py\n```python\nif x\n```\nRun:\n```\npython app.py\n```\n"
     assert parse_files(broken)["files"][0]["content"].startswith("if x\n```\nRun:")  # nothing parses: unchanged
+
+
+def test_a_readme_with_a_bare_inner_block_is_kept_whole():  # 8c review r1: the A-F6 rule cut it at the inner ```
+    reply = ("### FILE: README.md\n```markdown\n# App\nRun it:\n```\npython app.py\n```\nThen open it.\n```\n"
+             "### FILE: notes.txt\n```\na\n```\nb\n```\nc\n```\n")
+    assert parse_files(reply)["files"] == [
+        {"path": "README.md", "content": "# App\nRun it:\n```\npython app.py\n```\nThen open it.\n"},
+        {"path": "notes.txt", "content": "a\n```\nb\n```\nc\n"}]  # text files: the last fence, as before 8c

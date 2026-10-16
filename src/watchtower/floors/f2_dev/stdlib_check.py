@@ -10,6 +10,7 @@ from watchtower.engine.workspace import Workspace
 # (3.12 still lists cgi in sys.stdlib_module_names), so they are named here, not read from this interpreter.
 REMOVED_313 = {"aifc", "audioop", "cgi", "cgitb", "chunk", "crypt", "imghdr", "lib2to3", "mailcap", "msilib", "nis",
                "nntplib", "ossaudiodev", "pipes", "sndhdr", "spwd", "sunau", "telnetlib", "uu", "xdrlib"}
+ADDED_314 = {"annotationlib", "compression"}  # 8c r1: in the 3.14 sandbox, not in a 3.12/3.13 tower's list
 INSTEAD = {"cgi": "use urllib.parse.parse_qs", "cgitb": "use traceback", "pipes": "use shlex.quote",
            "imghdr": "check the file's first bytes"}
 
@@ -40,6 +41,6 @@ def import_problems(ws: Workspace) -> list[str]:
             if mod in REMOVED_313:
                 problems.append(f"{name} imports {mod} (removed in Python 3.13; the sandbox runs 3.14): "
                                 + INSTEAD.get(mod, "use another standard module"))
-            elif mod not in sys.stdlib_module_names:
+            elif mod not in sys.stdlib_module_names | ADDED_314:
                 problems.append(f"{name} imports {mod} (not in the Python standard library)")
     return problems

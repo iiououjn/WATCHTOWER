@@ -77,8 +77,9 @@ inside the tower: each fix is a code change to the hint or the check, never a ne
    absorb it silently; the NameError in the coder's own tests is a clearer signal. Cost if wrong: one round.
 4. *Pair fences for .py too (A-F6's first fix).* No: a bare ``` inside a Python string would cut the file.
    Parse-wins keeps today's behaviour whenever the last fence parses. For non-.py files the first unpaired
-   bare fence closes the file: a README whose inner examples use bare ``` fences is cut short. Cost if wrong:
-   a cut .md file (never under the skeleton, never run).
+   bare fence closes the file. Review r2: not for text files (.md/.txt/.rst): a README's bare inner block
+   cannot be told from a prose fence, and a cut README lost text without a note, so text files keep the
+   last fence as before 8c. Cost if wrong: a README may end with the model's trailing prose (harmless text).
 5. *Pin the sandbox image instead of a removed-modules list (C-M4).* Pinning is batch 1 (security). The list
    holds whatever the tower or sandbox Python is. Cost if wrong: a module removed in 3.15 slips by until listed.
 6. *Split devfloor.py now.* Batch 4 does the split; this batch moves only the runner (no behaviour change) to
@@ -95,6 +96,13 @@ trimmed before QA/plan/spec, not after QA as stated in C-M5. Both need a reworke
 Review r1: C-M3 case fix kept non-entry names (`Utils.py` no longer renames utils.py) and writes before it
 deletes (a rejected write leaves App.py); test_store.py's private-import hint now says `store._entries`.
 Two guards mutation-confirmed. Two minors deferred above.
+
+Deferred minors (review r2): routes in `fit()` (same as r1's, batch 4; worst case ~9.8k chars with 8 maximal
+routes); pinning the sandbox image stays batch 1, so ADDED_314 is hand-kept like REMOVED_313.
+
+Review r2: text files keep their last fence (README fix); E-T1 snippets for `.__class__` and `._sys` now fail
+their own mutations; store.py hints drop html; `super().__init__()` is allowed and dunder hints say to use plain
+functions; `annotationlib`/`compression` count as standard library. All new guards mutation-confirmed.
 
 ## Review Focus
 

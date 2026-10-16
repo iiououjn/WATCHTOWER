@@ -68,6 +68,7 @@ _HEADER = re.compile(_MARK + r"(FILE|DELETE)[ \t]*(?:\*\*)?[ \t]*:[ \t]*(?:\*\*)
 _MEMO = re.compile(r"^[ \t]*(?:(?:#{2,4}|\*\*)[ \t]*(?:\*\*)?[ \t]*)?MEMO[ \t]+(f\d)[ \t]*(?:\*\*)?[ \t]*:"
                    r"[ \t]*(?:\*\*)?[ \t]*(\S.*?)[ \t]*$", re.I)
 _FENCE = re.compile(r"^([ \t]*)(`{3,}|~{3,})")
+_TEXT = (".md", ".markdown", ".txt", ".rst")  # _close(): kept to their last fence
 _PATH_OK = re.compile(r"[\w.-]+(?:/[\w.-]+)*\.\w+")
 FILES_NOTE = ("\n\nYour previous reply had no usable files. Reply with one block per file, exactly like this:\n"
               "### FILE: app.py\n```python\n<the complete file>\n```")
@@ -90,8 +91,9 @@ def _header(line: str) -> tuple[str, str] | None:
 
 def _close(path: str, lines: list[str], open_at: int, closes: list[int], fence: str, indent: str) -> int:
     """Which closing fence ends a file (8c, audit A-F6: a prose fence after the code made app.py a SyntaxError).
-    Python: the last one whose body parses (``` inside a string still works; nothing parses → the last). Other
-    files: the first bare fence not paired with a ```lang fence opened inside the body."""
+    Python: the last one whose body parses (``` inside a string still works; nothing parses → the last). Text
+    (.md/.txt/.rst): the last, as before 8c (r1: a README's bare inner block is not told from a prose fence, and a
+    cut README loses text silently). Other files: the first bare fence not paired with a ```lang fence in the body."""
     if path.endswith(".py"):
         for k in reversed(closes[-10:]):
             body = "\n".join(ln[len(indent):] if indent and ln.startswith(indent) else ln
@@ -103,6 +105,8 @@ def _close(path: str, lines: list[str], open_at: int, closes: list[int], fence: 
                 return k
             except (SyntaxError, ValueError, RecursionError, MemoryError):
                 continue
+        return closes[-1]
+    if path.lower().endswith(_TEXT):
         return closes[-1]
     depth = 0
     for k in range(open_at + 1, closes[-1] + 1):

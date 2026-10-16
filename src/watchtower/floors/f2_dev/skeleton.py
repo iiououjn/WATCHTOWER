@@ -171,7 +171,7 @@ def store_problems(ws: Workspace) -> list[str]:
 def _scan(name: str, safe: set[str], tree: ast.Module) -> list[str]:
     """7c: imports, banned names and dunders, for one file; the first problem only, with its fix (8c, C-M1)."""
     test = name == STORE_TESTS
-    allowed = f"import only {', '.join(sorted(safe - {'__future__'}))}"
+    allowed = f"import only {', '.join(sorted(safe - {'__future__'} - (set() if test else {'html'})))}"  # r1: STORE_NOTE
     for node in ast.walk(tree):  # an accident guard, not a sandbox: Docker and the owner's read are that
         why, fix = "", "remove it"
         if isinstance(node, ast.Import):
@@ -185,10 +185,12 @@ def _scan(name: str, safe: set[str], tree: ast.Module) -> list[str]:
                               f"import {mod} itself and use {mod}.{bad}" if test and bad.startswith("_")
                               else f"import {mod} itself and use its public names"))
         elif isinstance(node, ast.Attribute):  # private module aliases (collections._sys) reach sys: store.py only
-            dunder, private = node.attr.startswith("__"), node.attr.startswith("_") and not test
+            dunder = node.attr.startswith("__") and not (node.attr == "__init__" and _is_super(node.value))
+            private = node.attr.startswith("_") and not node.attr.startswith("__") and not test
             why = f"uses .{node.attr}" if (dunder or private or node.attr in BANNED - {"compile"}  # re.compile
                                            or node.attr in DANGER - safe) else ""
-            fix = "rename it without the leading underscore" if private and not dunder else fix
+            fix = ("use a plain list and two functions instead of a class" if dunder  # r1: never break super()
+                   else "rename it without the leading underscore" if private else fix)
         elif isinstance(node, ast.Name):
             n = node.id
             why = f"uses {n}" if n in BANNED or n.startswith("__") and n not in (
@@ -196,6 +198,12 @@ def _scan(name: str, safe: set[str], tree: ast.Module) -> list[str]:
         if why:
             return [f"{name} {why}: {fix}" + ("" if test else f" ({name} only keeps data in memory)")]
     return []
+
+
+def _is_super(node: ast.AST) -> bool:
+    """super() with no arguments: super().__init__() is ordinary class code (8c r1)."""
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "super"
+            and not node.args and not node.keywords)
 
 
 def _contract(tree: ast.Module) -> list[str]:
