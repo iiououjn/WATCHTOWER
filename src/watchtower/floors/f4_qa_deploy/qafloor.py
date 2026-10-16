@@ -306,15 +306,18 @@ def parse_checks(reply, known: str | None = None) -> list[dict]:
     return checks
 
 
-def qa_headline(results: list[dict], passed: bool | None = None, decide: int = 0) -> str:
+def qa_headline(results: list[dict], passed: bool | None = None, decide: int = 0, timed_out: bool = False) -> str:
     """The board's F4 line: which checks failed and why, in one line (runs 17-19 showed only 'QA checks FAILED:').
     `passed` is the run's own verdict (a timed-out run fails even when every reported check passed); with
     `decide`, only the first `decide` checks (the tower's, 6u) count and the rest are named as advisory."""
-    deciding, advisory = (results[:decide], results[decide:]) if decide else (results, [])
+    deciding, advisory = (results[:decide], results[decide:]) if decide else (  # 7b: status-only checks
+        [r for r in results if not r.get("advisory")], [r for r in results if r.get("advisory")])
     bad = [r for r in deciding if r.get("pass") is not True]
     soft = "; ".join(str(r.get("name"))[:40] for r in advisory if r.get("pass") is not True)
     tail = f"; advisory failing: {soft}" if soft else ""
     tag = " tower" if decide else ""
+    if not bad and passed is False and advisory and not timed_out:  # 7b review r1 M3, r2 M4
+        return f"QA checks FAILED: no check with page text passed; {len(advisory)} judged by status only"[:300]
     if not bad and passed is False:
         return f"QA checks FAILED (0/{len(deciding)}{tag}): the QA run timed out or its result was incomplete"
     if not bad:
@@ -347,9 +350,25 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
     except ValueError:
         app_log = output
     complete = len(results) == len(checks)  # else results is the one 'runner result missing' row: it decides
-    deciding = results[:decide] if decide and complete else results
-    passed = not result.timed_out and all(r.get("pass") is True for r in deciding)
+    # 7b (run 35): with no tower checks, a model check that got its status but not its text is advisory when
+    # that text is computed (exact prose, wrong maths): the coder cannot fix the check. Echo checks (text some
+    # check posted) still gate: those the model cannot get wrong
+    def echo(text: str) -> bool:  # either way round: post 'Buy milk', expect 'milk' (review r1 M4)
+        return any(v in text or (len(text.strip()) >= 3 and text.strip() in v) for v in posted)
+    posted = {str(v).strip() for c in checks for v in c.get("form", {}).values()
+              if len(str(v).strip()) >= 3 and re.search(r"[A-Za-z]", str(v))}
+    results = [{k: v for k, v in r.items() if k != "advisory"} for r in results]  # only run_qa marks advisory
+    soft = set() if decide or not complete else {
+        i for i, (r, c) in enumerate(zip(results, checks)) if r.get("pass") is not True
+        and type(r.get("status")) is int and r["status"] == c["expect_status"]
+        and not c.get("expect_escaped") and not c.get("expect_form") and not echo(str(c.get("expect_text", "")))}
+    results = [{**r, "advisory": True} if i in soft else r for i, r in enumerate(results)]
+    deciding = results[:decide] if decide and complete else [r for i, r in enumerate(results) if i not in soft]
+    passed = (not result.timed_out and all(r.get("pass") is True for r in deciding)  # and one check with real
+              and (not soft or any(r.get("pass") is True and re.search(r"\w{2,}", c["expect_text"])  # text
+                                   for r, c in zip(results, checks))))  # fully passed: '' matches any page (r1 I2)
     advisory = {i for i, r in enumerate(results) if decide and complete and i >= decide and r.get("pass") is not True}
+    advisory |= soft
     hints = _same_request_hints(checks, results)
     lines = [f"- {r.get('name')}: {'PASS' if r.get('pass') is True else 'FAIL'}"
              f"{' (advisory)' if i in advisory else ''}{hints.get(i, '')} "
@@ -360,11 +379,15 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
         error += (("\n" if error else "") + f"Form data: check {str(coded)[:40]!r} shows a value still URL-encoded "
                   "(spaces as + or %20): parse_qs already decodes POST bodies; never call quote()/quote_plus() on text "
                   "you store or show (only URLs you build). In HTML use html.escape(text).")
+    if not passed and soft and not result.timed_out and all(r.get("pass") is True for r in deciding):  # r2 I
+        error += (("\n" if error else "")  # after the specific hints: the coder sees only the head
+                  + "No page-text check passed: show the expected text.")
     summary = f"QA checks {'passed' if passed else 'FAILED'}:\n" + (error + "\n" if error else "") + "\n".join(lines)
     if not passed:
         summary += f"\nApp output:\n{str(app_log)[-800:]}"
     return WorkPackage("f4", summary, [entry], [], [{"check": "qa", "pass": passed, "results": results,
-                                                     "advisory_failed": len(advisory), "decide": decide}],
+                                                     "advisory_failed": len(advisory), "decide": decide,
+                                                     "timed_out": bool(result.timed_out)}],
                        [] if passed else ["QA checks failed"])
 
 

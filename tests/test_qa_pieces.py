@@ -61,8 +61,9 @@ def _page(html_expr):
 
 
 def test_a_piece_must_be_a_whole_text_node(tmp_path):  # 6t review r2 A: '1' found in '+1', 'eggs' in 'Added eggs'
-    assert _list(tmp_path, "<p>Count: <span>2</span></p>",
-                 _page('"<p>Count: <span>0</span></p><button>+2</button>"'))["pass"] is False
+    count = _list(tmp_path, "<p>Count: <span>2</span></p>",  # computed text: advisory since 7b, the row still fails
+                  _page('"<p>Count: <span>0</span></p><button>+2</button>"'))
+    assert count["results"][-1]["pass"] is False and count["results"][-1].get("advisory") is True
     assert _list(tmp_path, "<li>milk</li><li>eggs</li>",
                  _page('"<ul><li>milk</li></ul><p>Added eggs</p>"'))["pass"] is False
 

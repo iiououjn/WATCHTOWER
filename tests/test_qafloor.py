@@ -291,7 +291,7 @@ def test_a_failing_check_that_shares_its_request_says_so():
           {"name": "other", "pass": True, "status": 200, "detail": ""}]
     summary = run_qa(runner(result(["WATCHTOWER_QA " + json.dumps(qa)]))[0], "app.py", checks).summary
     line = next(ln for ln in summary.splitlines() if ln.startswith("- ADD:"))
-    assert line.startswith("- ADD: FAIL [same request as 'Check 1': show both texts]")
+    assert line.startswith("- ADD: FAIL (advisory) [same request as 'Check 1': show both texts]")  # 7b
     assert "same request" not in next(ln for ln in summary.splitlines() if ln.startswith("- other:"))
 
 

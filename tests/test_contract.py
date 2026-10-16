@@ -265,3 +265,144 @@ def test_coder_is_told_how_escaped_checks_read():  # 6z: untrusted() shows '<' a
     assert "&lt;&>" in block and "html.escape" in block.split("</untrusted>")[1]
     assert "html.escape" not in _qa_block("QA:\n", [{"name": "x", "path": "/", "expect_text": "a"}])
     assert _qa_block("QA:\n", []) == ""
+
+
+def test_the_coder_of_a_skeleton_app_is_told_to_keep_text_as_given():  # 7b (run 33)
+    from watchtower.floors.f2_dev.devfloor import _qa_block
+    block = _qa_block("QA:\n", contract_checks(TODO, "482913")[0], store_only=True)
+    note = block.split("</untrusted>")[1]
+    assert "exactly as given" in note and "when you build the HTML" not in note
+
+
+def _status_only(results, checks, decide=0):
+    from watchtower.floors.f4_qa_deploy.qafloor import run_qa
+    return run_qa(_qa(results), "app.py", checks, decide=decide).checks_run[-1]
+
+
+CALC = [{"name": "tip", "method": "POST", "path": "/calc", "form": {"bill": "10"}, "expect_status": 200,
+         "expect_text": "Total: $11.56"}]
+
+
+def test_without_tower_checks_a_wrong_text_with_the_right_status_is_advisory():  # 7b (run 35)
+    qa = _status_only([{"name": "home", "pass": True, "status": 200},
+                       {"name": "tip", "pass": False, "status": 200, "detail": "expected ... got 200"}], [HOME] + CALC)
+    assert qa["pass"] is True and qa["advisory_failed"] == 1 and qa["results"][1]["pass"] is False
+
+
+def test_status_only_never_passes_a_wrong_status_or_an_escape_or_form_check():  # 7b
+    home = {"name": "home", "pass": True, "status": 200}
+    for status in (500, "200"):
+        qa = _status_only([home, {"name": "tip", "pass": False, "status": status}], [HOME] + CALC)
+        assert qa["pass"] is False and qa["advisory_failed"] == 0
+    for key, val in (("expect_escaped", True), ("expect_form", {"action": "/calc", "fields": ["bill"]})):
+        qa = _status_only([home, {"name": "tip", "pass": False, "status": 200}], [HOME, {**CALC[0], key: val}])
+        assert qa["pass"] is False and qa["advisory_failed"] == 0
+
+
+def test_status_only_is_off_when_tower_checks_decide():  # 7b: 6u already marks those advisory
+    qa = _status_only([{"name": "[tower] add", "pass": False, "status": 200}, {"name": "home", "pass": True}],
+                      TOWER + MODEL, decide=1)
+    assert qa["pass"] is False and "advisory" not in qa["results"][0]
+
+
+def test_evidence_names_checks_judged_by_status_only():  # 7b
+    from watchtower.tower import _evidence
+    qa = {"check": "qa", "pass": True, "decide": 0, "advisory_failed": 1, "results": [{"pass": True}] * 2}
+    assert "1 judged by status only" in _evidence([qa])
+
+
+def test_status_only_needs_one_check_that_fully_passed():  # 7b: a blank 200 page is not a pass
+    assert _status_only([{"name": "tip", "pass": False, "status": 200}], CALC)["pass"] is False
+
+
+def test_the_board_line_names_status_only_checks_as_advisory():  # 7b
+    from watchtower.floors.f4_qa_deploy.qafloor import qa_headline
+    line = qa_headline([{"name": "a", "pass": True}, {"name": "tip", "pass": False, "advisory": True}], True)
+    assert line.startswith("QA checks passed (1/1)") and "advisory failing: tip" in line
+
+
+def test_an_echo_check_keeps_gating():  # 7b: text the check posted itself is not a model guess
+    checks = [HOME, {**CALC[0], "form": {"item": "milk"}, "expect_text": "<li>milk</li>"}]
+    qa = _status_only([{"name": "home", "pass": True, "status": 200}, {"name": "tip", "pass": False, "status": 200}],
+                      checks)
+    assert qa["pass"] is False
+
+
+HOME = {"name": "home", "method": "GET", "path": "/", "form": {}, "expect_status": 200, "expect_text": "Tip calculator"}
+
+
+def test_the_gate_hears_status_only_not_tower_checks_passed():  # 7b review r1 I1
+    from watchtower.floors.f4_qa_deploy.contract import QA_ADVISORY, gate_qa_note
+    assert gate_qa_note({"pass": True, "decide": 0, "advisory_failed": 1})[0].startswith("1 model QA check")
+    assert gate_qa_note({"pass": True, "decide": 3, "advisory_failed": 1}) == (QA_ADVISORY,)
+    assert gate_qa_note({"pass": False, "decide": 0, "advisory_failed": 1}) == ()
+    assert gate_qa_note({"pass": True, "decide": 0, "advisory_failed": 0}) == ()
+
+
+def test_status_only_needs_a_full_pass_with_real_text():  # 7b review r1 I2: '' matches any page
+    post = {**HOME, "name": "post", "method": "POST", "expect_text": ""}
+    qa = _status_only([{"name": "post", "pass": True, "status": 200}, {"name": "tip", "pass": False, "status": 200}],
+                      [post] + CALC)
+    assert qa["pass"] is False
+    ok = _status_only([{"name": "home", "pass": True, "status": 200}, {"name": "tip", "pass": False, "status": 200}],
+                      [HOME] + CALC)
+    assert ok["pass"] is True
+
+
+def test_the_board_says_why_a_status_only_suite_failed():  # 7b review r1 M3
+    from watchtower.floors.f4_qa_deploy.qafloor import qa_headline
+    line = qa_headline([{"name": "tip", "pass": False, "advisory": True}], False)
+    assert "timed out" not in line and "no check with page text passed" in line
+
+
+def test_an_echo_check_counts_both_ways():  # 7b review r1 M4: post 'Buy milk', expect 'milk'
+    checks = [HOME, {**CALC[0], "form": {"item": "Buy milk"}, "expect_text": "milk"}]
+    qa = _status_only([{"name": "home", "pass": True, "status": 200}, {"name": "tip", "pass": False, "status": 200}],
+                      checks)
+    assert qa["pass"] is False
+
+
+def test_an_incoming_advisory_flag_is_ignored():  # 7b review r1: only run_qa marks advisory
+    qa = _status_only([{"name": "home", "pass": True, "status": 200},
+                       {"name": "tip", "pass": False, "status": 500, "advisory": True}], [HOME] + CALC)
+    assert qa["pass"] is False and "advisory" not in qa["results"][1]
+
+
+def test_the_coder_hears_why_a_status_only_suite_failed():  # 7b review r2 I
+    from watchtower.floors.f4_qa_deploy.qafloor import run_qa
+    pkg = run_qa(_qa([{"name": "tip", "pass": False, "status": 200}]), "app.py", CALC)
+    assert pkg.summary.splitlines()[1].startswith("No page-text check passed")
+
+
+def test_a_timed_out_run_is_named_on_the_board():  # 7b review r2 M4
+    from watchtower.floors.f4_qa_deploy.qafloor import qa_headline
+    line = qa_headline([{"name": "a", "pass": True}, {"name": "tip", "pass": False, "advisory": True}], False,
+                       timed_out=True)
+    assert "timed out" in line
+
+
+def test_a_gate_objection_over_status_only_checks_reaches_the_owner():  # 7b review r3 I1 (run 35)
+    from types import SimpleNamespace as NS
+    from watchtower.evidence import model_objection
+    ok, pkg, verdict = NS(checks_run=[{"pass": True}]), NS(validate=lambda: []), NS(passed=False, reasons=["maths"])
+    soft = NS(checks_run=[{"pass": True, "decide": 0, "advisory_failed": 1}])
+    full = NS(checks_run=[{"pass": True, "decide": 0, "advisory_failed": 0}])
+    assert model_objection(verdict, pkg, ok, soft, ok) == ["maths"]
+    assert model_objection(verdict, pkg, ok, full, ok) == []  # model checks fully passed: the coder hears it
+
+
+def test_the_status_only_gate_note_does_not_invite_an_objection():  # 7b review r3 I1
+    from watchtower.floors.f4_qa_deploy.contract import gate_qa_note
+    note = gate_qa_note({"pass": True, "decide": 0, "advisory_failed": 2})[0]
+    assert "do not send the app back for them alone" in note and "yourself" not in note
+
+
+def test_show_escapes_any_stored_form_exactly_once(tmp_path):  # 7b review r3 M4
+    from watchtower.floors.f2_dev.skeleton import TEMPLATE
+    src = TEMPLATE.split("def show(text):")[1].split("\n\n\n")[0]
+    ns = {}
+    exec("import html\ndef show(text):" + src, ns)  # tower-written code
+    show = ns["show"]
+    for stored in ("<script>", "&lt;script&gt;", "&amp;lt;script&amp;gt;", "&amp;amp;lt;script&amp;amp;gt;"):
+        assert show(stored) == "&lt;script&gt;"
+    assert show("&copy; &#x3c;b") == "© &lt;b" and show(7) == "7" and "<" not in show("&#60;&#x3C;")
