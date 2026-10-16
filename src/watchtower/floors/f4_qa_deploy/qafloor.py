@@ -336,14 +336,14 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
     result = run(["python", "-I", "-c", QA_SCRIPT, entry, json.dumps(checks)])
     output = (result.stdout or "") + (result.stderr or "")
     found = _RESULT.findall(output)
-    try:
-        results = json.loads(found[0]) if len(found) == 1 else None  # a second line means someone forged one
+    try:  # 8a: the app shares the runner's uid; it can print a line, then kill the runner (exit 137)
+        results = json.loads(found[0]) if len(found) == 1 and result.exit_code == 0 else None
     except ValueError:
         results = None
     if (not isinstance(results, list) or not all(isinstance(r, dict) for r in results)
             or [r.get("name") for r in results] != [c["name"] for c in checks]):
-        results = [{"name": "qa", "pass": False, "status": None,
-                    "detail": "QA runner result missing, duplicated or incomplete"}]
+        why = f"exited with code {result.exit_code}" if result.exit_code else "result missing, duplicated or incomplete"
+        results = [{"name": "qa", "pass": False, "status": None, "detail": f"QA runner {why}"}]
     logs = _LOG.findall(output)
     try:
         app_log = json.loads(logs[-1]) if logs else output

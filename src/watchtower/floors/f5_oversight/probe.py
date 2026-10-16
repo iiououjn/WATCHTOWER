@@ -9,7 +9,7 @@ from watchtower.engine.sandbox import SandboxResult
 # Runs INSIDE the sandbox. argv: entry, plan-JSON {"posts": [{"path", "fields", "marker"}], "gets": [path]}.
 # F5's HTML-injection worker, by code: post a harmless tag into every form field, then read every page. A page
 # that returns the tag raw (not escaped) would run attacker HTML in a browser. The app's own output goes to a log
-# file, so it cannot print a result line.
+# file; a line it writes to this script's stdout anyway makes two lines or a killed script: both fail (8a).
 XSS_SCRIPT = """\
 import json, os, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 port = os.environ.get("WT_PORT", "8000")
@@ -88,8 +88,9 @@ def _finding(severity: str, entry: str, text: str) -> dict:
 
 def xss_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: list[dict]) -> list[dict]:
     """Floor 5 worker: HTML injection through the app's own forms. A raw marker on any page = HIGH finding.
-    No form routes → nothing to probe. A missing, doubled or empty result (no page answered) → MEDIUM: an
-    incomplete probe fails the build (default fail_on), it never passes as clean."""
+    No form routes → nothing to probe. A missing, doubled or empty result (no page answered), or a script that
+    did not exit 0 (8a: the app can print a line, then kill it) → MEDIUM: an incomplete probe fails the build
+    (default fail_on), it never passes as clean."""
     posts = [r for r in routes if r.get("method") == "POST" and r.get("fields") and _safe(r.get("path"))][:MAX_POSTS]
     if not posts:
         return []
@@ -100,7 +101,7 @@ def xss_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: lis
     result = run(["python", "-I", "-c", XSS_SCRIPT, entry, json.dumps(plan)])  # -I: app files can't shadow json
     found = _RESULT.findall((result.stdout or "") + (result.stderr or ""))
     try:
-        out = json.loads(found[0]) if len(found) == 1 and not result.timed_out else None
+        out = json.loads(found[0]) if len(found) == 1 and result.exit_code == 0 and not result.timed_out else None
     except ValueError:
         out = None
     hits = out.get("hits") if isinstance(out, dict) else None

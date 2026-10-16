@@ -7,8 +7,10 @@ from typing import Callable
 from watchtower.floors.framework import WorkPackage
 from watchtower.engine.sandbox import SandboxResult
 
+# Runs INSIDE the sandbox. argv: entry[, expected home text]. Three tower lines, then the app's log as one JSON
+# line (8a): nothing the app prints can pose as a tower line.
 SMOKE_SCRIPT = """\
-import os, subprocess, sys, time, urllib.request
+import json, os, subprocess, sys, time, urllib.request
 log = open("/tmp/app.log", "wb")
 p = subprocess.Popen([sys.executable, sys.argv[1]], env={**os.environ, "PORT": "8000"},
                      stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -36,14 +38,20 @@ print("SMOKE_STATUS", status)
 print("SMOKE_EXIT", code)
 expect = sys.argv[2] if len(sys.argv) > 2 else ""
 print("SMOKE_TEXT", "yes" if expect and expect in body else "no")
-print(out)
+print("SMOKE_LOG " + json.dumps(out, ensure_ascii=False))
 """
-_STATUS = re.compile(r"SMOKE_STATUS (\S+)")
-_TEXT = re.compile(r"SMOKE_TEXT (yes|no)")
-_EXIT = re.compile(r"SMOKE_EXIT (-?\d+|None)")
+_STATUS = re.compile(r"^SMOKE_STATUS (\S+)$", re.M)
+_TEXT = re.compile(r"^SMOKE_TEXT (yes|no)$", re.M)
+_EXIT = re.compile(r"^SMOKE_EXIT (-?\d+|None)$", re.M)
+_SMOKE_LOG = re.compile(r"^SMOKE_LOG (.*)$", re.M)
 EXITED = ("App {entry} exited with code {code} before answering any request: it ran and stopped. When run as "
           "`python {entry}` it must start its HTTP server and keep serving, e.g. end the file with "
           "`if __name__ == \"__main__\":` and a call to the function that calls serve_forever().")
+
+
+def _one(pattern: re.Pattern, output: str) -> str | None:
+    found = pattern.findall(output)
+    return found[0] if len(found) == 1 else None
 
 
 def smoke_test(run: Callable[[list[str]], SandboxResult], entry: str, expect: str = "") -> WorkPackage:
@@ -51,19 +59,28 @@ def smoke_test(run: Callable[[list[str]], SandboxResult], entry: str, expect: st
     home-page text is a soft check: a miss becomes an open question for the gate, not a failure."""
     result = run(["python", "-I", "-c", SMOKE_SCRIPT, entry] + ([expect] if expect else []))
     output = (result.stdout or "") + (result.stderr or "")
-    match = _STATUS.search(output)
-    status = match.group(1) if match and match.group(1) != "None" else None
-    passed = status == "200" and not result.timed_out
-    exited = _EXIT.search(output)  # first match: the tower's own line comes before the app's log
+    ours = result.exit_code == 0 and not result.timed_out  # 8a: the app can print a line, then kill the script
+    status, exited, text = (_one(p, output) if ours else None for p in (_STATUS, _EXIT, _TEXT))  # never the first
+    status = None if status == "None" else status
+    passed = status == "200"
     head = (f"App {entry} {'answered HTTP 200 on GET /' if passed else f'did not answer HTTP 200 (got {status})'}")
-    if not passed and exited and exited.group(1) == "0":  # it ran to the end: nothing started the server
+    if not ours:
+        ended = "timed out" if result.timed_out else f"exited with code {result.exit_code}"
+        head = f"App {entry}: the smoke test {ended}"
+    elif len(_STATUS.findall(output)) != 1:
+        head = f"App {entry}: smoke result missing or duplicated"
+    elif not passed and exited == "0":  # it ran to the end: nothing started the server
         head = EXITED.format(entry=entry, code=0)
-    elif not passed and exited and exited.group(1) != "None":  # a crash: short head, the error below stays seen
-        head = f"App {entry} crashed (exit code {exited.group(1)}) before answering any request; its error is below."
-    summary = f"{head}\n{output[-1200:]}"
-    text = _TEXT.search(output)
+    elif not passed and exited not in (None, "None"):  # a crash: short head, the error below stays seen
+        head = f"App {entry} crashed (exit code {exited}) before answering any request; its error is below."
+    logs = _SMOKE_LOG.findall(output)
+    try:
+        log = json.loads(logs[-1]) if logs else output
+    except ValueError:
+        log = output
+    summary = f"{head}\n{str(log)[-1200:]}"
     questions = [] if passed else ["app did not answer HTTP 200"]
-    if passed and expect and not (text and text.group(1) == "yes"):
+    if passed and expect and text != "yes":
         questions.append(f"home page does not show {expect!r} (F3 Build Lead expected it)")
     return WorkPackage("f3", summary, [entry], [], [{"check": "http", "pass": passed, "status": status}], questions)
 
@@ -126,7 +143,8 @@ def _probe_paths(routes: list[dict]) -> list[str]:
 
 def route_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: list[dict]) -> WorkPackage:
     """Floor 3, full app: every GET route of the architect's contract must answer (no 404, no 5xx, no
-    silence). Exactly one result line counts: a second one means the app tried to forge it."""
+    silence). Only exactly one result line from a probe that exited 0 counts (8a: the app runs as the probe's uid;
+    it can write a line, then kill the probe)."""
     paths = _probe_paths(routes)
     if not paths:
         return WorkPackage("f3", "Full app: no other GET routes to probe (MVP: GET / answered)", [entry], [],
@@ -135,12 +153,13 @@ def route_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: l
     output = (result.stdout or "") + (result.stderr or "")
     found = _PROBE.findall(output)
     try:
-        results = json.loads(found[0]) if len(found) == 1 else None
+        results = json.loads(found[0]) if len(found) == 1 and result.exit_code == 0 else None
     except ValueError:
         results = None
     if not isinstance(results, list) or [r.get("path") if isinstance(r, dict) else None for r in results] != paths:
         results = [{"path": p, "status": None} for p in paths]
-        bad_note = "probe result missing, duplicated or incomplete"
+        bad_note = (f"probe exited with code {result.exit_code}" if result.exit_code
+                    else "probe result missing, duplicated or incomplete")
     else:
         bad_note = ""
     failed = [r for r in results if not isinstance(r.get("status"), int) or r["status"] >= 500
