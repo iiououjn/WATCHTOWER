@@ -132,3 +132,18 @@ def test_a_failing_idle_event_never_replaces_the_real_error(parts):
     with pytest.raises(LowMemory):
         with Scheduler(settings, memory, bus).agent("a", "j"):
             raise LowMemory("9% free")
+
+
+def test_an_unusable_audit_log_during_cleanup_never_replaces_the_real_error(parts):
+    from watchtower.engine.model_socket import LowMemory
+    settings, memory, bus = parts
+    real = bus.publish
+
+    def publish(topic, payload, job_id=None):
+        if topic in ("agent.idle", "agent.cleanup_failed"):
+            raise OSError("disk full")
+        return real(topic, payload, job_id)
+    bus.publish = publish
+    with pytest.raises(LowMemory):
+        with Scheduler(settings, memory, bus).agent("a", "j"):
+            raise LowMemory("9% free")
