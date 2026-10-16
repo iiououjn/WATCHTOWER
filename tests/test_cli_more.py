@@ -87,7 +87,7 @@ def test_build_app_end_to_end_with_fakes(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "make_sandbox", lambda settings, conn: FakeSandbox(tmp_path / "apps"))
     result = runner.invoke(cli.app, ["run", "a todo web app", "--yes"])
     assert result.exit_code == 0, result.output
-    assert "App ready" in result.output and "python app.py" in result.output
+    assert "App ready" in result.output and "python app.py" not in result.output  # 8a (D-H1)
 
 
 def test_deploy_done_app_prints_local_url(monkeypatch, tmp_path):
