@@ -185,15 +185,27 @@ def _contract(tree: ast.Module) -> list[str]:
     """7d (run 38: a list named items, the function get_items): the tower's server calls store.add(entry) and
     store.items(). Both must be plain module-level functions that take those arguments, and nothing rebinds them."""
     defs, rebound = {}, set()
+    scoped = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+    def bound(node) -> None:  # module-level bindings only: a function's or class's own names stay local (r1 M1)
+        names = ([node.id] if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))
+                 else [a.asname or a.name.split(".")[0] for a in node.names]
+                 if isinstance(node, (ast.Import, ast.ImportFrom)) else
+                 [node.name] if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name else [])
+        rebound.update(n for n in names if n in ("add", "items"))
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, scoped):
+                bound(child)
+            elif not isinstance(child, ast.Lambda):
+                rebound.update({child.name} & {"add", "items"})
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef):
+        if isinstance(node, ast.FunctionDef) and node.name not in defs:
             defs[node.name] = node
-            continue
-        for sub in ast.walk(node):
-            names = ([sub.id] if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)
-                     else [a.asname or a.name.split(".")[0] for a in sub.names]
-                     if isinstance(sub, (ast.Import, ast.ImportFrom)) else [])
-            rebound |= {n for n in names if n in ("add", "items")}
+        elif isinstance(node, scoped):  # a second def, an async def or a class of that name replaces the first
+            rebound.update({node.name} & {"add", "items"})
+        else:
+            bound(node)
+    rebound |= {n for g in ast.walk(tree) if isinstance(g, ast.Global) for n in g.names if n in ("add", "items")}
     out = []
     for fn, want, ok in (("add", "def add(entry): saves one entry",
                           lambda a, n, req: req <= 1 and (n >= 1 or a.vararg is not None)),

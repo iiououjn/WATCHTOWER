@@ -440,3 +440,20 @@ def test_the_store_must_define_add_and_items_functions(tmp_path):  # 7d (run 38:
                  "class S:\n    pass\n\nE = []\n\ndef add(e):\n    E.append(e)\n\ndef items():\n    return list(E)\n"):
         ws.write("store.py", good)
         assert store_problems(ws) == [], good
+
+
+def test_the_store_contract_sees_every_rebinding(tmp_path):  # 7d review r1 M1-M3, M5
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    base = "E = []\n\ndef add(entry):\n    E.append(entry)\n\ndef items():\n    return E\n"
+    for extra in ("del items\n", "try:\n    pass\nexcept Exception as items:\n    pass\n", "class items:\n    pass\n",
+                  "async def items():\n    return E\n", "def _init():\n    global items\n    items = []\n",
+                  "from json import loads as items\n", "for items in []:\n    pass\n",
+                  "with open('x') as items:\n    pass\n", "if (items := 1):\n    pass\n"):
+        ws.write("store.py", base + extra)
+        assert any("def items(" in p for p in store_problems(ws)), extra
+    for fine in ("class Box:\n    items = 1\n\n    def get(self):\n        items = list(E)\n        return items\n",
+                 "import functools\n\n@functools.lru_cache\ndef cached() -> list:\n    return E\n",
+                 "def helper():\n    items = 2\n    return items\n"):
+        ws.write("store.py", base + fine)
+        assert not any("def items(" in p or "def add(" in p for p in store_problems(ws)), fine

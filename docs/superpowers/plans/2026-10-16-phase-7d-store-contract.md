@@ -28,3 +28,10 @@ problem names the exact fix ("'items' is also assigned or imported: rename that"
 2. Shadowing via `global items` in a function, `del items`, `for items in`, walrus, `with ... as items`.
 3. The problem reaches the coder ahead of other lint (store problems first, only 3 shown).
 4. No change for non-skeleton apps.
+
+## Review round 1 (fixed)
+
+M1-M3, M5: scoped binding collector — module-level del, except-as, match names, imports, walrus, for/with
+targets, a later class/async def/second def of the name, and `global` in any function count as rebinding;
+class and function bodies stay local. Tests for each, plus legit decorated/hinted/class-attribute stores.
+M4 deferred: with 4+ problems only 3 are shown, so a contract problem can wait one round (rare).
