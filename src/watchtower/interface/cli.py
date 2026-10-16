@@ -27,6 +27,7 @@ from watchtower.engine.runner import JobRunner, RunOutcome
 from watchtower.engine.sandbox import Sandbox
 from watchtower.engine.scheduler import Scheduler
 from watchtower.engine.system import free_ram_pct
+from watchtower.evidence import no_host_run
 
 def _clean(text: str) -> str:
     """Strip terminal control characters from untrusted text (model output, web content, app logs). 8a (D-M5):
@@ -84,7 +85,7 @@ def _report(outcome: RunOutcome, conn) -> None:
             what = "App for job {} — awaiting your sign-off" if pending.kind == "signoff" else \
                 "Spec for job {} — awaiting your approval"
             typer.echo("\n" + what.format(outcome.job_id) + ":\n")
-            typer.echo(_clean(pending.summary))
+            typer.echo(_clean(no_host_run(pending.summary)))  # 8a: a summary stored before 8a
             typer.echo(f"\nApprove with: watchtower approve {outcome.job_id}   (or add --reject)", err=True)
         else:
             typer.echo(_clean(f"Job {outcome.job_id} paused: {outcome.reason}"), err=True)

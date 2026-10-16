@@ -4,6 +4,7 @@ from cli_kit import *  # noqa: F403 — helpers and fixtures
 
 from watchtower.config import load_settings
 from watchtower.engine.db import connect
+from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.jobs import JobStore
 from watchtower.engine.runner import RunOutcome
@@ -40,6 +41,16 @@ def test_a_failed_reason_is_cleaned(capsys):
         cli._report(RunOutcome("j1", "failed", None, "boom " + HOSTILE), connect(load_settings().db_path))
     err = capsys.readouterr().err
     assert "boom" in err and shown(err)
+
+
+def test_a_pre_8a_signoff_summary_shows_no_host_run_line(capsys):  # review r3: stored before 8a
+    conn = connect(load_settings().db_path)
+    job = JobStore(conn).create("todo")
+    Approvals(conn).request(job.id, "signoff", "App ready\nRun it: cd /tmp/ws && python app.py\nEvidence: ok")
+    with pytest.raises(cli.typer.Exit):
+        cli._report(RunOutcome(job.id, "paused", None, None), conn)
+    out = capsys.readouterr().out
+    assert "App ready" in out and "Evidence: ok" in out and "python " not in out
 
 
 def test_a_cpo_error_is_cleaned(monkeypatch):

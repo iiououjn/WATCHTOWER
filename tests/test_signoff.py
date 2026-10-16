@@ -45,7 +45,27 @@ def test_a_checkpoint_saved_before_8a_still_needs_the_owner(app_tower, conn, tmp
     pending = approvals.pending_for(job.id)
     assert pending.kind == "signoff" and len(approvals.pending()) == 1 and Releases(conn).get(job.id) is None
     approvals.decide(pending.id, True)
-    assert runner._tower._signoff(data) == {"released": True} and Releases(conn).get(job.id) is not None
+    assert runner._tower._signoff(data)["released"] and Releases(conn).get(job.id) is not None
+    runner.close()
+
+
+PRE_8A = ("App ready in /tmp/ws\nFiles: app.py\n"
+          "Run it: cd /tmp/ws && python app.py  (then open http://127.0.0.1:8000)\n"
+          "Safer — deploy it isolated, with no internet: watchtower deploy {}")
+
+
+def test_a_pre_8a_answer_never_tells_the_owner_to_run_the_app_on_the_host(app_tower, conn, tmp_path):
+    runner, model, sandbox, job = app_tower()  # review r3: the checkpoint still holds the old host-run line
+    data, approvals = {**_legacy(job.id, tmp_path), "answer": PRE_8A.format(job.id)}, Approvals(conn)
+    with pytest.raises(NeedsOwner, match="sign-off"):
+        runner._tower._signoff(data)
+    summary = approvals.pending_for(job.id).summary
+    assert "python " not in summary and "Safer" not in summary
+    assert f"After you approve: watchtower deploy {job.id}" in summary
+    approvals.decide(approvals.pending_for(job.id).id, True)
+    answer = runner._tower._signoff(data)["answer"]  # the step's answer replaces the stored one for the CLI
+    assert "python " not in answer and "Safer" not in answer
+    assert f"Deploy it isolated, with no internet: watchtower deploy {job.id}" in answer and "Files: app.py" in answer
     runner.close()
 
 

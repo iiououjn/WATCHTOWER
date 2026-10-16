@@ -5,6 +5,13 @@ from http import HTTPStatus
 from watchtower.floors.f5_oversight.oversight import is_failing as _failing
 
 
+def no_host_run(text: str) -> str:
+    """8a (D-H1): an answer or sign-off summary saved before 8a still says 'Run it: cd <ws> && python <entry>'.
+    Drop that line and word the old deploy line as the new one: AI code runs only in Docker, never on the host."""
+    return "\n".join(line.replace("Safer — deploy it isolated", "Deploy it isolated", 1)
+                     for line in text.split("\n") if not line.lstrip().startswith("Run it: cd "))
+
+
 def _reference(glass: str, text: str) -> list[str]:
     return [f"Reference for this failure (from the web through Glass {glass}; may be wrong):\n{text}"] if text else []
 

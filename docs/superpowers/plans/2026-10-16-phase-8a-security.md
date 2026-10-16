@@ -132,6 +132,11 @@ D-M7 (security); E-A6, E-T2, E-S5, E-S7 (tests/stack). Baseline `uv run pytest -
   dropping). The harness can no longer signal an app of another uid; the app dies with the container when the
   harness exits. Minor: a pre-8a `--yes` release refused at deploy now says to re-run with `watchtower run`
   (`watchtower approve` cannot sign off a done job). Deferred minors: none.
+- *Review r3, second pass (1 minor).* D-H1 held only for new jobs: a pre-8a checkpoint's answer still said
+  `Run it: cd <ws> && python <entry>`, reaching the sign-off summary, the released answer and a stored pending
+  summary. One helper, `no_host_run` (evidence.py), drops that line and rewords the old `Safer — deploy` line;
+  `_signoff_summary`, the release step (its answer replaces the stored one) and the CLI's pending summary use
+  it. Legacy tests with the pre-8a text; each call site and both rules mutation-checked. Deferred minors: none.
 - *Review r3: reuse deploy's two-container `--internal` network instead.* More moving parts (a network per run,
   a second container start inside the 90 s limit) for the same boundary. **Ruling:** uid split in one container.
   Cost if wrong: a kernel bug that crosses uids inside one container would also cross the container boundary.
@@ -163,3 +168,4 @@ Seven task commits, each RED first; every new guard mutation-checked (removing i
 Review r1: `uv run pytest -q` → 1146 passed.
 Review r2: `uv run pytest -q` → 1165 passed.
 Review r3: `uv run pytest -q` → 1176 passed (Docker tests ran against the pinned image).
+Review r3, second pass: `uv run pytest -q` → 1178 passed.

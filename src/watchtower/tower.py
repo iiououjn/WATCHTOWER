@@ -21,7 +21,7 @@ from watchtower.floors.f3_build.office import F3Office
 from watchtower.floors.f5_oversight.office import OversightOffice
 from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
 from watchtower.evidence import (  # noqa: F401 — re-export
-    _evidence, _finding_query, _reference, _status_query, model_objection, objection_note)
+    _evidence, _finding_query, _reference, _status_query, model_objection, no_host_run, objection_note)
 from watchtower.floors.f5_oversight.oversight import security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
 from watchtower.floors.f2_dev.handoff import board_line, f2_handoff, for_gate, static_feedback
@@ -255,7 +255,7 @@ class TowerPipeline:
 
     def _signoff_summary(self, data: dict) -> str:
         ceo = data.get("ceo") or {}
-        answer = data["answer"].replace(  # deploying needs a release, and a release needs this sign-off first
+        answer = no_host_run(data["answer"]).replace(  # deploying needs a release, and a release needs the sign-off
             f"Deploy it isolated, with no internet: watchtower deploy {data['job_id']}",
             f"After you approve: watchtower deploy {data['job_id']}  (isolated, no internet)")
         verdict = {True: "approve", False: "REJECT"}.get(ceo.get("approve"), "no clear view")
@@ -284,7 +284,7 @@ class TowerPipeline:
         if self._releases is not None:
             self._releases.record_manifest(data["job_id"], data["entry"], data["manifest"])
         self._bus.publish("app.released", {"entry": data["entry"], "files": len(data["files"])}, data["job_id"])
-        return {"released": True}
+        return {"released": True, "answer": no_host_run(data["answer"])}  # a pre-8a checkpoint's answer too
 
     def _lessons(self, data: dict) -> str:
         """Past retrospectives that match this job (stored untrusted; shown to the architect wrapped)."""
