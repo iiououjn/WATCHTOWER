@@ -11,7 +11,7 @@ from watchtower.floors.f4_qa_deploy.qafloor import MAX_CHECKS, QA_SCRIPT, QAFloo
 from watchtower.engine.sandbox import SandboxResult
 from watchtower.roles import Role
 
-QA = Role("f4.qa", "QA", "f4", "small", (), "q")
+QA = Role("f4.qa", "QA", "f4", "small", "q")
 SPEC = {"title": "Todo", "goal": "todo app", "acceptance": ["add a todo", "list todos"], "out_of_scope": []}
 GOOD = {"name": "home", "method": "GET", "path": "/", "expect_status": 200, "expect_text": "Todos"}
 
@@ -209,7 +209,7 @@ def test_qa_writer_is_asked_again_when_no_check_tests_page_text():
     replies = [{"checks": [{"path": "/", "expect_text": "The homepage with a list of all the items"}]},
                {"checks": [{"path": "/", "expect_text": "Todo"}]}]
     prompts = []
-    qa = QAFloor(Role("f4.qa", "QA", "f4", "work", (), "q"), lambda role, p: prompts.append(p) or replies.pop(0))
+    qa = QAFloor(Role("f4.qa", "QA", "f4", "work", "q"), lambda role, p: prompts.append(p) or replies.pop(0))
     checks = qa.write_checks({"title": "T", "goal": "g", "acceptance": ["a"]}, "code")
     assert [c["expect_text"] for c in checks] == ["Todo"] and len(prompts) == 2 and "exact" in prompts[1]
 

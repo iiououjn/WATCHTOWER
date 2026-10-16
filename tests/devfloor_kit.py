@@ -9,9 +9,9 @@ from watchtower.engine.workspace import Workspace
 
 from watchtower.roles import Role
 
-ARCH = Role("f2.architect", "Architect", "f2", "work", (), "a")
+ARCH = Role("f2.architect", "Architect", "f2", "work", "a")
 
-CODER = Role("f2.coder", "Coder", "f2", "work", (), "c")
+CODER = Role("f2.coder", "Coder", "f2", "work", "c")
 
 SPEC = {"title": "Todo", "goal": "todo app", "acceptance": ["lists todos"], "out_of_scope": []}
 
@@ -49,7 +49,7 @@ def verdict(run=2, skipped=0, failures=0, errors=0, exit_code=0):
     line = "WATCHTOWER_TESTS " + _json.dumps({"run": run, "skipped": skipped, "failures": failures, "errors": errors})
     return SandboxResult(exit_code, line + "\n", "", False)
 
-HR = Role("f2.hr", "Dev HR", "f2", "small", (), "h")
+HR = Role("f2.hr", "Dev HR", "f2", "small", "h")
 
 def hr_dev(tmp_path, script, runner, rounds=4):
     return DevFloor(ARCH, CODER, ask=script, workspace=Workspace(tmp_path), run=runner, max_rounds=rounds, hr=HR)
@@ -104,7 +104,7 @@ FAILED (failures=2)
 
 FAILED = SandboxResult(1, 'WATCHTOWER_TESTS {"run": 3, "skipped": 0, "failures": 2, "errors": 0}\n', REAL, False)
 
-HR = Role("f2.hr", "HR", "f2", "small", (), "h")
+HR = Role("f2.hr", "HR", "f2", "small", "h")
 
 from pathlib import Path as _Path  # noqa: E402
 

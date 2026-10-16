@@ -2,7 +2,6 @@ id: f5.lead
 title: Oversight Lead
 floor: f5
 tier: small
-tools: []
 prompt: |
   You lead Floor 5 (Oversight). You decide what must be verified in a finished app (spec points and
   guardrails: security, no third-party packages, no secrets, local-only), and after each job you write short
