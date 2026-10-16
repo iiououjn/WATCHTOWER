@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path, PurePosixPath
 
@@ -9,6 +10,7 @@ MAX_FILES = 30
 
 
 TOWER_MARK = '"""Web server written by the tower.'
+_TOWER_WRITTEN: dict[Path, dict[str, str]] = {}  # workspace root → {path: sha256 of the bytes the tower wrote}
 
 
 class WorkspaceError(ValueError):
@@ -20,6 +22,9 @@ class Workspace:
 
     def __init__(self, root: Path):
         self.root = root
+        # 8a: shared by every Workspace on this root in this process (the tower re-opens it per step); a new
+        # process starts empty, so a resumed job shows the server in full until the skeleton rewrites it
+        self._tower = _TOWER_WRITTEN.setdefault(root.resolve(), {})
 
     def _target(self, path: str) -> tuple[str, Path]:
         raw = (path or "").strip()
@@ -46,6 +51,15 @@ class Workspace:
             if isinstance(e, WorkspaceError):
                 raise
             raise WorkspaceError(f"cannot write {path!r}: {type(e).__name__}") from e
+
+    def write_tower(self, path: str, content: str) -> str:
+        """The tower's own file (7a server): reviewers see it as a stub while its bytes are unchanged."""
+        rel = self.write(path, content)
+        self._tower[rel] = self._digest(rel)
+        return rel
+
+    def _digest(self, rel: str) -> str:
+        return hashlib.sha256((self.root / rel).read_bytes()).hexdigest()
 
     def delete(self, path: str) -> None:
         rel, target = self._target(path)
@@ -81,7 +95,9 @@ class Workspace:
         parts, used = [], 0
         for name in self.files():
             body = (self.root / name).read_text(errors="replace")
-            if body.startswith(TOWER_MARK):  # 7a: the tower's own server, as a stub: the coder's files stay in view
+            # 7a: the tower's own server, as a stub: the coder's files stay in view. 8a (B-M2): only bytes the
+            # tower wrote; a coder file that starts with the mark is shown in full
+            if body.startswith(TOWER_MARK) and self._tower.get(name) == self._digest(name):
                 body = "\n".join([body.splitlines()[0]] + re.findall(r"(?m)^[A-Z_]+ = .*$", body)[:6]
                                   + ["(rest of the tower's web server not shown)"]) + "\n"
             room = max_chars - used
