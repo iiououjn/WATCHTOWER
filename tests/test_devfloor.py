@@ -107,7 +107,7 @@ def test_only_a_real_test_summary_counts_as_a_pass(tmp_path, result, ok):
 
 
 def test_runner_command_uses_the_summary_script(tmp_path):
-    from watchtower.floors.f2_dev.devfloor import TEST_RUNNER
+    from watchtower.floors.f2_dev.unittest_runner import TEST_RUNNER
     s = Script({"f2.architect": [{}], "f2.coder": [{"files": [APP, TEST]}]})
     runner = Runner([verdict()])
     dev(tmp_path, s, runner, rounds=1).build(SPEC, {"files": [], "entry": "app.py"}, [])

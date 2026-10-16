@@ -160,7 +160,7 @@ def test_no_other_routes_still_shows_the_mvp_result():
 
 
 def test_every_sandbox_script_runs_isolated_from_the_app_folder():
-    from watchtower.floors.f2_dev.devfloor import TEST_COMMAND
+    from watchtower.floors.f2_dev.unittest_runner import TEST_COMMAND
     from watchtower.floors.f4_qa_deploy.qafloor import run_qa
     seen = []
     record = lambda cmd: seen.append(cmd) or SandboxResult(0, "", "", False)  # noqa: E731

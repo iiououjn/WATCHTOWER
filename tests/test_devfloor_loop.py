@@ -51,7 +51,7 @@ def test_real_314_report_variants_all_surface_with_their_real_cause():
 
 
 def test_failure_note_is_bounded_and_keeps_html_readable(tmp_path):
-    from watchtower.floors.f2_dev.devfloor import _failure_note
+    from watchtower.floors.f2_dev.feedback import _failure_note
     many = [{"test": f"test_{i}", "id": f"m.T.test_{i}", "kind": "FAIL",
              "line": "AssertionError: '" + "<li>x</li>" * 30 + "'", "diff": "- <ul>" * 60, "whitespace": False}
             for i in range(5)]
@@ -96,13 +96,13 @@ def test_docstring_tests_chained_and_multiline_causes():
 
 
 def test_error_rows_say_where_the_app_raised():
-    from watchtower.floors.f2_dev.devfloor import _failure_rows
+    from watchtower.floors.f2_dev.feedback import _failure_rows
     rows = _failure_rows(failures(APP_ERROR))
     assert "KeyError: 'default'" in rows and "app.py" in rows and "line 42" in rows and "TODOS[kind]" in rows
 
 
 def test_more_than_five_failures_says_so_and_import_errors_come_first():
-    from watchtower.floors.f2_dev.devfloor import _failure_rows
+    from watchtower.floors.f2_dev.feedback import _failure_rows
     found = failures(PY314B + PY314)
     rows = _failure_rows(found)
     assert rows.startswith("- test_b (ERROR): ImportError") and "more failing" in rows
@@ -189,7 +189,7 @@ def test_only_thing_left_is_never_claimed_while_the_test_bar_is_unmet(tmp_path):
 
 
 def test_excerpt_always_shows_the_error_line(tmp_path):
-    from watchtower.floors.f2_dev.devfloor import _problem_note
+    from watchtower.floors.f2_dev.feedback import _problem_note
     ws = Workspace(tmp_path)
     ws.write("my app.py", ("x = '" + "h" * 300 + "'\n") * 3 + "if (\n")
     note = _problem_note(["my app.py has a syntax error on line 4: '(' was never closed"], ws, True)
@@ -197,7 +197,7 @@ def test_excerpt_always_shows_the_error_line(tmp_path):
 
 
 def test_every_note_kind_is_bounded_after_escaping():
-    from watchtower.floors.f2_dev.devfloor import NOTE_CAP, _capped, _failure_note
+    from watchtower.floors.f2_dev.feedback import NOTE_CAP, _capped, _failure_note
     huge = [{"test": "test_" + "n" * 300 + str(i), "id": f"m.T.{i}", "kind": "FAIL", "line": "AssertionError: " + "<" * 200,
              "diff": "<" * 400, "whitespace": True} for i in range(20)]
     stuck = "names " + ", ".join(f["test"] for f in huge)
@@ -219,7 +219,7 @@ def test_failures_and_problems_share_one_note(tmp_path):
 
 
 def test_syntax_error_first_marked_and_counted_right(tmp_path):
-    from watchtower.floors.f2_dev.devfloor import _problem_note
+    from watchtower.floors.f2_dev.feedback import _problem_note
     ws = Workspace(tmp_path)
     ws.write("z.py", "a = 1\x0c\nb = 2\nif (\n")
     probs = [f"m{i}.py imports flask (not in the Python standard library)" for i in range(4)]
@@ -253,7 +253,8 @@ def test_written_python_files_are_repaired_with_a_note(tmp_path):
 def test_runner_accepts_pytest_style_test_functions(tmp_path):
     import subprocess
     import sys
-    from watchtower.floors.f2_dev.devfloor import TEST_RUNNER, failures, test_summary
+    from watchtower.floors.f2_dev.unittest_runner import TEST_RUNNER, test_summary
+    from watchtower.floors.f2_dev.feedback import failures
     (tmp_path / "app.py").write_text("def add(a, b):\n    return a + b\n")
     (tmp_path / "test_app.py").write_text("from app import add\n\ndef test_ok():\n    assert add(1, 2) == 3\n\n"
                                          "def test_bad():\n    assert add(1, 1) == 3\n")

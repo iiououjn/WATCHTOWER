@@ -2,7 +2,7 @@
 from devfloor_kit import CODER, SPEC, Script, dev, verdict
 
 from watchtower.engine.workspace import Workspace
-from watchtower.floors.f2_dev.devfloor import units
+from watchtower.floors.f2_dev.planner import units
 from watchtower.floors.f2_dev.skeleton import apply
 from conftest import start_signed
 from runner_kit import app_tower  # noqa: F401 — pipeline fixture

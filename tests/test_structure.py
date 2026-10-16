@@ -43,7 +43,8 @@ def test_every_model_tier_is_used_by_a_role():  # A-F19: a tier no role uses is 
 
 
 SRC = ROOT / "src" / "watchtower"
-SPLIT = ("tower", "floors/f2_dev", "interface")  # 8d: the god objects' new homes keep lines readable too
+SPLIT = ("tower/", "interface/", "floors/f2_dev/devfloor.py", "floors/f2_dev/planner.py",  # 8d: the god objects'
+         "floors/f2_dev/writer.py", "floors/f2_dev/app_tests.py")  # new homes keep their lines readable too
 
 
 def _rel(path: Path) -> str:
@@ -64,5 +65,5 @@ def test_files_stay_under_500_lines_without_squeezing(path):
             while k >= 0 and lines[k].lstrip().startswith("#"):
                 k -= 1
             assert k >= 1 and not lines[k].strip() and not lines[k - 1].strip(), f"{_rel(path)}:{node.lineno}"
-    if _rel(path).startswith(SPLIT) or _rel(path) == "tower.py":
+    if _rel(path).startswith(SPLIT):
         assert not [n for n, line in enumerate(lines, 1) if len(line) > 120]

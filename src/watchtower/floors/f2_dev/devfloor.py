@@ -1,40 +1,29 @@
 from __future__ import annotations
 
-import ast
 import json
-import re
 from dataclasses import replace
-from fnmatch import fnmatch
 from pathlib import PurePosixPath
 from typing import Callable, Sequence
 
-from watchtower.floors.framework import WorkPackage, untrusted, untrusted_code
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.engine.model_socket import BadModelOutput
-from watchtower.floors.f4_qa_deploy.qafloor import parse_routes
 from watchtower.engine.sandbox import SandboxResult
-from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_NOTE,  # noqa: F401 (re-export)
-                                               _capped, _failure_note, _failure_rows, _problem_note, failures,
-                                               stuck_note)
-from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings, sibling_names
+from watchtower.engine.workspace import Workspace, WorkspaceError
+from watchtower.floors.f2_dev.app_tests import app_is_tested, is_test_file
+from watchtower.floors.f2_dev.feedback import _capped, _failure_note, _failure_rows, _problem_note, failures, stuck_note
+from watchtower.floors.f2_dev.lint import handler_state_problems, idiom_notes
+from watchtower.floors.f2_dev.planner import PLAN_PROMPT, parse_plan, units
+from watchtower.floors.f2_dev.prompt_fit import FILES_MIN, PROMPT_CHARS, RESEARCH_CHARS, SPEC_CHARS, fit, plan_text
+from watchtower.floors.f2_dev.prompt_fit import room_left, spec_text as _spec_text
+from watchtower.floors.f2_dev.repair import repair_names
 from watchtower.floors.f2_dev.skeleton import (CODER_PROMPT, ONLY_NOTE, SAFE, SAFE_TESTS, STORE, STORE_NOTE,
                                                STORE_TESTS, store_problems)
-from watchtower.floors.f2_dev.lint import handler_state_problems, idiom_notes
 from watchtower.floors.f2_dev.stdlib_check import import_problems
-from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
-from watchtower.floors.f2_dev.unittest_runner import TEST_COMMAND, TEST_RUNNER, test_summary  # noqa: F401 (re-export)
-from watchtower.floors.f2_dev.prompt_fit import (FILES_MIN, PROMPT_CHARS, RESEARCH_CHARS, SPEC_CHARS,  # noqa: F401
-                                                 fit, plan_text, room_left, spec_text as _spec_text)
+from watchtower.floors.f2_dev.unittest_runner import TEST_COMMAND, test_summary
+from watchtower.floors.f2_dev.writer import write_files
+from watchtower.floors.framework import WorkPackage, untrusted, untrusted_code
 from watchtower.roles import Role
 
-_SAFE_ENTRY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*\.py")  # importable by tests
-MAX_FILES_PER_ROUND = 3
-PLAN_PROMPT = (
-    "Spec:\n{spec}\n\nResearch notes:\n{research}\n{reference}{lessons}{feedback}\n"
-    "Plan the files and the app's routes (the contract QA will test). Reply as JSON: "
-    '{{"files": [{{"path": string, "purpose": string}}], "entry": string, '
-    '"routes": [{{"method": "GET" or "POST", "path": string, "fields": [form field names], "shows": string}}]}}'
-)
 CODE_PROMPT = (
     "Spec:\n{spec}\n\nFile plan and routes contract:\n{plan}\n\nCurrent files:\n{files}\n{qa}{feedback}\n"
     "Write or fix up to 3 files so the unittest tests pass and the spec is met. Reply with one block per file "
@@ -47,7 +36,6 @@ UNIT_PROMPT = (
     "You are coder {i} of {n} on this floor. Write ONLY these files, complete and working:\n{unit}\n"
     "Reply with one block per file: ### FILE: path, then the complete file in a ``` fence."
 )
-MAX_UNITS, UNIT_FILES = 4, 3
 HR_PROMPT = (
     "Spec:\n{spec}\n\nPlan and routes contract:\n{plan}\n\nCode:\n{code}\n\nThe unit tests pass. Does the code "
     "meet the spec and follow the plan and routes contract? Reply as JSON: "
@@ -55,8 +43,9 @@ HR_PROMPT = (
 )
 MAX_HR_ASKS = 2
 MAX_DIAGNOSES = 2
-FEEDBACK_ITEM, FEEDBACK_TOTAL, QA_CHARS = 600, 2000, 1500  # keep the coder prompt inside num_ctx
-_UNSAFE = re.compile(r"[<>{}\x00-\x1f\x7f]")
+FEEDBACK_ITEM = 600  # each part capped, so the coder prompt stays inside num_ctx
+FEEDBACK_TOTAL = 2000
+QA_CHARS = 1500
 
 
 def _compact_checks(checks: Sequence[dict]) -> str:
@@ -69,7 +58,6 @@ def _compact_checks(checks: Sequence[dict]) -> str:
 
 ESCAPE_NOTE = ('Checks with "expect_escaped": true post text containing <&> (written &lt;&> above). The page '
                "must show it escaped exactly once: html.escape(text) when you build the HTML, not on save.\n")
-
 
 
 def _qa_block(head: str, checks: Sequence[dict], store_only: bool = False, shown: bool = True) -> str:
@@ -94,65 +82,50 @@ def _format_notes(reply: dict) -> list[str]:
     return [str(n)[:200] for n in (reply.get("notes") if isinstance(reply.get("notes"), list) else [])][:3]
 
 
-def _is_test_file(path: str) -> bool:
-    """Exactly what the runner discovers: test*.py anywhere (_ensure_packages makes every folder a package)."""
-    return fnmatch(PurePosixPath(path).name, "test*.py")
+def _feedback_notes(feedback: Sequence[str]) -> list[str]:
+    """The reviewer's feedback for the coder: each item capped, the first ones kept up to the total."""
+    kept, used = [], 0
+    for f in feedback:
+        item = str(f)[:FEEDBACK_ITEM]
+        if used + len(item) > FEEDBACK_TOTAL:
+            break
+        kept.append(item)
+        used += len(item)
+    return [f"Reviewer feedback to address:\n{_capped('gate', f, 800)}" for f in kept]
 
 
-def app_is_tested(ws: Workspace) -> bool:
-    """At least one test file imports a module of the app itself (not only unittest or another test file):
-    a test that never touches the app proves nothing."""
-    py = [f for f in ws.files() if f.endswith(".py")]
-    tests = [f for f in py if _is_test_file(f)]
-    app = {PurePosixPath(f).with_suffix("").as_posix().replace("/", ".") for f in py
-           if f not in tests and PurePosixPath(f).stem not in ("__init__", "conftest")
-           and not {"tests", "test"} & set(PurePosixPath(f).parts[:-1])}  # helpers in tests/ are not the app
-    app |= {m.split(".")[0] for m in app}  # 'import store' counts for store/db.py
-    for name in tests:
-        try:
-            tree = ast.parse(ws.read(name))
-        except (SyntaxError, ValueError, RecursionError, MemoryError):
-            continue
-        for node in ast.walk(tree):
-            mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
-                    else [node.module or ""] if isinstance(node, ast.ImportFrom)
-                    else [node.args[0].value] if (isinstance(node, ast.Call) and node.args  # import_module("app")
-                                                  and isinstance(node.args[0], ast.Constant)
-                                                  and isinstance(node.args[0].value, str)
-                                                  and getattr(node.func, "attr", getattr(node.func, "id", ""))
-                                                  in ("import_module", "__import__")) else [])
-            if any(m in app for m in mods):
-                return True
-    return False
+def _code_parts(spec: dict, plan: dict, qa: str, qa_short: str, notes: list[str]) -> tuple[dict, int, list[str]]:
+    """The fix prompt's parts within budget: the oldest notes go first (the newest, most important one is kept),
+    then every part is capped (8c, C-M5). Returns the parts, the room left for files, and the notes kept."""
+    parts = dict(spec=_spec_text(spec), plan=plan_text(plan), qa=qa, files="",
+                 feedback=("\n" + "\n".join(notes)) if notes else "")
+    while len(notes) > 1 and len(CODE_PROMPT.format(**parts)) > PROMPT_CHARS - FILES_MIN:
+        notes = notes[1:]
+        parts["feedback"] = ("\n" + "\n".join(notes)) if notes else ""
+    parts = fit(CODE_PROMPT, parts, [("qa", qa_short), ("plan", plan_text(plan, False)),
+                                     ("spec", _spec_text(spec, SPEC_CHARS))], FILES_MIN)
+    room = room_left(CODE_PROMPT, parts)
+    del parts["files"]
+    return parts, room, notes
 
 
-def _plan_path(raw) -> str | None:
-    """A planned path as the workspace will name it ('./a.py' → 'a.py'), or None if it could never be written."""
-    text = str(raw or "").strip()
-    if not 0 < len(text) <= 100 or "\\" in text or any(ord(c) < 32 or c == "\x7f" for c in text):
-        return None
-    rel = PurePosixPath(text)
-    if rel.is_absolute() or ".." in rel.parts or any(p.startswith(".") for p in rel.parts):
-        return None
-    return rel.as_posix() if rel.suffix in ALLOWED_SUFFIXES else None
-
-
-def units(plan: dict, owned=frozenset()) -> list[list[dict]]:
-    """F2 Lead's split, by code: unit 1 is the MVP (entry + test files), then the other planned files in
-    groups of up to 3, in plan order; at most 4 units (the fix loop writes anything left over). Under the
-    skeleton (8c, run 38) the store comes before its tests: a store written after them copied their names."""
-    files = list({f["path"]: f for f in plan["files"]}.values())
-    if owned:
-        mine = [f for f in files if f["path"] != plan["entry"]]
-        split = [[f for f in files if f["path"] == plan["entry"]], [f for f in mine if not _is_test_file(f["path"])],
-                 [f for f in mine if _is_test_file(f["path"])]]
-        return [u[:UNIT_FILES] for u in split if u][:MAX_UNITS]
-    first = [f for f in files if f["path"] == plan["entry"]]
-    first += [f for f in files if PurePosixPath(f["path"]).name.startswith("test")][:UNIT_FILES - len(first)]
-    rest = [f for f in files if f not in first]
-    split = [first] if first else []
-    split += [rest[i:i + UNIT_FILES] for i in range(0, len(rest), UNIT_FILES)]
-    return split[:MAX_UNITS]
+def _test_bar_notes(owned: bool, has_tests: bool, real: int, imports_app: bool) -> list[str]:
+    """What the coder's tests still lack: files, discovered tests, two real tests, an import of the app."""
+    tests = STORE_TESTS if owned else "test_*.py"  # 8c (C-H2): only test_store.py is accepted
+    notes = []
+    if not has_tests:
+        notes.append(f"There are no unittest files yet: add {tests} with real tests.")
+    elif real < 1:
+        notes.append(f"unittest found 0 tests: name test files {tests}, put test classes in "
+                     "unittest.TestCase subclasses, and name methods test_*.")
+    elif real < 2:
+        notes.append(f"unittest ran only {real} test: write at least 2 real tests of the app's behaviour.")
+    if has_tests and not imports_app:  # app.py is the tower's server: importing it is rejected
+        notes.append(f"Your tests import nothing from the app: in {STORE_TESTS}, `import store` and test "
+                     "store.add(entry) and store.items()." if owned else "Your tests import nothing "
+                     "from the app: import the app's own functions or handler (e.g. from app import ...) "
+                     "and test what they do.")
+    return notes
 
 
 class DevFloor:
@@ -184,28 +157,9 @@ class DevFloor:
                      lessons=("\nLessons from past jobs:\n" + _capped("retro", lessons, 800) + "\n") if lessons else "",
                      reference=("\nReference docs (from the web through Glass 2; may be wrong):\n" + reference + "\n")
                      if reference else "")
-        out = self._ask(self._architect, PLAN_PROMPT.format(**fit(PLAN_PROMPT, parts, [
+        return parse_plan(self._ask(self._architect, PLAN_PROMPT.format(**fit(PLAN_PROMPT, parts, [
             ("reference", ""), ("lessons", ""), ("research", _capped("f1", research, 500) if research else "(none)"),
-            ("spec", _spec_text(spec, SPEC_CHARS))])))
-        files, seen = [], set()
-        for f in out.get("files") or []:
-            path = _plan_path(f.get("path")) if isinstance(f, dict) else None
-            if path is not None and path.lower() not in seen:  # one name per file, even on case-blind disks
-                seen.add(path.lower())
-                files.append({"path": path, "purpose": _UNSAFE.sub("", str(f.get("purpose", ""))).strip()[:80]})
-        entry = _plan_path(out.get("entry")) or "app.py"
-        if not _SAFE_ENTRY.fullmatch(entry):
-            fixed = re.sub(r"(^|/)(?=\d)", r"\1app_", entry)  # '2048.py' → 'app_2048.py': tests can import it
-            if _SAFE_ENTRY.fullmatch(fixed):
-                files = [{**f, "path": fixed} if f["path"] == entry else f for f in files]
-            if not _SAFE_ENTRY.fullmatch(fixed):  # 8c (C-M7): the old name must not stay planned as a second server
-                files = [f for f in files if f["path"] != entry]
-            entry = fixed if _SAFE_ENTRY.fullmatch(fixed) else "app.py"
-        files = files[:15]
-        files = [f for f in files if f["path"] == entry or f["path"].lower() != entry.lower()]
-        if entry not in {f["path"] for f in files}:  # a 3B architect often names an entry it never plans
-            files = files[:14] + [{"path": entry, "purpose": "the app's entry point: starts the HTTP server"}]
-        return {"files": files, "entry": entry, "routes": parse_routes(out.get("routes"))}
+            ("spec", _spec_text(spec, SPEC_CHARS))]))))
 
     def write_units(self, spec: dict, plan: dict, qa_checks: Sequence[dict] = (),
                     on_unit: Callable[[int, int, list[str]], None] | None = None) -> list[str]:
@@ -246,29 +200,14 @@ class DevFloor:
 
     def build(self, spec: dict, plan: dict, feedback: Sequence[str], qa_checks: Sequence[dict] = (),
               test_first: bool = False) -> WorkPackage:
-        kept, used = [], 0
-        for f in feedback:
-            item = str(f)[:FEEDBACK_ITEM]
-            if used + len(item) > FEEDBACK_TOTAL:
-                break
-            kept.append(item)
-            used += len(item)
-        notes = [f"Reviewer feedback to address:\n{_capped('gate', f, 800)}" for f in kept]
+        notes = _feedback_notes(feedback)
         qa = _qa_block("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n", qa_checks,
                        bool(self.owned))
         qa_short = _qa_block("", qa_checks, bool(self.owned), shown=False)
         checks, output, passed, hr_asks, hr_question, hr_pending = [], "", False, 0, None, ""
         last_failing, diagnoses, diagnosis, diagnosed_for, carry = None, 0, "", None, []  # stuck = same set twice
         for round_no in range(self._max_rounds):
-            parts = dict(spec=_spec_text(spec), plan=plan_text(plan), qa=qa, files="",
-                         feedback=("\n" + "\n".join(notes)) if notes else "")
-            while len(notes) > 1 and len(CODE_PROMPT.format(**parts)) > PROMPT_CHARS - FILES_MIN:
-                notes = notes[1:]  # oldest notes go first (the newest, most important one is kept)
-                parts["feedback"] = ("\n" + "\n".join(notes)) if notes else ""
-            parts = fit(CODE_PROMPT, parts, [("qa", qa_short), ("plan", plan_text(plan, False)),
-                                             ("spec", _spec_text(spec, SPEC_CHARS))], FILES_MIN)  # 8c (C-M5)
-            room = room_left(CODE_PROMPT, parts)
-            del parts["files"]
+            parts, room, notes = _code_parts(spec, plan, qa, qa_short, notes)
             if test_first and round_no == 0:  # the unit workers just wrote every file: test before rewriting
                 notes = []
             else:
@@ -289,12 +228,11 @@ class DevFloor:
             self._ensure_packages()
             notes += self._link_entry(plan["entry"])
             problems = self._problems()
-            has_tests = any(_is_test_file(f) for f in self._ws.files())
+            has_tests = any(is_test_file(f) for f in self._ws.files())
             result = self._run(TEST_COMMAND)
             output = ((result.stdout or "") + (result.stderr or ""))[-2000:]
             summary = test_summary(result.stdout)
             real = (summary or {}).get("run", 0) - (summary or {}).get("skipped", 0)
-            ran_tests = real >= 1
             imports_app = app_is_tested(self._ws)
             clean = (result.exit_code == 0 and has_tests and real >= 2 and imports_app and not result.timed_out
                      and summary is not None and not summary.get("failures") and not summary.get("errors"))
@@ -315,19 +253,7 @@ class DevFloor:
                 carry = ["Floor 2 HR reviewed your code and asked for changes:\n" + _capped("f2.hr", verdict[1], 800)]
                 notes += carry  # kept through a garbled reply
                 continue
-            tests = STORE_TESTS if self.owned else "test_*.py"  # 8c (C-H2): only test_store.py is accepted
-            if not has_tests:
-                notes.append(f"There are no unittest files yet: add {tests} with real tests.")
-            elif not ran_tests:
-                notes.append(f"unittest found 0 tests: name test files {tests}, put test classes in "
-                             "unittest.TestCase subclasses, and name methods test_*.")
-            elif real < 2:
-                notes.append(f"unittest ran only {real} test: write at least 2 real tests of the app's behaviour.")
-            if has_tests and not imports_app:  # app.py is the tower's server: importing it is rejected
-                notes.append(f"Your tests import nothing from the app: in {STORE_TESTS}, `import store` and test "
-                             "store.add(entry) and store.items()." if self.owned else "Your tests import nothing "
-                             "from the app: import the app's own functions or handler (e.g. from app import ...) "
-                             "and test what they do.")
+            notes += _test_bar_notes(bool(self.owned), has_tests, real, imports_app)
             found = failures(result.stderr or "")
             failing = sorted({f"{f['id']}:{f['test']}" for f in found})
             stuck = bool(failing) and failing == last_failing
@@ -335,13 +261,7 @@ class DevFloor:
                 diagnoses += 1  # one F2 HR diagnosis per stuck set, at most 2 per build
                 diagnosis, diagnosed_for = self._diagnose_tests(_failure_rows(found)), failing
             shown = diagnosis if stuck and failing == diagnosed_for else ""  # never another set's diagnosis
-            tests_ok = clean  # "only thing left" only when the whole test bar is met
-            carry = [] if tests_ok and problems else [
-                _failure_note(found, stuck_note(f["test"] for f in found) if stuck else "", shown) if found  # last: trimming drops the oldest first
-                else "Test output:\n" + _capped("sandbox", (output or "(no output)")[-1200:], 1300, code=True)]
-            if problems:  # one note with the failures (trimming keeps or drops them together), kept last
-                note = _problem_note(problems, self._ws, tests_ok)
-                carry = [carry[0] + "\n" + note] if carry else [note]
+            carry = self._carry(found, stuck, shown, clean, problems, output)
             notes += ([] if clean else idiom_notes(self._ws)) + carry  # failures last: kept on trim
             last_failing = failing
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"
@@ -350,6 +270,18 @@ class DevFloor:
         hr_question = hr_question or (f"F2 HR not satisfied: {hr_pending[:200]}" if hr_pending else None)
         questions += [hr_question] if hr_question else []
         return WorkPackage("f2", summary, self._ws.files(), [], checks, questions)
+
+    def _carry(self, found: list[dict], stuck: bool, shown: str, clean: bool, problems: list[str],
+               output: str) -> list[str]:
+        """The round's failures, kept last in the notes so trimming drops the oldest notes first. With the whole
+        test bar met ("only thing left") the static problems alone; one note, kept or dropped together."""
+        carry = [] if clean and problems else [
+            _failure_note(found, stuck_note(f["test"] for f in found) if stuck else "", shown) if found
+            else "Test output:\n" + _capped("sandbox", (output or "(no output)")[-1200:], 1300, code=True)]
+        if problems:
+            note = _problem_note(problems, self._ws, clean)
+            carry = [carry[0] + "\n" + note] if carry else [note]
+        return carry
 
     def _problems(self) -> list[str]:
         """The tower's own static checks on the files on disk: they block the F2 handoff (phase 6s)."""
@@ -421,71 +353,4 @@ class DevFloor:
                     pass
 
     def _write(self, files, entry: str = "") -> list[str]:
-        notes, same, changed = [], [], False
-        written = 0
-        for f in (files if isinstance(files, list) else [])[:MAX_FILES_PER_ROUND + 5]:
-            if not isinstance(f, dict):
-                continue
-            given = PurePosixPath(str(f.get("path", "")).strip())
-            if {str(given).lower(), given.parts[0].lower() if given.parts else ""} & {o.lower() for o in self.owned}:
-                notes.append(f"{str(f.get('path'))[:100]!r} belongs to the tower's web server and was not changed: "
-                             f"write {STORE} (add and items) instead")
-                continue
-            if self.owned and f.get("delete") is not True and str(given) not in (STORE, STORE_TESTS):
-                notes.append(f"File rejected: {str(f.get('path'))[:100]!r}: write only {STORE} and {STORE_TESTS}")
-                changed = True  # 7c (run 36): a stray AI-written XSS server shipped beside the tower's
-                continue
-            if f.get("delete") is not True:
-                if written >= MAX_FILES_PER_ROUND:  # deletes don't use up the cap; writes beyond it are dropped
-                    changed = True  # it sent more than was written: never tell it "unchanged"
-                    notes.append(f"File {str(f.get('path'))[:100]!r} not written: at most {MAX_FILES_PER_ROUND} "
-                                 "files per reply")
-                    continue
-                written += 1
-            try:
-                if f.get("delete") is True:
-                    before_files = set(self._ws.files())
-                    self._ws.delete(str(f.get("path", "")))
-                    changed = changed or set(self._ws.files()) != before_files  # a missing file: no change
-                elif not isinstance(f.get("content"), str):
-                    notes.append(f"File rejected: {str(f.get('path'))[:100]!r} has no content")
-                else:
-                    path, content = str(f.get("path", "")), str(f.get("content", ""))
-                    path = entry if entry and str(PurePosixPath(path.strip())).lower() == entry.lower() else path
-                    old = next((p for p in self._ws.files() if p != path and p.lower() == path.lower()), None)
-                    path = old if old and path != entry else path  # r1: 'Utils.py' keeps utils.py (import utils)
-                    lines: list[int] = []
-                    added: list[str] = []
-                    started = None
-                    if path.endswith(".py"):
-                        content, lines = repair_strings(content)
-                        content, added = repair_imports(content, sibling_names(self._ws, path),
-                                                        self._may_import(path))
-                        if str(PurePosixPath(path.strip())) == entry:  # run 10: run() defined, never called, the app exited at once
-                            content, started = repair_main(content)
-                    try:
-                        before = self._ws.read(old or path)
-                    except (WorkspaceError, OSError):
-                        before = None
-                    if old:  # 8c (C-M3): a case-preserving disk kept 'App.py' for every later write of app.py
-                        self._ws.write(old, content)  # r1: a rejected write (over 100 KB) leaves App.py alone
-                        self._ws.delete(old)
-                    self._ws.write(path, content)
-                    if before == content.replace("\r\n", "\n").replace("\r", "\n"):  # read() gives \n only
-                        same.append(path)
-                    else:
-                        changed = True
-                    if lines:
-                        notes.append(f"Auto-repaired {path} line(s) {', '.join(map(str, lines))} of what you sent: a line "
-                                     "break inside a one-line string was joined as \\n. Keep one-line strings on one line.")
-                    if added:
-                        shown = "; ".join(f"`{m if m.startswith('from ') else 'import ' + m}`" for m in added)
-                        notes.append(f"Auto-repaired: added the missing {shown} to {path}.")
-                    if started:  # after the write: a rejected file was not repaired
-                        notes.append(f"Auto-repaired: {path} never started its server; added "
-                                     f'`if __name__ == "__main__": {started}()` at the end.')
-            except WorkspaceError as e:
-                notes.append(f"File rejected: {e}")
-        if same and not changed:  # run 8: the 7B copied the files it was shown, 16 rounds in a row
-            notes.append(UNCHANGED_NOTE.format(names=", ".join(same)[:200]))
-        return notes
+        return write_files(self._ws, files, entry, self.owned, self._may_import)

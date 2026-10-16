@@ -1,7 +1,8 @@
 """Shared helpers and fixtures for test_devfloor*.py (split from one file to stay under 500 lines)."""
 import pytest
 
-from watchtower.floors.f2_dev.devfloor import TEST_COMMAND, DevFloor
+from watchtower.floors.f2_dev.devfloor import DevFloor
+from watchtower.floors.f2_dev.unittest_runner import TEST_COMMAND
 
 from watchtower.engine.sandbox import SandboxResult
 
@@ -56,15 +57,15 @@ def hr_dev(tmp_path, script, runner, rounds=4):
 
 from watchtower.engine.model_socket import BadModelOutput  # noqa: E402
 
-from watchtower.floors.f2_dev.devfloor import units  # noqa: E402
+from watchtower.floors.f2_dev.planner import units  # noqa: E402
 
 PLAN3 = {"entry": "app.py", "routes": [], "files": [
     {"path": "store.py", "purpose": "data"}, {"path": "app.py", "purpose": "server"},
     {"path": "test_app.py", "purpose": "tests"}]}
 
-from watchtower.floors.f2_dev.devfloor import app_is_tested  # noqa: E402
+from watchtower.floors.f2_dev.app_tests import app_is_tested  # noqa: E402
 
-from watchtower.floors.f2_dev.devfloor import failures  # noqa: E402
+from watchtower.floors.f2_dev.feedback import failures  # noqa: E402
 
 REAL = """.FF
 ======================================================================
@@ -134,12 +135,12 @@ FAILED (errors=1)
 BROKEN_MAIN = ("import os\nfrom todo import add_todo\nhtml = '<h1>Todo</h1>'\nhtml += '<form>\n"
                "    <input name=item>\n  </form>'\nprint(html)\n")
 
-from watchtower.floors.f2_dev.devfloor import repair_strings  # noqa: E402
+from watchtower.floors.f2_dev.repair import repair_strings  # noqa: E402
 
 def _run_runner(tmp_path, files):
     import subprocess
     import sys
-    from watchtower.floors.f2_dev.devfloor import TEST_RUNNER, test_summary
+    from watchtower.floors.f2_dev.unittest_runner import TEST_RUNNER, test_summary
     for name, body in files.items():
         (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / name).write_text(body)
