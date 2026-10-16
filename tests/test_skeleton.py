@@ -343,19 +343,27 @@ def test_a_rejected_file_is_a_change(tmp_path):  # 7c review r1 M5: no 'nothing 
     assert not any("unchanged" in n.lower() or "nothing could get better" in n.lower() for n in notes)
 
 
-EVASIONS = ("from xmlrpc.server import SimpleXMLRPCServer\n", "import _socket\n", "import urllib.request\n",
-            "import os\nos.system('x')\n", "exec('import socket')\n", "eval('1')\n", "f = open('d.json', 'w')\n",
-            "x = __import__('so' + 'cket')\n", "import importlib\nim = importlib.import_module\n",
-            "import __main__\n", "def add(e):\n    e.__class__.__init__.__globals__\n", "import ctypes\n",
-            "from . import x\n")
+EVASIONS = {"from xmlrpc.server import SimpleXMLRPCServer\n": "imports xmlrpc.server",
+            "import _socket\n": "imports _socket", "import urllib.request\n": "imports urllib.request",
+            "import os\nos.system('x')\n": "imports os", "exec('import socket')\n": "uses exec",
+            "eval('1')\n": "uses eval", "f = open('d.json', 'w')\n": "uses open",
+            "x = __import__('so' + 'cket')\n": "uses __import__", "import importlib\nim = importlib.import_module\n":
+            "imports importlib", "import __main__\n": "imports __main__", "import ctypes\n": "imports ctypes",
+            "def helper(e):\n    e.__class__.__init__.__globals__\n": "uses .__", "from . import x\n": "imports .",
+            "def helper(e):\n    return e.__class__\n": "uses .__class__",  # 8c r1: one cause each, so a
+            "import collections\ncollections._sys\n": "uses ._sys"}  # guard removed on its own fails a test
+
+
+def _rejected_for(tmp_path, snippets):  # 8c (E-T1): a valid store plus the snippet, so only _scan can reject it
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    for code, reason in snippets.items():
+        ws.write("store.py", STORE + code)
+        assert [p for p in store_problems(ws) if p.startswith(f"store.py {reason}")], (code, store_problems(ws))
 
 
 def test_the_store_may_import_only_safe_modules(tmp_path):  # 7c review r2 I1: an allowlist, not a denylist
-    from watchtower.floors.f2_dev.skeleton import store_problems
-    ws = Workspace(tmp_path)
-    for code in EVASIONS:
-        ws.write("store.py", code)
-        assert any("store.py" in p for p in store_problems(ws)), code
+    _rejected_for(tmp_path, EVASIONS)
 
 
 def test_a_plain_store_and_its_tests_pass(tmp_path):  # 7c review r2 M5: no false positives
@@ -400,18 +408,16 @@ def test_a_file_the_workspace_cannot_delete_does_not_stop_the_plan(tmp_path):  #
     assert owned and (not undeletable or (tmp_path / "todo.db").exists())
 
 
-ALIASES = ("from uuid import os\n", "import uuid\nuuid.os.system('x')\n", "import threading\nthreading._os\n",
-           "import typing\ntyping.sys.modules\n", "import dataclasses\ndataclasses.inspect\n", "e = exec\n",
-           "x = [eval][0]\n", "g = globals()\n", "getattr(object, '__subcl' + 'asses__')\n", "from json import *\n",
-           "v = vars\n", "from collections import _sys\n")
+ALIASES = {"from uuid import os\n": "imports os from uuid", "import uuid\nuuid.os.system('x')\n": "uses .os",
+           "import threading\nthreading._os\n": "uses ._os", "import typing\ntyping.sys.modules\n": "uses .sys",
+           "import dataclasses\ndataclasses.inspect\n": "uses .inspect", "e = exec\n": "uses exec",
+           "x = [eval][0]\n": "uses eval", "g = globals()\n": "uses globals",
+           "getattr(object, '__subcl' + 'asses__')\n": "uses getattr", "from json import *\n": "imports * from json",
+           "v = vars\n": "uses vars", "from collections import _sys\n": "imports _sys from collections"}
 
 
 def test_allowed_modules_cannot_reach_dangerous_ones(tmp_path):  # 7c review r3 C1, C2
-    from watchtower.floors.f2_dev.skeleton import store_problems
-    ws = Workspace(tmp_path)
-    for code in ALIASES:
-        ws.write("store.py", code)
-        assert any("store.py" in p for p in store_problems(ws)), code
+    _rejected_for(tmp_path, ALIASES)
 
 
 def test_store_tests_may_use_sys_os_and_file(tmp_path):  # 7c review r3 I4: tests run in Docker only
@@ -422,7 +428,7 @@ def test_store_tests_may_use_sys_os_and_file(tmp_path):  # 7c review r3 I4: test
                               "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\nimport store\n")
     assert store_problems(ws) == []
     ws.write("test_store.py", "import socket\n")
-    assert store_problems(ws)
+    assert any(p.startswith("test_store.py imports socket") for p in store_problems(ws))
 
 
 def test_the_store_must_define_add_and_items_functions(tmp_path):  # 7d (run 38: a list named items, get_items())
@@ -471,3 +477,14 @@ def test_the_store_contract_survives_a_deep_store_and_reads_python_scopes(tmp_pa
         assert not any("def items(" in p for p in store_problems(ws)), fine
     ws.write("store.py", base + "X = [(items := 1) for _ in E]\n")  # a walrus in a comprehension binds the module
     assert any("def items(" in p for p in store_problems(ws))
+
+
+def test_store_hints_are_ones_the_store_may_follow(tmp_path):  # 8c review r1 (minors): no html, no broken fix
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    ws.write("store.py", STORE + "import sqlite3\n")
+    assert "html" not in store_problems(ws)[0] and "json" in store_problems(ws)[0]  # STORE_NOTE: never escape
+    ws.write("store.py", STORE + "class Box(list):\n    def __init__(self):\n        super().__init__()\n")
+    assert store_problems(ws) == []  # ordinary class code
+    ws.write("store.py", STORE + "def helper(b):\n    return b.__dict__\n")
+    assert "instead of a class" in store_problems(ws)[0]

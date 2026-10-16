@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+from dataclasses import replace
 from fnmatch import fnmatch
 from pathlib import PurePosixPath
 from typing import Callable, Sequence
@@ -16,75 +17,17 @@ from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_N
                                                _capped, _failure_note, _failure_rows, _problem_note, failures,
                                                stuck_note)
 from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings, sibling_names
-from watchtower.floors.f2_dev.skeleton import ONLY_NOTE, STORE, STORE_NOTE, STORE_TESTS, store_problems
+from watchtower.floors.f2_dev.skeleton import (CODER_PROMPT, ONLY_NOTE, SAFE, SAFE_TESTS, STORE, STORE_NOTE,
+                                               STORE_TESTS, store_problems)
 from watchtower.floors.f2_dev.lint import handler_state_problems, idiom_notes
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
+from watchtower.floors.f2_dev.unittest_runner import TEST_COMMAND, TEST_RUNNER, test_summary  # noqa: F401 (re-export)
+from watchtower.floors.f2_dev.prompt_fit import (FILES_MIN, PROMPT_CHARS, RESEARCH_CHARS, SPEC_CHARS,  # noqa: F401
+                                                 fit, plan_text, room_left, spec_text as _spec_text)
 from watchtower.roles import Role
 
-TEST_RUNNER = """\
-import fnmatch, inspect, json, os, sys, unittest
-class Fn(unittest.FunctionTestCase):  # pytest-style 'def test_x(): assert ...' runs too, named like a method
-    def __str__(self):
-        f = self._testFunc
-        name = getattr(f, "__name__", str(f))
-        return f"{name} ({getattr(f, '__module__', '?')}.{name})"
-def plain(fn):
-    if inspect.iscoroutinefunction(fn) or inspect.isgeneratorfunction(fn):
-        def refuse():
-            raise AssertionError("async/generator test functions are not run: use a plain def, or "
-                                 "unittest.IsolatedAsyncioTestCase")
-        refuse.__name__, refuse.__module__ = fn.__name__, fn.__module__
-        return refuse
-    return fn
-def no_args(fn):
-    try:  # mock.patch injects its own arguments: judge the wrapper, not the wrapped function
-        sig = inspect.signature(fn, follow_wrapped=not hasattr(fn, "patchings"))
-    except (ValueError, TypeError):
-        return False
-    return all(p.default is not p.empty or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD) for p in sig.parameters.values())
-def hook(fn, arg):  # pytest's setup_module(module) / setup_function(function): the argument is optional
-    try:
-        inspect.signature(fn).bind(arg)
-    except (ValueError, TypeError):
-        return fn()
-    return fn(arg)
-class Loader(unittest.TestLoader):
-    def loadTestsFromModule(self, module, *args, **kwargs):
-        suite = super().loadTestsFromModule(module, *args, **kwargs)
-        if not fnmatch.fnmatch(os.path.basename(getattr(module, "__file__", None) or ""), "test*.py"):
-            return suite  # app packages are not test files, even when discovery walks them
-        for py, ut in (("setup_module", "setUpModule"), ("teardown_module", "tearDownModule")):
-            if callable(getattr(module, py, None)) and not hasattr(module, ut):  # pytest's names run too
-                setattr(module, ut, lambda f=getattr(module, py), m=module: hook(f, m))
-        up, down = getattr(module, "setup_function", None), getattr(module, "teardown_function", None)
-        case = type("Fn", (Fn,), {"__module__": module.__name__})  # module fixtures wrap these tests too
-        for name, fn in sorted(vars(module).items()):
-            if (name.startswith("test") and name != "test_main" and inspect.isfunction(fn)  # test_main: legacy
-                    and fn.__name__ != "<lambda>" and fn.__module__ == module.__name__
-                    and no_args(fn)):  # a helper that takes arguments is not a test
-                suite.addTest(case(plain(fn), setUp=(lambda f=fn: hook(up, f)) if callable(up) else None,
-                                   tearDown=(lambda f=fn: hook(down, f)) if callable(down) else None))
-        return suite
-suite = Loader().discover(".", pattern="test*.py")
-result = unittest.TextTestRunner(stream=sys.stderr, verbosity=1).run(suite)
-print("WATCHTOWER_TESTS " + json.dumps({"run": result.testsRun, "skipped": len(result.skipped),
-      "failures": len(result.failures), "errors": len(result.errors)}), flush=True)
-sys.exit(0 if result.wasSuccessful() else 1)
-"""
-TEST_COMMAND = ["python", "-I", "-c", TEST_RUNNER]  # -I: app files cannot shadow json/unittest
-_SUMMARY = re.compile(r"^WATCHTOWER_TESTS (\{.*\})$", re.MULTILINE)
 _SAFE_ENTRY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*\.py")  # importable by tests
-
-
-def test_summary(stdout: str) -> dict | None:
-    """The runner's own summary line; printed text like 'Ran 2 tests OK' or an early exit never counts."""
-    match = _SUMMARY.search(stdout or "")
-    try:
-        data = json.loads(match.group(1)) if match else None
-    except ValueError:
-        return None
-    return data if isinstance(data, dict) else None
 MAX_FILES_PER_ROUND = 3
 PLAN_PROMPT = (
     "Spec:\n{spec}\n\nResearch notes:\n{research}\n{reference}{lessons}{feedback}\n"
@@ -113,7 +56,6 @@ HR_PROMPT = (
 MAX_HR_ASKS = 2
 MAX_DIAGNOSES = 2
 FEEDBACK_ITEM, FEEDBACK_TOTAL, QA_CHARS = 600, 2000, 1500  # keep the coder prompt inside num_ctx
-PROMPT_CHARS = 9_000  # + system (~1.2k) + tower brief (~0.8k) ≈ 3.4k tokens; + 2048 output < num_ctx 6144
 _UNSAFE = re.compile(r"[<>{}\x00-\x1f\x7f]")
 
 
@@ -130,11 +72,14 @@ ESCAPE_NOTE = ('Checks with "expect_escaped": true post text containing <&> (wri
 
 
 
-def _qa_block(head: str, checks: Sequence[dict], store_only: bool = False) -> str:
-    """The QA checks for a coder prompt; notes sit outside the untrusted block (6z). `store_only`: 7a-7c."""
+def _qa_block(head: str, checks: Sequence[dict], store_only: bool = False, shown: bool = True) -> str:
+    """The QA checks for a coder prompt; notes sit outside the untrusted block (6z). `store_only`: 7a-7c.
+    `shown=False` (8c): the prompt is full; the notes stay, the checks go."""
     note = (ONLY_NOTE if store_only else "") + (
         (STORE_NOTE if store_only else ESCAPE_NOTE) if any(c.get("expect_escaped") for c in checks) else "")
-    return head + untrusted("f4", _compact_checks(checks)) + "\n" + note if checks else note
+    if not checks:
+        return note
+    return (head + untrusted("f4", _compact_checks(checks)) if shown else "(QA's HTTP checks not shown)") + "\n" + note
 
 
 TEST_DIAGNOSE_PROMPT = (
@@ -192,20 +137,22 @@ def _plan_path(raw) -> str | None:
     return rel.as_posix() if rel.suffix in ALLOWED_SUFFIXES else None
 
 
-def units(plan: dict) -> list[list[dict]]:
+def units(plan: dict, owned=frozenset()) -> list[list[dict]]:
     """F2 Lead's split, by code: unit 1 is the MVP (entry + test files), then the other planned files in
-    groups of up to 3, in plan order; at most 4 units (the fix loop writes anything left over)."""
+    groups of up to 3, in plan order; at most 4 units (the fix loop writes anything left over). Under the
+    skeleton (8c, run 38) the store comes before its tests: a store written after them copied their names."""
     files = list({f["path"]: f for f in plan["files"]}.values())
+    if owned:
+        mine = [f for f in files if f["path"] != plan["entry"]]
+        split = [[f for f in files if f["path"] == plan["entry"]], [f for f in mine if not _is_test_file(f["path"])],
+                 [f for f in mine if _is_test_file(f["path"])]]
+        return [u[:UNIT_FILES] for u in split if u][:MAX_UNITS]
     first = [f for f in files if f["path"] == plan["entry"]]
     first += [f for f in files if PurePosixPath(f["path"]).name.startswith("test")][:UNIT_FILES - len(first)]
     rest = [f for f in files if f not in first]
     split = [first] if first else []
     split += [rest[i:i + UNIT_FILES] for i in range(0, len(rest), UNIT_FILES)]
     return split[:MAX_UNITS]
-
-
-def _spec_text(spec: dict) -> str:
-    return json.dumps({k: spec.get(k) for k in ("title", "goal", "acceptance", "out_of_scope")}, indent=1)
 
 
 class DevFloor:
@@ -223,14 +170,23 @@ class DevFloor:
         self._max_rounds = max_rounds
         self.owned: set[str] = set()  # 7a: paths the tower wrote (the web server); the coder never changes them
 
+    @property
+    def _writer(self) -> Role:
+        """The coder; under the skeleton with a store-only system prompt (8c review r3: the web-app one asked for
+        app.py, test_*.py and add_todo, which _write and _contract reject). Same id: memos and the scheduler."""
+        return replace(self._coder, prompt=CODER_PROMPT) if self.owned else self._coder
+
     def plan(self, spec: dict, research: str, feedback: Sequence[str], lessons: str = "", reference: str = "") -> dict:
-        note = ("\nThe reviewer rejected the last design:\n" + "\n".join(untrusted("gate", str(f)[:FEEDBACK_ITEM])
+        note = ("\nThe reviewer rejected the last design:\n" + "\n".join(_capped("gate", str(f), FEEDBACK_ITEM)
                                                                     for f in feedback[:5])) if feedback else ""
-        out = self._ask(self._architect, PLAN_PROMPT.format(
-            spec=_spec_text(spec), research=untrusted("f1", research) if research else "(none)", feedback=note,
-            lessons=("\nLessons from past jobs:\n" + untrusted("retro", lessons[:800]) + "\n") if lessons else "",
-            reference=("\nReference docs (from the web through Glass 2; may be wrong):\n" + reference + "\n")
-            if reference else ""))
+        parts = dict(spec=_spec_text(spec), feedback=note,  # 8c (C-M5): every part capped after escaping
+                     research=_capped("f1", research, RESEARCH_CHARS) if research else "(none)",
+                     lessons=("\nLessons from past jobs:\n" + _capped("retro", lessons, 800) + "\n") if lessons else "",
+                     reference=("\nReference docs (from the web through Glass 2; may be wrong):\n" + reference + "\n")
+                     if reference else "")
+        out = self._ask(self._architect, PLAN_PROMPT.format(**fit(PLAN_PROMPT, parts, [
+            ("reference", ""), ("lessons", ""), ("research", _capped("f1", research, 500) if research else "(none)"),
+            ("spec", _spec_text(spec, SPEC_CHARS))])))
         files, seen = [], set()
         for f in out.get("files") or []:
             path = _plan_path(f.get("path")) if isinstance(f, dict) else None
@@ -242,6 +198,8 @@ class DevFloor:
             fixed = re.sub(r"(^|/)(?=\d)", r"\1app_", entry)  # '2048.py' → 'app_2048.py': tests can import it
             if _SAFE_ENTRY.fullmatch(fixed):
                 files = [{**f, "path": fixed} if f["path"] == entry else f for f in files]
+            if not _SAFE_ENTRY.fullmatch(fixed):  # 8c (C-M7): the old name must not stay planned as a second server
+                files = [f for f in files if f["path"] != entry]
             entry = fixed if _SAFE_ENTRY.fullmatch(fixed) else "app.py"
         files = files[:15]
         files = [f for f in files if f["path"] == entry or f["path"].lower() != entry.lower()]
@@ -254,19 +212,23 @@ class DevFloor:
         """F2 workers: one coder call per unit that still has missing files, back to back on the coder model.
         A worker writes only its own unit's files; a garbled reply costs that unit (the fix loop catches up)."""
         present = {p.lower() for p in self._ws.files()}  # macOS disks are case-blind: App.py is app.py
-        todo = [[f for f in u if f["path"].lower() not in present] for u in units(plan)]
+        todo = [[f for f in u if f["path"].lower() not in present] for u in units(plan, self.owned)]
         todo = [u for u in todo if u]  # a worker writes only files that do not exist yet: never a fixed one
         qa = _qa_block("Floor 4 QA will run these HTTP checks against the app:\n", qa_checks, bool(self.owned))
+        qa_short = _qa_block("", qa_checks, bool(self.owned), shown=False)
         notes: list[str] = []
         stray: list[str] = []
         for i, unit in enumerate(todo, start=1):
             paths = [f["path"] for f in unit]
-            parts = dict(spec=_spec_text(spec), plan=untrusted("f2.architect", json.dumps(plan)), qa=qa, i=i,
-                         n=len(todo), unit=untrusted("f2.architect", "\n".join(f"- {f['path']}: {f['purpose']}"
-                                                                               for f in unit)))
-            room = max(1500, min(6000, PROMPT_CHARS - len(UNIT_PROMPT.format(files="", **parts))))
+            listed = untrusted("f2.architect", "\n".join(f"- {f['path']}: {f['purpose']}" for f in unit))
+            parts = fit(UNIT_PROMPT, dict(spec=_spec_text(spec), plan=plan_text(plan), qa=qa, i=i, n=len(todo),
+                                          files="", unit=listed),
+                        [("qa", qa_short), ("plan", plan_text(plan, False)), ("spec", _spec_text(spec, SPEC_CHARS))],
+                        FILES_MIN)
+            room = room_left(UNIT_PROMPT, parts)
+            del parts["files"]
             try:
-                reply = self._ask(self._coder, UNIT_PROMPT.format(
+                reply = self._ask(self._writer, UNIT_PROMPT.format(
                     files=untrusted_code("workspace", self._ws.snapshot(room) or "(none yet)"), **parts))
             except BadModelOutput:  # low memory or a dead model pauses the job, as for any coder call
                 notes.append(f"coder {i} gave no usable reply for {', '.join(paths)}; write those files")
@@ -292,26 +254,34 @@ class DevFloor:
             kept.append(item)
             used += len(item)
         notes = [f"Reviewer feedback to address:\n{_capped('gate', f, 800)}" for f in kept]
-        qa = _qa_block("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n", qa_checks, bool(self.owned))
-        checks, output, passed, hr_asks, hr_question = [], "", False, 0, None
+        qa = _qa_block("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n", qa_checks,
+                       bool(self.owned))
+        qa_short = _qa_block("", qa_checks, bool(self.owned), shown=False)
+        checks, output, passed, hr_asks, hr_question, hr_pending = [], "", False, 0, None, ""
         last_failing, diagnoses, diagnosis, diagnosed_for, carry = None, 0, "", None, []  # stuck = same set twice
         for round_no in range(self._max_rounds):
-            parts = dict(spec=_spec_text(spec), plan=untrusted("f2.architect", json.dumps(plan)), qa=qa,
+            parts = dict(spec=_spec_text(spec), plan=plan_text(plan), qa=qa, files="",
                          feedback=("\n" + "\n".join(notes)) if notes else "")
-            while len(notes) > 1 and len(CODE_PROMPT.format(files="", **parts)) > PROMPT_CHARS - 1500:
+            while len(notes) > 1 and len(CODE_PROMPT.format(**parts)) > PROMPT_CHARS - FILES_MIN:
                 notes = notes[1:]  # oldest notes go first (the newest, most important one is kept)
                 parts["feedback"] = ("\n" + "\n".join(notes)) if notes else ""
-            room = max(1500, min(6000, PROMPT_CHARS - len(CODE_PROMPT.format(files="", **parts))))
+            parts = fit(CODE_PROMPT, parts, [("qa", qa_short), ("plan", plan_text(plan, False)),
+                                             ("spec", _spec_text(spec, SPEC_CHARS))], FILES_MIN)  # 8c (C-M5)
+            room = room_left(CODE_PROMPT, parts)
+            del parts["files"]
             if test_first and round_no == 0:  # the unit workers just wrote every file: test before rewriting
                 notes = []
             else:
                 try:
-                    reply = self._ask(self._coder, CODE_PROMPT.format(
+                    reply = self._ask(self._writer, CODE_PROMPT.format(
                         files=untrusted_code("workspace", self._ws.snapshot(room)), **parts))
                 except BadModelOutput:  # a garbled reply costs this round, not the whole job
-                    checks.append({"check": "tests", "round": round_no, "pass": False,  # files on disk still judged
+                    problems = self._problems()  # files on disk still judged; unchanged, so the last test result
+                    clean = bool(checks and checks[-1].get("clean"))  # holds (8c, C-M6: PASS beside pass False)
+                    passed = clean and not problems
+                    checks.append({"check": "tests", "round": round_no, "pass": passed, "clean": clean,
                                    "output": "coder reply had no usable files",
-                                   "problems": [str(p)[:200] for p in self._problems()]})
+                                   "problems": [str(p)[:200] for p in problems]})
                     notes = ["Your last reply had no usable files. Reply with one block per file: ### FILE: path, "
                              "then the complete file in a ``` fence."] + carry  # keep what HR said
                     continue
@@ -335,24 +305,29 @@ class DevFloor:
                 last_failing, carry, diagnosis, diagnosed_for = None, [], "", None  # a pass ends any stuck set
                 verdict = self._hr_review(spec, plan) if self._hr is not None and hr_asks < MAX_HR_ASKS else None
                 if verdict is None or verdict[0]:
+                    hr_pending = ""
                     break
                 hr_asks += 1
                 if hr_asks >= MAX_HR_ASKS or round_no == self._max_rounds - 1:
                     hr_question = f"F2 HR not satisfied: {verdict[1][:200]}"
                     break
+                hr_pending = verdict[1]  # still open if the rounds run out first (8c, C-M6)
                 carry = ["Floor 2 HR reviewed your code and asked for changes:\n" + _capped("f2.hr", verdict[1], 800)]
                 notes += carry  # kept through a garbled reply
                 continue
+            tests = STORE_TESTS if self.owned else "test_*.py"  # 8c (C-H2): only test_store.py is accepted
             if not has_tests:
-                notes.append("There are no unittest files yet: add test_*.py with real tests.")
+                notes.append(f"There are no unittest files yet: add {tests} with real tests.")
             elif not ran_tests:
-                notes.append("unittest found 0 tests: name test files test_*.py, put test classes in "
+                notes.append(f"unittest found 0 tests: name test files {tests}, put test classes in "
                              "unittest.TestCase subclasses, and name methods test_*.")
             elif real < 2:
                 notes.append(f"unittest ran only {real} test: write at least 2 real tests of the app's behaviour.")
-            if has_tests and not imports_app:
-                notes.append("Your tests import nothing from the app: import the app's own functions or handler "
-                             "(e.g. from app import ...) and test what they do.")
+            if has_tests and not imports_app:  # app.py is the tower's server: importing it is rejected
+                notes.append(f"Your tests import nothing from the app: in {STORE_TESTS}, `import store` and test "
+                             "store.add(entry) and store.items()." if self.owned else "Your tests import nothing "
+                             "from the app: import the app's own functions or handler (e.g. from app import ...) "
+                             "and test what they do.")
             found = failures(result.stderr or "")
             failing = sorted({f"{f['id']}:{f['test']}" for f in found})
             stuck = bool(failing) and failing == last_failing
@@ -372,6 +347,7 @@ class DevFloor:
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"
                    f"Tests: {'PASS' if passed else 'FAIL'}\n{output[-800:]}")
         questions = [] if passed else [f"tests still failing after {len(checks)} round(s)"]
+        hr_question = hr_question or (f"F2 HR not satisfied: {hr_pending[:200]}" if hr_pending else None)
         questions += [hr_question] if hr_question else []
         return WorkPackage("f2", summary, self._ws.files(), [], checks, questions)
 
@@ -394,9 +370,11 @@ class DevFloor:
     def _hr_review(self, spec: dict, plan: dict) -> tuple[bool, str] | None:
         """Floor 2 HR: a second model family reads the passing code against the spec. Garbage → skipped."""
         try:
-            out = self._ask(self._hr, HR_PROMPT.format(spec=_spec_text(spec),
-                                                        plan=untrusted("f2.architect", json.dumps(plan)),
-                                                        code=untrusted_code("workspace", self._ws.snapshot(4500))))
+            parts = fit(HR_PROMPT, dict(spec=_spec_text(spec), plan=plan_text(plan), code=""),
+                        [("plan", plan_text(plan, False)), ("spec", _spec_text(spec, SPEC_CHARS))], FILES_MIN)
+            room = room_left(HR_PROMPT, parts, 4500)
+            out = self._ask(self._hr, HR_PROMPT.format(**{**parts, "code": untrusted_code("workspace",
+                                                                                          self._ws.snapshot(room))}))
         except ADVISORY_ERRORS:
             return None
         if not isinstance(out.get("pass"), bool):  # no clear verdict from a sloppy model: skip, never veto
@@ -424,6 +402,13 @@ class DevFloor:
             return []
         return [f"Auto-repaired: added `{line}` to {entry}; it used those names without importing them."
                 for line in added]
+
+    def _may_import(self, path: str) -> frozenset[str] | None:
+        """What auto-repair may add (8c, C-H2): under the skeleton only what store_problems accepts; store.py never
+        gets html (STORE_NOTE: the server escapes)."""
+        if not self.owned:
+            return None
+        return frozenset(SAFE - {"html"} if path == STORE else SAFE_TESTS)
 
     def _ensure_packages(self) -> None:
         """unittest discovery only enters folders that are packages: add empty __init__.py where missing."""
@@ -466,18 +451,25 @@ class DevFloor:
                     notes.append(f"File rejected: {str(f.get('path'))[:100]!r} has no content")
                 else:
                     path, content = str(f.get("path", "")), str(f.get("content", ""))
+                    path = entry if entry and str(PurePosixPath(path.strip())).lower() == entry.lower() else path
+                    old = next((p for p in self._ws.files() if p != path and p.lower() == path.lower()), None)
+                    path = old if old and path != entry else path  # r1: 'Utils.py' keeps utils.py (import utils)
                     lines: list[int] = []
                     added: list[str] = []
                     started = None
                     if path.endswith(".py"):
                         content, lines = repair_strings(content)
-                        content, added = repair_imports(content, sibling_names(self._ws, path))
+                        content, added = repair_imports(content, sibling_names(self._ws, path),
+                                                        self._may_import(path))
                         if str(PurePosixPath(path.strip())) == entry:  # run 10: run() defined, never called, the app exited at once
                             content, started = repair_main(content)
                     try:
-                        before = self._ws.read(path)
+                        before = self._ws.read(old or path)
                     except (WorkspaceError, OSError):
                         before = None
+                    if old:  # 8c (C-M3): a case-preserving disk kept 'App.py' for every later write of app.py
+                        self._ws.write(old, content)  # r1: a rejected write (over 100 KB) leaves App.py alone
+                        self._ws.delete(old)
                     self._ws.write(path, content)
                     if before == content.replace("\r\n", "\n").replace("\r", "\n"):  # read() gives \n only
                         same.append(path)

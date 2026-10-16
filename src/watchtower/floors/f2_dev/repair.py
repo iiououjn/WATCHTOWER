@@ -152,10 +152,12 @@ def _bound(tree: ast.AST) -> tuple[set[str], set[str], set[str]] | None:
     return names, {p for p in plain if p in names}, dotted
 
 
-def repair_imports(source: str, skip: frozenset[str] = frozenset()) -> tuple[str, list[str]]:
+def repair_imports(source: str, skip: frozenset[str] = frozenset(),
+                   allowed: frozenset[str] | None = None) -> tuple[str, list[str]]:
     """Add a missing standard import the coder used as `os.path…` but never imported (bound nowhere in the file).
     Static only: the file is parsed, never run. Returns the new text and the modules added. `skip`: bare names a sibling file defines (6x review r2: a
-    stdlib import must not hide `from util import escape`, which repair_names adds)."""
+    stdlib import must not hide `from util import escape`, which repair_names adds). `allowed`: the only top-level
+    modules it may add (8c, C-H2: the skeleton's store check rejected the `import os` the repair had added)."""
     if len(source) > MAX_REPAIR_BYTES:
         return source, []
     try:
@@ -184,10 +186,11 @@ def repair_imports(source: str, skip: frozenset[str] = frozenset()) -> tuple[str
             wanted.add(name)
         else:
             poisoned.add(name)  # a use that is not this module (datetime.now): no import of it, the rest still repaired
-    wanted -= poisoned
+    wanted = {m for m in wanted - poisoned if allowed is None or m.split(".")[0] in allowed}
     used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
     by_module: dict[str, list[str]] = {}
-    for name in sorted(used & set(BARE) - bound - skip):
+    for name in sorted(n for n in used & set(BARE) - bound - skip
+                       if allowed is None or BARE[n].split(".")[0] in allowed):
         by_module.setdefault(BARE[name], []).append(name)
     froms = [f"from {m} import {', '.join(names)}" for m, names in sorted(by_module.items())]
     if not wanted and not froms:

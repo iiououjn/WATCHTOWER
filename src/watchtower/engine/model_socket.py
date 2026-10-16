@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 import time
+import warnings
 from dataclasses import dataclass
 from typing import Callable
 
@@ -86,9 +88,18 @@ _HEADER = re.compile(_MARK + r"(FILE|DELETE)[ \t]*(?:\*\*)?[ \t]*:[ \t]*(?:\*\*)
 _MEMO = re.compile(r"^[ \t]*(?:(?:#{2,4}|\*\*)[ \t]*(?:\*\*)?[ \t]*)?MEMO[ \t]+(f\d)[ \t]*(?:\*\*)?[ \t]*:"
                    r"[ \t]*(?:\*\*)?[ \t]*(\S.*?)[ \t]*$", re.I)
 _FENCE = re.compile(r"^([ \t]*)(`{3,}|~{3,})")
+_TEXT = (".md", ".markdown", ".txt", ".rst")  # _close(): kept to their last fence
 _PATH_OK = re.compile(r"[\w.-]+(?:/[\w.-]+)*\.\w+")
 FILES_NOTE = ("\n\nYour previous reply had no usable files. Reply with one block per file, exactly like this:\n"
-              "### FILE: app.py\n```python\n<the complete file>\n```")
+              "### FILE: {path}\n```python\n<the complete file>\n```")
+
+
+def files_note(messages: list[dict]) -> str:
+    """The retry note shows the file the role's own system prompt shows (8c review r3: a store-only coder was
+    shown app.py, which the tower then rejects); app.py when the system prompt names none."""
+    system = messages[0]["content"] if messages and messages[0].get("role") == "system" else ""
+    path = next((h[1] for h in map(_header, str(system).splitlines()) if h and h[0] == "FILE"), "app.py")
+    return FILES_NOTE.format(path=path)
 
 
 def _clean_path(raw: str) -> str:
@@ -106,11 +117,42 @@ def _header(line: str) -> tuple[str, str] | None:
     return (m.group(1).upper(), path) if m and _PATH_OK.fullmatch(path) else None
 
 
+def _close(path: str, lines: list[str], open_at: int, closes: list[int], fence: str, indent: str) -> int:
+    """Which closing fence ends a file (8c, audit A-F6: a prose fence after the code made app.py a SyntaxError).
+    Python: the last one whose body parses (``` inside a string still works; nothing parses → the last). Text
+    (.md/.txt/.rst): the last, as before 8c (r1: a README's bare inner block is not told from a prose fence, and a
+    cut README loses text silently). Other files: the first bare fence not paired with a ```lang fence in the body."""
+    if path.endswith(".py"):
+        for k in reversed(closes[-10:]):
+            body = "\n".join(ln[len(indent):] if indent and ln.startswith(indent) else ln
+                             for ln in lines[open_at + 1:k])
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    ast.parse(body)
+                return k
+            except (SyntaxError, ValueError, RecursionError, MemoryError):
+                continue
+        return closes[-1]
+    if path.lower().endswith(_TEXT):
+        return closes[-1]
+    depth = 0
+    for k in range(open_at + 1, closes[-1] + 1):
+        line = lines[k].strip()
+        if k in closes:
+            if not depth:
+                return k
+            depth -= 1
+        elif line.startswith(fence) and line.lstrip(fence[0]).strip():  # ```bash: an inner block opens
+            depth += 1
+    return closes[-1]
+
+
 def parse_files(text: str) -> dict:
     """Code as plain fenced blocks ('### FILE: path' + a fence), so no character ever needs escaping — the
     coder's JSON escaping of newlines and quotes was the commonest cause of broken files. A file starts at a
-    marked header followed by a fence and ends at the LAST closing fence before the next file (so ``` lines
-    inside code never cut it short); a block with no closing fence is rejected with a note, never written half.
+    marked header followed by a fence and ends at the closing fence _close() picks before the next file (so ```
+    lines inside code never cut it short); a block with no closing fence is rejected with a note, never written half.
     DELETE / MEMO lines count only outside code; the model's own order is kept."""
     lines = (text or "").replace("\r\n", "\n").split("\n")
     starts = []  # (header line, fence line, path)
@@ -133,9 +175,10 @@ def parse_files(text: str) -> dict:
             notes.append(f"File {path} was cut off (no closing fence); send it again, shorter" if last else
                          f"File {path} was not closed with a fence before the next file; it was not written")
             continue
-        body = [ln[len(indent):] if indent and ln.startswith(indent) else ln for ln in lines[open_at + 1:closes[-1]]]
+        close = _close(path, lines, open_at, closes, fence, indent)
+        body = [ln[len(indent):] if indent and ln.startswith(indent) else ln for ln in lines[open_at + 1:close]]
         entries.append((head_at, {"path": path, "content": "\n".join(body) + ("\n" if body else "")}))
-        outside += list(range(closes[-1] + 1, end))
+        outside += list(range(close + 1, end))
     memo = None
     for k in outside:  # text outside every code block: deletes, a memo, headers that never got a fence
         head = _header(lines[k])
@@ -295,7 +338,7 @@ class ModelSocket:
             if out.get("notes") and attempt == retries:  # last try: the coder still hears what went wrong
                 return out
             self._audit.append("model_socket", "bad_files", {"model": reply.model}, job_id)
-            convo = list(messages[:-1]) + [{**messages[-1], "content": messages[-1]["content"] + FILES_NOTE}]
+            convo = list(messages[:-1]) + [{**messages[-1], "content": messages[-1]["content"] + files_note(messages)}]
         raise BadModelOutput(f"{self._s.tiers[tier]} returned no usable files after {retries + 1} tries")
 
     def ask_json(self, tier: str, messages: list[dict], job_id: str, retries: int = 1) -> dict:
