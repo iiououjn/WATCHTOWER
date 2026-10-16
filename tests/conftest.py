@@ -124,7 +124,15 @@ class FakeSandbox:
 
 def start_signed(runner, job_id, extra=None):
     """8a: --yes approves the spec only; the owner still signs the app off. Start, approve that sign-off, resume."""
-    out = runner.start(job_id, extra={"auto_approve": True, **(extra or {})})
+    return _signed(runner, job_id, runner.start(job_id, extra={"auto_approve": True, **(extra or {})}))
+
+
+def resume_signed(runner, job_id):
+    """8a + 8b: a resumed job that reaches the owner's sign-off is approved and resumed once more."""
+    return _signed(runner, job_id, runner.resume(job_id))
+
+
+def _signed(runner, job_id, out):
     approvals = runner._tower._approvals
     pending = approvals.pending_for(job_id)
     if out.status == "paused" and pending is not None and pending.kind == "signoff":

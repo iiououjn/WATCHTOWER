@@ -2,6 +2,7 @@
 no re-plan and the send-back counter kept; only an owner's resume after the send-backs ran out starts afresh."""
 import pytest
 
+from conftest import resume_signed
 from runner_kit import *  # noqa: F403 — helpers and fixtures
 from runner_kit import app_tower  # noqa: F401
 
@@ -40,7 +41,7 @@ def test_crash_mid_attempt_resumes_that_attempt_without_replanning(app_tower, co
     assert out.status == "paused" and "Docker" in out.reason
     before = planned(model)
     runner._tower._known.clear()  # a new process: the memo context comes back from the checkpoint
-    assert runner.resume(job.id).status == "done"
+    assert resume_signed(runner, job.id).status == "done"
     assert planned(model) == before
     assert dev_attempts(conn, job.id) == [0, 1]  # attempt 1 re-ran; attempt 0 was kept
     assert '"entry": "app.py"' in runner._tower._known[(job.id, "f2")]
@@ -52,7 +53,7 @@ def test_crash_in_the_first_attempt_keeps_the_approved_plan(app_tower, conn):
     crash_once_after_gate(sandbox, model, gate_calls=0)
     assert runner.start(job.id, extra={"auto_approve": True}).status == "paused"
     before = planned(model)
-    assert runner.resume(job.id).status == "done"
+    assert resume_signed(runner, job.id).status == "done"
     assert planned(model) == before and dev_attempts(conn, job.id) == [0]
     runner.close()
 
@@ -90,7 +91,7 @@ def test_owner_pause_acts_after_the_current_attempt(app_tower, conn):
     assert dev_attempts(conn, job.id) == [0]
     sandbox.run = real
     before = planned(model)
-    assert runner.resume(job.id).status == "done"
+    assert resume_signed(runner, job.id).status == "done"
     assert planned(model) == before
     assert dev_attempts(conn, job.id) == [0, 1]
     runner.close()
@@ -131,7 +132,7 @@ def test_a_crash_in_the_qa_office_after_a_replan_resumes_with_the_new_plan(app_t
     runner._socket._complete = complete
     out = runner.start(job.id, extra={"auto_approve": True})
     assert state["done"] and out.status == "paused"
-    again = runner.resume(job.id)
+    again = resume_signed(runner, job.id)
     assert again.status == "done", again.reason
     assert dev_attempts(conn, job.id) == [0, 1] and model.calls.count("f2.architect") == 2
     assert model.calls.count("f4.lead") == 2  # the new plan's QA was written on resume, not the old plan's kept
@@ -154,6 +155,6 @@ def test_a_resume_keeps_each_floors_web_lookups_used(lookout_tower):
         return real(job_id, command, timeout)
     sandbox.run = run
     assert runner.start(job.id, extra={"auto_approve": True, "research": True}).status == "paused"
-    assert runner.resume(job.id).status == "done"
+    assert resume_signed(runner, job.id).status == "done"
     assert [f for f, q in factory.calls].count("f4") == MAX_PER_FLOOR
     runner.close()
