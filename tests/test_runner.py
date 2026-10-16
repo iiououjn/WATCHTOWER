@@ -19,7 +19,7 @@ def test_ollama_down_pauses_then_resume_skips_plan(env):
     assert jobs.get(job.id).status == "paused"
     model.fail_on = None
     assert runner.resume(job.id).answer == "answer-text"
-    assert model.calls == {"plan": 1, "answer": 2}
+    assert model.calls == {"plan": 1, "answer": 4}  # 8b: three tries before the pause, one after
     assert topics(bus, job.id) == ["job.started", "job.paused", "job.resumed", "job.done"]
 
 

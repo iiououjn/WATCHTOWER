@@ -14,6 +14,11 @@ from watchtower.engine.system import free_ram_pct
 LOCAL_PREFIX = "ollama/"
 RAM_SETTLE_POLLS = 10  # Ollama frees an unloaded model's RAM asynchronously
 RAM_SETTLE_SECONDS = 0.5
+RETRY_DELAYS = (2.0, 4.0)  # backoff before the 2nd and 3rd try of a transient failure (spec §10)
+_TRANSIENT_NAMES = {  # litellm's and httpx's names for a dropped connection, a timeout or a server error
+    "APIConnectionError", "Timeout", "InternalServerError", "ServiceUnavailableError", "BadGatewayError",
+    "TransportError", "NetworkError", "ConnectError", "ReadError", "WriteError", "RemoteProtocolError",
+    "TimeoutException", "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout"}
 
 
 class ModelUnavailable(Exception):
@@ -30,6 +35,19 @@ class LowMemory(Exception):
 
 class BadModelOutput(Exception):
     pass
+
+
+def transient(error: BaseException) -> bool:
+    """Worth another try: the connection dropped, the call timed out, or the server failed (5xx). Read from
+    builtins, a status code and class names (MRO), never library types, so it outlives a swap of the client."""
+    if isinstance(error, (ConnectionError, TimeoutError)):
+        return True
+    status = getattr(error, "status_code", None)
+    if status is None:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+    if isinstance(status, int) and not isinstance(status, bool):
+        return 500 <= status <= 599
+    return any(cls.__name__ in _TRANSIENT_NAMES for cls in type(error).__mro__)
 
 
 def parse_json(text: str) -> dict:
@@ -202,16 +220,24 @@ class ModelSocket:
             kwargs["num_ctx"] = self._s.num_ctx
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-        start = self._clock()
-        try:
-            resp = self._complete(**kwargs)
-        except Exception as e:
-            self._audit.append(
-                "model_socket", "model_error",
-                {"model": model, "error": f"{type(e).__name__}: {str(e)[:200]}"}, job_id,
-            )
-            hint = f" Is Ollama running? Try: ollama pull {model.removeprefix(LOCAL_PREFIX)}" if local else ""
-            raise ModelUnavailable(f"{model} unavailable ({type(e).__name__}).{hint}") from e
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            if attempt:  # a transient failure: back off, then only if the budget still has room
+                self._sleep(RETRY_DELAYS[attempt - 1])
+                self._budget.check(job_id)
+            start = self._clock()
+            try:
+                resp = self._complete(**kwargs)
+                break
+            except Exception as e:
+                retry = transient(e) and attempt < len(RETRY_DELAYS)
+                self._audit.append(
+                    "model_socket", "model_error",
+                    {"model": model, "error": f"{type(e).__name__}: {str(e)[:200]}", "try": attempt + 1,
+                     "retry": retry}, job_id,
+                )
+                if not retry:
+                    hint = f" Is Ollama running? Try: ollama pull {model.removeprefix(LOCAL_PREFIX)}" if local else ""
+                    raise ModelUnavailable(f"{model} unavailable ({type(e).__name__}).{hint}") from e
         seconds = self._clock() - start
 
         try:

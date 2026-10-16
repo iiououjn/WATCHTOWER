@@ -120,3 +120,10 @@ class FakeSandbox:
             return SandboxResult(0, "WATCHTOWER_PROBE " + json.dumps(results) + "\n"
                                  'WATCHTOWER_LOG "KeyError: items"\n', "", False)
         return SandboxResult(0, f"SMOKE_STATUS {self.http}\n", "", False)
+
+
+@pytest.fixture(autouse=True)
+def no_retry_waits(monkeypatch):
+    """8b: model retries keep their tries but not their seconds of backoff in tests (test_model_retry checks them)."""
+    from watchtower.engine import model_socket
+    monkeypatch.setattr(model_socket, "RETRY_DELAYS", (0.0, 0.0))
