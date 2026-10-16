@@ -231,7 +231,7 @@ Every floor handoff passes through a **Floor 5 gate** (deterministic rules + mod
 |---|---|---|
 | `WATCHTOWER_HOME` | `~/.watchtower` | Data directory (DB, workspaces, guardrails) |
 | `WATCHTOWER_WORK_MODEL` | `qwen2.5-coder:7b` | Override the `work` tier Ollama model |
-| `WATCHTOWER_SANDBOX_IMAGE` | `python:latest` | Docker image for sandbox execution |
+| `WATCHTOWER_SANDBOX_IMAGE` | `python:3.14.8@sha256:b9767f…` | Docker image for sandbox and deploy; must be pinned by digest (`name[:tag]@sha256:…`) |
 | `WATCHTOWER_MIN_FREE_RAM_PCT` | `20` | Minimum free RAM % before pausing |
 | `WATCHTOWER_OFFLINE` | _(unset)_ | Set to `1` to disable web search |
 
