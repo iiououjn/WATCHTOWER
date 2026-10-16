@@ -3,7 +3,7 @@ from runner_kit import *  # noqa: F403 — helpers and fixtures
 
 
 def test_evidence_says_incomplete_when_bandit_did_not_run(app_tower, conn, monkeypatch):
-    from watchtower import tower as pipeline
+    from watchtower.tower import dev_run as pipeline
     monkeypatch.setattr(pipeline, "security_scan", lambda root, files: [
         {"tool": "bandit", "id": "-", "severity": "UNKNOWN", "confidence": "-", "file": "-", "line": 0,
          "text": "Bandit is not installed"}])
@@ -206,7 +206,7 @@ def test_units_are_not_rerun_on_a_code_send_back(app_tower):
 
 
 def test_evidence_shows_the_full_app_probe():
-    from watchtower.tower import _evidence
+    from watchtower.evidence import _evidence
     text = _evidence([{"check": "http", "pass": True, "status": "200"},
                       {"check": "routes", "pass": True, "results": [{"path": "/a", "status": 200}] * 3}])
     assert "full app: 3/3 contract routes answered" in text

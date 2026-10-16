@@ -1,4 +1,5 @@
 """8d (audit E-S2, E-A3, A-F19): components nothing used are removed, with their dependencies, and stay removed."""
+import ast
 import dataclasses
 import importlib.util
 import tomllib
@@ -39,3 +40,29 @@ def test_every_model_tier_is_used_by_a_role():  # A-F19: a tier no role uses is 
     from watchtower.roles import load_roles
     used = {r.tier for r in load_roles(tiers=DEFAULT_TIERS).values()}
     assert set(DEFAULT_TIERS) == used
+
+
+SRC = ROOT / "src" / "watchtower"
+SPLIT = ("tower", "floors/f2_dev", "interface")  # 8d: the god objects' new homes keep lines readable too
+
+
+def _rel(path: Path) -> str:
+    return path.relative_to(SRC).as_posix()
+
+
+@pytest.mark.parametrize("path", sorted(SRC.rglob("*.py")), ids=_rel)
+def test_files_stay_under_500_lines_without_squeezing(path):
+    """E-A1: the limit was met by deleting blank lines; a top-level def or class needs two blank lines before it
+    (comments directly above count as part of it), and so does the first statement after one."""
+    lines = path.read_text().splitlines()
+    assert len(lines) < 500
+    body = ast.parse(path.read_text()).body
+    defs = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    for prev, node in zip(body, body[1:]):
+        if isinstance(node, defs) or isinstance(prev, defs):
+            k = min([d.lineno for d in getattr(node, "decorator_list", [])] + [node.lineno]) - 2
+            while k >= 0 and lines[k].lstrip().startswith("#"):
+                k -= 1
+            assert k >= 1 and not lines[k].strip() and not lines[k - 1].strip(), f"{_rel(path)}:{node.lineno}"
+    if _rel(path).startswith(SPLIT) or _rel(path) == "tower.py":
+        assert not [n for n, line in enumerate(lines, 1) if len(line) > 120]

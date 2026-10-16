@@ -32,7 +32,7 @@ def test_no_round_ran_blocks():
 
 
 def test_sign_off_evidence_marks_coder_tests_advisory():
-    from watchtower.tower import _evidence
+    from watchtower.evidence import _evidence
     assert "- coder unit tests (advisory): FAIL" in _evidence([{"check": "tests", "pass": False}])
 
 
