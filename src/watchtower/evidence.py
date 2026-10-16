@@ -70,7 +70,8 @@ def model_objection(verdict, package, f3, f4, sec) -> list[str]:
     if verdict.passed or package.validate() or None in (f3, f4, sec):
         return []
     qa = f4.checks_run[-1]
-    if not (f3.checks_run[-1]["pass"] and qa["pass"] and qa.get("decide") and sec.checks_run[-1]["pass"]):
+    tower = qa.get("decide") or qa.get("advisory_failed")  # 7b r3: status-only checks the coder cannot fix
+    if not (f3.checks_run[-1]["pass"] and qa["pass"] and tower and sec.checks_run[-1]["pass"]):
         return []
     return [" ".join(str(r).split())[:200] for r in verdict.reasons][:5] or ["no reason given"]  # one line each
 

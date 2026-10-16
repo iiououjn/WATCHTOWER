@@ -243,3 +243,29 @@ def test_release_note_says_who_wrote_what_and_data_is_in_memory(app_tower):  # 7
     answer = runner.start(job.id, extra={"auto_approve": True}).answer
     assert "the tower wrote the web server" in answer and "in memory" in answer
     runner.close()
+
+
+def test_a_store_returning_a_lone_surrogate_still_answers(tmp_path):  # 7b review r3 M5
+    store = "def add(entry):\n    pass\n\ndef items():\n    return ['bad \\ud800 text']\n"
+    plan, _ = apply(_plan(TODO), "Todo", Workspace(tmp_path))
+    (tmp_path / "store.py").write_text(store)
+    port = _port()
+    proc = subprocess.Popen([sys.executable, plan["entry"]], cwd=tmp_path, env={**os.environ, "PORT": str(port)},
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    try:
+        import time
+        import urllib.request
+        for _ in range(50):  # the server prints before it binds
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5) as r:
+                    assert r.status == 200 and b"bad" in r.read()
+                    break
+            except OSError as e:
+                if "Connection refused" not in str(e):
+                    raise
+                time.sleep(0.1)
+        else:
+            raise AssertionError("server never answered")
+    finally:
+        proc.kill()
+        proc.wait()

@@ -70,7 +70,7 @@ class Handler(BaseHTTPRequestHandler):
     timeout = 15  # a slow or lying client cannot hold a thread forever
     def send_page(self, status, body, location=None):
         data = ("<!doctype html><html><head><meta charset=\\"utf-8\\"><title>" + html.escape(TITLE)
-                + "</title></head><body><h1>" + html.escape(TITLE) + "</h1>" + body + "</body></html>").encode()
+                + "</title></head><body><h1>" + html.escape(TITLE) + "</h1>" + body + "</body></html>").encode("utf-8", "replace")
         self.send_response(status)
         if location:
             self.send_header("Location", location)

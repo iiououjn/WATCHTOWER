@@ -22,7 +22,7 @@ def gate_qa_note(qa: dict) -> tuple[str, ...]:
     if qa.get("decide"):
         return (QA_ADVISORY,)
     return (f"{qa['advisory_failed']} model QA check(s) judged by status only: the page text did not match the "
-            "small model's expected text, which may itself be wrong; check the spec's results yourself",)
+            "small model's expected text, which may itself be wrong: do not send the app back for them alone",)
 
 
 _ADDS = re.compile(r"add|new|create|submit|post|save|entr|message|item|comment|note|todo|guest", re.I)

@@ -254,7 +254,7 @@ def test_app_pipeline_builds_tests_and_smoke_checks(app_tower):
     runner, model, sandbox, job = app_tower()
     out = runner.start(job.id, extra={"auto_approve": True})
     assert out.status == "done" and "app.py" in out.answer and "python app.py" in out.answer
-    assert "untested on your Mac" in out.answer
+    assert "untested on your Mac" in out.answer and "the tower wrote the web server" not in out.answer  # 7b r3
     assert "WATCHTOWER_TESTS" in sandbox.calls[0][2] and "SMOKE_STATUS" in sandbox.calls[-2][2]
     assert "WATCHTOWER_QA" in sandbox.calls[-1][2] and f"watchtower deploy {job.id}" in out.answer
     assert "f1.lead" not in model.calls  # research is opt-in for apps
