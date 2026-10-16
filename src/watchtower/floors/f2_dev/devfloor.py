@@ -149,8 +149,6 @@ TEST_DIAGNOSE_PROMPT = (
 )
 
 
-
-
 def _format_notes(reply: dict) -> list[str]:
     """What the file-block reader could not use (a block left open, cut off …): the coder must hear it."""
     return [str(n)[:200] for n in (reply.get("notes") if isinstance(reply.get("notes"), list) else [])][:3]
