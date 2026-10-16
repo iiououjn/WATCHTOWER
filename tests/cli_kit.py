@@ -67,7 +67,8 @@ def done_app_job(monkeypatch, tmp_path):
     from conftest import APP_REPLIES, FakeSandbox
     use_roles(monkeypatch, APP_REPLIES)
     monkeypatch.setattr(cli, "make_sandbox", lambda settings, conn: FakeSandbox(tmp_path / "apps"))
-    assert runner.invoke(cli.app, ["run", "a todo web app", "--yes"]).exit_code == 0
+    assert runner.invoke(cli.app, ["run", "a todo web app", "--yes"]).exit_code == 3  # 8a: awaits sign-off
+    assert runner.invoke(cli.app, ["approve", latest_job_id()]).exit_code == 0
     return latest_job_id()
 
 

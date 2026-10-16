@@ -1,6 +1,6 @@
 import pytest
 
-from conftest import APP_REPLIES, TOWER_REPLIES, FakeSandbox, RoleModel
+from conftest import APP_REPLIES, TOWER_REPLIES, FakeSandbox, RoleModel, start_signed
 from watchtower.floors.board import Board
 from watchtower.engine.bus import Bus
 from watchtower.engine.governor.audit import AuditLog
@@ -37,7 +37,7 @@ def prompts_of(model, role):
 
 def test_every_floor_agent_gets_the_tower_board_brief(tower):
     runner, model, job, board = tower()
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     coder = prompts_of(model, "f2.coder")[0]
     assert '<untrusted source="board">' in coder and "app.py" in coder  # architect's plan is on the board
     gate = prompts_of(model, "f5.dev_gate")[0]
@@ -79,7 +79,7 @@ def test_memos_are_capped_per_floor_and_answers_cannot_send_memos(tower):
                                   {"to": "f1", "question": ""}, "f1: hi", {"to": "f1"}])
 def test_bad_memos_are_ignored(tower, memo):
     runner, model, job, board = tower({"f2.architect": [{**PLAN, "memo": memo}]})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     assert "f1.lead" not in model.calls
     runner.close()
 
@@ -96,7 +96,7 @@ def test_unanswerable_memo_does_not_pause_the_job(tower):
     runner, model, job, board = tower({
         "f2.coder": [{**APP_REPLIES["f2.coder"][0], "memo": {"to": "f4", "question": "storage?"}}],
         "f4.lead": [{"areas": ["home page"]}, "not json"]})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     assert "no answer" in [n for n in board.notes(job.id) if n["kind"] == "memo"][0]["text"]
     runner.close()
 
@@ -122,6 +122,6 @@ def test_memo_answer_failure_from_low_memory_never_pauses_the_job(tower):
             raise LowMemory("not enough RAM")
         return real(role, data, prompt)
     runner._tower._ask = ask
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     assert "no answer" in [n for n in board.notes(job.id) if n["kind"] == "memo"][0]["text"]
     runner.close()

@@ -1,3 +1,4 @@
+from conftest import start_signed
 from runner_kit import *  # noqa: F403 — helpers and fixtures
 
 
@@ -252,7 +253,7 @@ def test_newly_denied_domains_never_reach_agents(online_tower, conn, monkeypatch
 
 def test_app_pipeline_builds_tests_and_smoke_checks(app_tower):
     runner, model, sandbox, job = app_tower()
-    out = runner.start(job.id, extra={"auto_approve": True})
+    out = start_signed(runner, job.id)
     assert out.status == "done" and "app.py" in out.answer
     assert "python app.py" not in out.answer and "Run it" not in out.answer  # 8a (D-H1): never on the host
     assert "untested on your Mac" in out.answer and "the tower wrote the web server" not in out.answer  # 7b r3
@@ -265,7 +266,7 @@ def test_app_pipeline_builds_tests_and_smoke_checks(app_tower):
 def test_gate_design_route_replans(app_tower):
     runner, model, sandbox, job = app_tower({"f5.dev_gate": [
         {"pass": False, "reasons": ["no delete"], "send_back_to": "design"}, {"pass": True, "reasons": []}]})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     assert model.calls.count("f2.architect") == 2
     runner.close()
 
@@ -296,7 +297,7 @@ def test_smoke_failure_output_reaches_the_coder(app_tower):
 def test_passing_app_is_recorded_as_a_release(app_tower, conn):
     from watchtower.floors.f4_qa_deploy.releases import Releases
     runner, model, sandbox, job = app_tower()
-    runner.start(job.id, extra={"auto_approve": True})
+    start_signed(runner, job.id)
     rel = Releases(conn).get(job.id)
     assert rel.entry == "app.py" and set(rel.manifest) == {"app.py", "test_app.py"}
     assert Releases(conn).verify(job.id, sandbox.workspace(job.id)) == []
@@ -306,7 +307,7 @@ def test_passing_app_is_recorded_as_a_release(app_tower, conn):
 def test_qa_failure_routes_to_coder_with_detail_and_skips_model_gate(app_tower, conn):
     from watchtower.floors.f4_qa_deploy.releases import Releases
     runner, model, sandbox, job = app_tower(qa_ok=[False, True])
-    out = runner.start(job.id, extra={"auto_approve": True})
+    out = start_signed(runner, job.id)
     assert out.status == "done" and model.calls.count("f5.dev_gate") == 1
     coder_prompts = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
     assert any("KeyError item" in p and '<untrusted source="gate">' in p for p in coder_prompts[1:])
@@ -324,7 +325,7 @@ def test_app_that_never_passes_qa_has_no_release(app_tower, conn):
 
 def test_qa_checks_are_written_before_coding_and_are_the_ones_run(app_tower):
     runner, model, sandbox, job = app_tower()
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     assert model.calls.index("f4.lead") < model.calls.index("f2.coder")
     assert model.calls.count("f4.qa") == 1  # written once, test-first; no second QA writer after coding
     qa_run = [c for c in sandbox.calls if "WATCHTOWER_QA" in c[2]][0]
@@ -348,7 +349,7 @@ def test_security_failure_goes_back_to_the_coder_with_findings(app_tower):
     bad = {"files": [{"path": "app.py", "content": "import os\nos.system('ls ' + input())\n"},
                      {"path": "test_app.py", "content": "import unittest\nimport app\n"}]}
     runner, model, sandbox, job = app_tower({"f2.coder": [bad, APP_REPLIES["f2.coder"][0]]})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
     assert any("B605" in p for p in coder[1:]) and model.calls.count("f5.dev_gate") == 1
     runner.close()

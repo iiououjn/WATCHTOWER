@@ -120,3 +120,14 @@ class FakeSandbox:
             return SandboxResult(0, "WATCHTOWER_PROBE " + json.dumps(results) + "\n"
                                  'WATCHTOWER_LOG "KeyError: items"\n', "", False)
         return SandboxResult(0, f"SMOKE_STATUS {self.http}\n", "", False)
+
+
+def start_signed(runner, job_id, extra=None):
+    """8a: --yes approves the spec only; the owner still signs the app off. Start, approve that sign-off, resume."""
+    out = runner.start(job_id, extra={"auto_approve": True, **(extra or {})})
+    approvals = runner._tower._approvals
+    pending = approvals.pending_for(job_id)
+    if out.status == "paused" and pending is not None and pending.kind == "signoff":
+        approvals.decide(pending.id, True)
+        out = runner.resume(job_id)
+    return out

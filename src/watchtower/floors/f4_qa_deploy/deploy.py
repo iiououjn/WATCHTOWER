@@ -18,6 +18,7 @@ from typing import Callable
 from watchtower.config import Settings
 from watchtower.engine.db import now
 from watchtower.floors.f4_qa_deploy.deploy_scripts import EDGE, FORWARD
+from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.floors.f4_qa_deploy.releases import Releases
 
@@ -108,6 +109,8 @@ class Deployer:
         release = self._releases.get(job_id)
         if release is None:
             raise DeployError(f"job {job_id} has no release: only apps that passed QA can be deployed")
+        if not Approvals(self._conn).signed_off(job_id):  # 8a (D-M1): e.g. released by --yes before 8a
+            raise DeployError(f"job {job_id} has no owner sign-off; read the app, then approve it before deploying")
         root = self._s.home / "workspaces" / job_id
         problems = self._releases.verify(job_id, root)
         if problems:

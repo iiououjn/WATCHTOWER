@@ -1,4 +1,4 @@
-from conftest import STORE_CODER
+from conftest import STORE_CODER, start_signed
 from runner_kit import *  # noqa: F403 — helpers and fixtures
 
 
@@ -47,7 +47,7 @@ def test_retro_errors_never_fail_a_passed_app(app_tower):
             raise BudgetExceeded("token budget used up")
         return real(role, data, prompt)
     runner._tower._ask = ask
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     runner.close()
 
 
@@ -98,7 +98,7 @@ def test_every_floor_handoff_is_gated_once_per_attempt(app_tower, conn):
 
 def test_cto_changes_lead_to_one_re_plan(app_tower, conn):
     runner, model, sandbox, job = app_tower({"cto": [{"approve": False, "changes": ["add a delete route"]}]})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     arch = [p for c, p in zip(model.calls, model.prompts) if c == "f2.architect"]
     assert len(arch) == 2 and "add a delete route" in arch[1] and model.calls.count("cto") == 1
     runner.close()
@@ -127,7 +127,7 @@ def test_cto_changes_survive_a_full_send_back(app_tower):
         "f5.dev_gate": [{"pass": False, "reasons": ["r1", "r2", "r3", "r4", "r5"], "send_back_to": "design"},
                         {"pass": True, "reasons": []}],
         "cto": [{"approve": True}, {"approve": False, "changes": ["add a delete route"]}, {"approve": True}]})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     arch = [p for c, p in zip(model.calls, model.prompts) if c == "f2.architect"]
     assert len(arch) == 3 and "CTO: add a delete route" in arch[2]
     runner.close()
@@ -137,7 +137,7 @@ def test_failed_cto_re_plan_keeps_the_first_plan(app_tower):
     good = APP_REPLIES["f2.architect"][0]
     runner, model, sandbox, job = app_tower({"f2.architect": [good, "garbage", "garbage", good],
                                              "cto": [{"approve": False, "changes": ["x"]}, {"approve": True}]})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     runner.close()
 
 
@@ -175,7 +175,7 @@ def test_gate_prompt_fits_with_maximum_owner_rules(app_tower, settings):
 def test_f2_unit_workers_write_before_the_test_loop(app_tower, conn):
     from watchtower.floors.board import Board
     runner, model, sandbox, job = app_tower()
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     assert model.calls.count("f2.coder") == 1  # one unit wrote both files; tests passed without a fix call
     notes = [n["text"] for n in Board(Bus(AuditLog(conn))).notes(job.id) if n["floor"] == "f2"]
     assert any("unit 1/1" in t for t in notes)
@@ -186,7 +186,7 @@ def test_f3_probes_the_full_app_after_the_mvp(app_tower):
     arch = {**APP_REPLIES["f2.architect"][0], "routes": APP_REPLIES["f2.architect"][0]["routes"]
             + [{"method": "GET", "path": "/items", "shows": "items"}]}
     runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, probe=[500, 200])
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     probes = [c for c in sandbox.calls if "WATCHTOWER_PROBE" in c[2]]
     assert len(probes) == 2  # failed once, the coder fixed it, then passed
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
@@ -199,7 +199,7 @@ def test_units_are_not_rerun_on_a_code_send_back(app_tower):
             + [{"path": "static/style.css", "purpose": "css (the coder inlines it)"}]}
     runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f5.dev_gate": [
         {"pass": False, "reasons": ["no delete"], "send_back_to": "code"}, {"pass": True, "reasons": []}]})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     units = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder" and "You are coder" in p]
     assert len(units) == 2  # attempt 0 only: both units once, none on the send-back
     runner.close()
@@ -286,7 +286,7 @@ def test_tower_makes_room_before_every_sandbox_run(app_tower):
     runner, model, sandbox, job = app_tower()
     seen = []
     runner._tower._before_sandbox = lambda job_id: seen.append(len(sandbox.calls))
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     assert seen == list(range(len(sandbox.calls))) and len(seen) >= 3
     runner.close()
 
@@ -339,7 +339,7 @@ def test_f5_xss_probe_sends_raw_html_back_to_the_coder(app_tower):
             + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "the list"}]}
     hit = [{"post": "/add", "field": "item", "page": "GET /"}]
     runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER}, xss=[hit, []])
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
     assert any("raw HTML on GET /" in p and "html.escape" in p for p in coder)
     assert len([c for c in sandbox.calls if "WATCHTOWER_XSS" in c[2]]) == 2
@@ -355,7 +355,7 @@ def test_tower_default_criteria_do_not_force_a_form():
 def test_fallback_qa_checks_are_written_from_the_code_each_attempt_unreviewed(app_tower):
     arch = {**APP_REPLIES["f2.architect"][0], "routes": []}  # no contract: QA writes checks after the code
     runner, model, sandbox, job = app_tower({"f2.architect": [arch]}, qa_ok=[False, True])
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     assert model.calls.count("f4.qa") == 2 and "f4.hr" not in model.calls
     runner.close()
 
@@ -370,7 +370,7 @@ def test_the_coder_can_reply_in_file_blocks_end_to_end(app_tower):
     blocks = ("### FILE: app.py\n```python\nimport json\nprint('<b>\\n</b>')\n```\n"
               "### FILE: test_app.py\n```python\nimport unittest\nimport app\n```\n")
     runner, model, sandbox, job = app_tower({"f2.coder": [blocks]})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     ws = sandbox.workspace(job.id)
     assert (ws / "app.py").read_text() == "import json\nprint('<b>\\n</b>')\n"
     runner.close()
@@ -378,7 +378,7 @@ def test_the_coder_can_reply_in_file_blocks_end_to_end(app_tower):
 
 def test_failing_coder_tests_still_reach_the_tower_checks(app_tower):  # phase 6s, run 17
     runner, model, sandbox, job = app_tower(test_ok=False)
-    out = runner.start(job.id, extra={"auto_approve": True})
+    out = start_signed(runner, job.id)
     scripts = [c[2] for c in sandbox.calls if c[:2] == ["python", "-c"]]
     assert any("SMOKE_STATUS" in s for s in scripts) and any("WATCHTOWER_QA" in s for s in scripts)
     assert out.status == "done"
@@ -408,6 +408,6 @@ def test_static_problems_reach_the_coder_by_name(app_tower):  # 6s review r1 #4
 
 def test_a_release_with_failing_coder_tests_says_so(app_tower):  # 6s review r2 #2: --yes never shows evidence
     runner, model, sandbox, job = app_tower(test_ok=False)
-    out = runner.start(job.id, extra={"auto_approve": True})
+    out = start_signed(runner, job.id)
     assert out.status == "done" and "coder's own unit tests fail" in out.answer
     runner.close()

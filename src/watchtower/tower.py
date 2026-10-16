@@ -250,28 +250,31 @@ class TowerPipeline:
 
     def _signoff_request(self, data: dict) -> dict:
         """Lifecycle: final audit → CEO recommendation → owner sign-off → done. Nothing is released until the
-        owner signs off; --yes signs off automatically unless the CEO recommends rejecting."""
+        owner signs off; 8a (D-M1): --yes covers the spec only, never this step, whatever the CEO says."""
+        return {"signoff_id": self._approvals.request(data["job_id"], "signoff", self._signoff_summary(data))}
+
+    def _signoff_summary(self, data: dict) -> str:
         ceo = data.get("ceo") or {}
-        if data.get("auto_approve") and ceo.get("approve") is not False and not data.get("objection"):
-            return {"signoff_id": None}
         answer = data["answer"].replace(  # deploying needs a release, and a release needs this sign-off first
             f"Deploy it isolated, with no internet: watchtower deploy {data['job_id']}",
             f"After you approve: watchtower deploy {data['job_id']}  (isolated, no internet)")
         verdict = {True: "approve", False: "REJECT"}.get(ceo.get("approve"), "no clear view")
         spec = spec_text(data["spec"]) + "\n\n" if data.get("auto_approve") else ""  # the owner never saw it
         note = f" — {ceo['note']}" if ceo.get("note") else ""
-        return {"signoff_id": self._approvals.request(data["job_id"], "signoff",
-                                                     f"{answer}\n\n{spec}Evidence:\n{data['evidence']}\n\n"
-                                                     f"CEO recommends: {verdict}{note}"
-                                                     + (f"\n{data['objection']}" if data.get("objection") else ""))}
+        return (f"{answer}\n\n{spec}Evidence:\n{data['evidence']}\n\nCEO recommends: {verdict}{note}"
+                + (f"\n{data['objection']}" if data.get("objection") else ""))
 
     def _signoff(self, data: dict) -> dict:
-        if data.get("signoff_id") is not None:
-            status = self._approvals.get(data["signoff_id"]).status
-            if status == "rejected":
-                raise AppRejected("app rejected by owner")
-            if status != "approved":
-                raise NeedsOwner(f"app awaiting your sign-off; review it, then: watchtower approve {data['job_id']}")
+        signoff_id = data.get("signoff_id")
+        if signoff_id is None:  # 8a: a checkpoint saved when --yes skipped the sign-off; the owner signs it now
+            found = self._approvals.latest(data["job_id"], "signoff")
+            signoff_id = found.id if found else self._approvals.request(data["job_id"], "signoff",
+                                                                        self._signoff_summary(data))
+        status = self._approvals.get(signoff_id).status
+        if status == "rejected":
+            raise AppRejected("app rejected by owner")
+        if status != "approved":
+            raise NeedsOwner(f"app awaiting your sign-off; review it, then: watchtower approve {data['job_id']}")
         if not data.get("manifest"):
             raise NeedsOwner("this job was checkpointed before release pinning; run it again with: watchtower run")
         problems = manifest_problems(Path(data["workspace"]), data["manifest"])

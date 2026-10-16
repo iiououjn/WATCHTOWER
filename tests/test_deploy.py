@@ -11,6 +11,7 @@ from watchtower.floors.f4_qa_deploy.deploy import DeployError, Deployer, http_ok
 from watchtower.floors.f4_qa_deploy.deploy_scripts import EDGE, FORWARD
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.floors.f4_qa_deploy.releases import Releases
+from watchtower.engine.governor.approvals import Approvals
 
 
 class Docker:
@@ -38,17 +39,27 @@ class Docker:
 
 @pytest.fixture
 def setup(conn, settings):
-    def make(health=lambda port: True, busy=(), **docker_kw):
+    def make(health=lambda port: True, busy=(), signed=True, **docker_kw):
         ws = settings.home / "workspaces" / "job1"
         ws.mkdir(parents=True, exist_ok=True)
         (ws / "app.py").write_text("print('app')\n")
         (ws / "test_app.py").write_text("import unittest\n")
         Releases(conn).record("job1", "app.py", ws, ["app.py", "test_app.py"])
+        if signed:  # 8a: the owner approved the app's sign-off
+            approvals = Approvals(conn)
+            approvals.decide(approvals.request("job1", "signoff", "app"), True)
         docker = Docker(**docker_kw)
         dep = Deployer(settings, conn, AuditLog(conn), run=docker, health=health,
                        port_free=lambda p: p not in busy)
         return dep, docker, ws
     return make
+
+
+def test_deploy_refuses_a_release_the_owner_never_signed_off(setup):
+    dep, docker, _ = setup(signed=False)  # 8a (D-M1): e.g. released by --yes before 8a
+    with pytest.raises(DeployError, match="sign-off"):
+        dep.deploy("job1")
+    assert docker.calls == []
 
 
 def test_deploy_builds_offline_and_runs_isolated_on_localhost(setup):

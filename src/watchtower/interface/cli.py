@@ -311,7 +311,7 @@ def knowledge_search(query: str, limit: int = typer.Option(5, min=1, max=50)):
 @app.command()
 def run(
     idea: str,
-    yes: bool = typer.Option(False, "--yes", help="Skip CPO questions; auto-approve spec and sign-off (a CEO reject still waits for you)"),
+    yes: bool = typer.Option(False, "--yes", help="Skip CPO questions and auto-approve the spec; you still sign off the app"),
     offline: bool = typer.Option(False, "--offline", help="Do not search the web"),
     research: bool = typer.Option(False, "--research", help="Floor 1 researches the web first"),
     max_tokens: Optional[int] = typer.Option(None, min=1, help="Token budget for this job"),

@@ -206,7 +206,7 @@ Every floor handoff passes through a **Floor 5 gate** (deterministic rules + mod
 | `watchtower budget <job-id>` | Token / time / cost usage for a job |
 | `watchtower pause <job-id>` | Pause a running job after its current step |
 | `watchtower resume <job-id>` | Resume a paused job |
-| `watchtower deploy <job-id>` | Deploy a finished app to isolated local Docker |
+| `watchtower deploy <job-id>` | Deploy a finished, signed-off app to isolated local Docker |
 | `watchtower rollback <name>` | Roll back to the previous deployment |
 | `watchtower undeploy <name>` | Stop and remove a deployment |
 | `watchtower deployments` | List all deployments |
@@ -219,7 +219,7 @@ Every floor handoff passes through a **Floor 5 gate** (deterministic rules + mod
 
 | Flag | Used with | Description |
 |---|---|---|
-| `--yes` | `run`, `research` | Skip CPO questions, auto-approve spec and sign-off |
+| `--yes` | `run`, `research` | Skip CPO questions, auto-approve the spec (you still sign off the app) |
 | `--offline` | `run`, `research` | Don't search the web |
 | `--research` | `run` | Have Floor 1 research the topic before dev |
 | `--tier <t>` | `ask` | Model tier: `small`, `work`, `review` |
