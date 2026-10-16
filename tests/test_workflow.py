@@ -112,3 +112,90 @@ def test_checkpoints_are_written_synchronously(db):
     wf._graph = Spy()
     wf.run("j", {"x": 0})
     assert seen.get("durability") == "sync"
+
+
+def looping_step(log, crash_at=None):
+    """A resumable step: three rounds, each saved, like the dev floor's attempts (8b)."""
+    def loop(data, progress):
+        state = dict(progress.state) or {"round": 0, "seen": []}
+        log.append(("enter", dict(progress.state)))
+        for r in range(state["round"], 3):
+            if crash_at is not None and crash_at["at"] == r:
+                raise RuntimeError("killed mid-round")
+            state = {"round": r + 1, "seen": state["seen"] + [r]}
+            progress.save(state)
+        return {"rounds": state["seen"]}
+    return Step("loop", loop, resumable=True)
+
+
+def test_resumable_step_keeps_finished_rounds_after_a_crash(db):
+    log, crash = [], {"at": 2}
+    first = Workflow([Step("a", lambda d: {"a": 1}), looping_step(log, crash)], db)
+    with pytest.raises(RuntimeError):
+        first.run("j", {})
+    first.close()
+    crash["at"] = None
+    second = Workflow([Step("a", lambda d: {"a": 1}), looping_step(log, crash)], db)  # a new process
+    assert second.resume("j").data == {"a": 1, "rounds": [0, 1, 2]}
+    assert log[-1] == ("enter", {"round": 2, "seen": [0, 1]})
+
+
+def test_progress_is_cleared_when_the_step_finishes_and_on_a_fresh_run(db):
+    log, crash = [], {"at": 1}
+    wf = Workflow([looping_step(log, crash)], db)
+    with pytest.raises(RuntimeError):
+        wf.run("j", {})
+    crash["at"] = None
+    wf.run("j", {})  # a fresh run never inherits an old run's rounds
+    assert log[-1] == ("enter", {})
+    wf.run("k", {})
+    assert wf.run("k", {}).data == {"rounds": [0, 1, 2]} and log[-1] == ("enter", {})
+
+
+def test_owner_pause_acts_at_the_next_save_inside_a_step(db):
+    log, flag = [], {"pause": False}
+
+    def loop(data, progress):
+        state = dict(progress.state) or {"round": 0}
+        log.append(state["round"])
+        for r in range(state["round"], 3):
+            flag["pause"] = r == 0 and not progress.state
+            progress.save({"round": r + 1})
+        return {"done": True}
+
+    wf = Workflow([Step("loop", loop, resumable=True)], db, should_pause=lambda job_id: flag["pause"])
+    paused = wf.run("j", {})
+    assert paused.status == "paused" and paused.reason == "pause requested by owner"
+    flag["pause"] = False
+    assert wf.resume("j").data == {"done": True}
+    assert log == [0, 1]  # resumed after the saved round, not from the start
+
+
+def test_clear_drops_saved_progress(db):
+    seen = []
+
+    def loop(data, progress):
+        seen.append(dict(progress.state))
+        if not progress.state:
+            progress.save({"round": 1})
+            progress.clear()
+            raise RuntimeError("out of rounds")
+        return {}
+
+    wf = Workflow([Step("loop", loop, resumable=True)], db)
+    with pytest.raises(RuntimeError):
+        wf.run("j", {})
+    with pytest.raises(RuntimeError):
+        wf.resume("j")
+    assert seen == [{}, {}]
+
+
+def test_a_finished_step_leaves_no_progress_behind(db):
+    import sqlite3
+    log, crash = [], {"at": 1}
+    wf = Workflow([looping_step(log, crash)], db)
+    with pytest.raises(RuntimeError):
+        wf.run("j", {})
+    crash["at"] = None
+    wf.resume("j")
+    assert sqlite3.connect(db).execute("SELECT COUNT(*) FROM step_progress").fetchone() == (0,)
