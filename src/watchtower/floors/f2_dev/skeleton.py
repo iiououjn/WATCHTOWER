@@ -9,14 +9,17 @@ from pathlib import PurePosixPath
 
 import html
 
-from watchtower.engine.workspace import TOWER_MARK, Workspace
+from watchtower.engine.workspace import TOWER_MARK, Workspace, WorkspaceError
 from watchtower.floors.f4_qa_deploy.contract import contract_checks
 
 STORE, STORE_TESTS = "store.py", "test_store.py"
 SHADOWS = {"html.py", "os.py", "traceback.py", "http", "urllib", "store"}  # 'store/' would shadow store.py  # what the server imports: a coder copy would win
 MARK = TOWER_MARK
 ONLY_NOTE = "Write only store.py and test_store.py; any other file is rejected.\n"  # 7c review r1 I3
-NETWORK = {"http", "socket", "socketserver", "wsgiref", "subprocess", "multiprocessing", "asyncio", "ssl"}
+SAFE = {"__future__", "json", "copy", "threading", "collections", "dataclasses", "typing", "datetime", "time",
+        "uuid", "itertools", "functools", "re", "html"}  # 7c review r2: store.py runs inside the tower's server
+SAFE_TESTS = SAFE | {"unittest", "store", "importlib"}  # importlib.reload(store) resets it between tests
+BANNED_CALLS = {"exec", "eval", "compile", "open", "__import__", "import_module", "breakpoint", "input"}
 STORE_NOTE = ("The tower's server escapes all text when it builds the page: store.py keeps text exactly as "
               "given. Never call html.escape or quote on it.\n")  # 7b (run 33): the escape hint made it escape twice
 
@@ -140,9 +143,10 @@ def page_text(title: str) -> str:
 
 
 def store_problems(ws: Workspace) -> list[str]:
-    """7c review r1: the store holds data, never a server or a process: the tower's server imports it."""
+    """7c: the store only keeps data — an import allowlist (review r2: a denylist was evaded by xmlrpc, os.system,
+    exec, string-built imports), no dynamic code, no dunder attributes. The tower's server imports store.py."""
     out = []
-    for name in (STORE, STORE_TESTS):
+    for name, safe in ((STORE, SAFE), (STORE_TESTS, SAFE_TESTS)):
         if name not in ws.files():
             continue
         try:
@@ -150,14 +154,20 @@ def store_problems(ws: Workspace) -> list[str]:
         except (SyntaxError, ValueError, RecursionError, MemoryError):
             continue  # the unit tests report it
         for node in ast.walk(tree):
-            mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
-                    else [node.module or ""] if isinstance(node, ast.ImportFrom)
-                    else [str(a.value) for a in node.args[:1] if isinstance(a, ast.Constant)]
-                    if isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", ""))
-                    in ("import_module", "__import__") else [])
-            bad = sorted({m.split(".")[0] for m in mods} & NETWORK)
-            if bad:
-                out.append(f"{name} imports {bad[0]}: the tower runs the web server; {name} only keeps data")
+            why = ""
+            if isinstance(node, ast.Import):
+                why = next((f"imports {a.name}" for a in node.names if a.name.split(".")[0] not in safe), "")
+            elif isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                why = f"imports {'.' * node.level}{mod}" if node.level or mod.split(".")[0] not in safe else ""
+            elif isinstance(node, ast.Call):
+                fn = getattr(node.func, "attr", getattr(node.func, "id", ""))
+                why = f"calls {fn}()" if fn in BANNED_CALLS else ""
+            elif isinstance(node, (ast.Attribute, ast.Name)):
+                n = node.attr if isinstance(node, ast.Attribute) else node.id
+                why = f"uses {n}" if n.startswith("__") and n.endswith("__") and n not in ("__name__", "__init__") else ""
+            if why:
+                out.append(f"{name} {why}: the tower runs the web server; {name} only keeps data in memory")
                 break
     return out
 
@@ -192,7 +202,10 @@ def apply(plan: dict, title: str, ws: Workspace, previous=frozenset()) -> tuple[
     _drop_stale(ws, previous, keep=entry)
     for path in ws.files():  # 7c review r1 I2: an earlier plan's AI-written files must not ship with the server
         if path not in (entry, STORE, STORE_TESTS):
-            ws.delete(path)
+            try:
+                ws.delete(path)
+            except WorkspaceError:  # review r2: a file the workspace refuses (todo.db) must not stop the job
+                pass
     config = "\n".join(f"{k} = {v!r}" for k, v in (("TITLE", str(title).encode("utf-8", "replace").decode()[:100]), ("FIELDS", fields),
                        ("LIST_PAGE", page), ("FORM_PAGE", form_page), ("ADD_PATH", add)))
     ws.write(entry, TEMPLATE.replace("__CONFIG__", config))

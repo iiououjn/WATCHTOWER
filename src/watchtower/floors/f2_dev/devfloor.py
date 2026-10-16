@@ -132,10 +132,9 @@ ESCAPE_NOTE = ('Checks with "expect_escaped": true post text containing <&> (wri
 
 def _qa_block(head: str, checks: Sequence[dict], store_only: bool = False) -> str:
     """The QA checks for a coder prompt; notes sit outside the untrusted block (6z). `store_only`: 7a-7c."""
-    if not checks:
-        return ONLY_NOTE if store_only else ""
-    note = (ONLY_NOTE if store_only else "") + (STORE_NOTE if store_only else ESCAPE_NOTE) if any(c.get("expect_escaped") for c in checks) else ""
-    return head + untrusted("f4", _compact_checks(checks)) + "\n" + note
+    note = (ONLY_NOTE if store_only else "") + (
+        (STORE_NOTE if store_only else ESCAPE_NOTE) if any(c.get("expect_escaped") for c in checks) else "")
+    return head + untrusted("f4", _compact_checks(checks)) + "\n" + note if checks else note
 
 
 TEST_DIAGNOSE_PROMPT = (
@@ -378,10 +377,11 @@ class DevFloor:
 
     def _problems(self) -> list[str]:
         """The tower's own static checks on the files on disk: they block the F2 handoff (phase 6s)."""
-        found = handler_state_problems(self._ws) + (import_problems(self._ws) if self._stdlib_only else [])
+        found = ((store_problems(self._ws) if self.owned else []) + handler_state_problems(self._ws)  # 7c: first
+                 + (import_problems(self._ws) if self._stdlib_only else []))
         return [f"write {STORE} with add(entry) and items(): the tower's web server imports it"
                 if self.owned and p.endswith(f"imports {STORE[:-3]} (not in the Python standard library)") else p
-                for p in found] + (store_problems(self._ws) if self.owned else [])  # 7c r1: no server in the store
+                for p in found]
 
     def _diagnose_tests(self, report: str) -> str:
         """Floor 2 HR, only when the coder is stuck: plain words on why the same tests keep failing. Advisory."""

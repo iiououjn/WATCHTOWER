@@ -340,3 +340,60 @@ def test_a_rejected_file_is_a_change(tmp_path):  # 7c review r1 M5: no 'nothing 
     floor._write([{"path": "store.py", "content": STORE}])
     notes = floor._write([{"path": "store.py", "content": STORE}, {"path": "app2.py", "content": "x"}])
     assert not any("unchanged" in n.lower() or "nothing could get better" in n.lower() for n in notes)
+
+
+EVASIONS = ("from xmlrpc.server import SimpleXMLRPCServer\n", "import _socket\n", "import urllib.request\n",
+            "import os\nos.system('x')\n", "exec('import socket')\n", "eval('1')\n", "f = open('d.json', 'w')\n",
+            "x = __import__('so' + 'cket')\n", "import importlib\nim = importlib.import_module\n",
+            "import __main__\n", "def add(e):\n    e.__class__.__init__.__globals__\n", "import ctypes\n",
+            "from . import x\n")
+
+
+def test_the_store_may_import_only_safe_modules(tmp_path):  # 7c review r2 I1: an allowlist, not a denylist
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    for code in EVASIONS:
+        ws.write("store.py", code)
+        assert any("store.py" in p for p in store_problems(ws)), code
+
+
+def test_a_plain_store_and_its_tests_pass(tmp_path):  # 7c review r2 M5: no false positives
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    ws.write("store.py", "from __future__ import annotations\nimport json, threading, copy, html\n"
+                         "from datetime import datetime\nfrom collections import OrderedDict\n" + STORE
+             + "if __name__ == '__main__':\n    print(items())\n")
+    ws.write("test_store.py", "import importlib\nimport unittest\nimport store\n\nclass T(unittest.TestCase):\n"
+                              "    def setUp(self):\n        importlib.reload(store)\n\n"
+                              "    def test_add(self):\n        store.add({'item': 'http'})\n"
+                              "        self.assertEqual(store.items(), [{'item': 'http'}])\n\n"
+                              "if __name__ == '__main__':\n    unittest.main()\n")
+    assert store_problems(ws) == []
+
+
+def test_store_problems_come_first(tmp_path):  # 7c review r2 M4: the coder sees only the first 3
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    _, floor.owned = apply(_plan(TODO), "Todo", Workspace(tmp_path))
+    Workspace(tmp_path).write("store.py", "import requests\nimport yaml\nimport flask\nimport socket\n")
+    problems = floor._problems()
+    assert len(problems) > 1 and "only keeps data" in problems[0]
+
+
+def test_the_only_note_survives_checks_without_escapes():  # 7c review r2 M3 (operator precedence)
+    from watchtower.floors.f2_dev.devfloor import _qa_block
+    checks = [{"name": "x", "path": "/", "expect_text": "a"}]
+    assert "Write only store.py" in _qa_block("QA:\n", checks, store_only=True)
+
+
+def test_a_file_the_workspace_cannot_delete_does_not_stop_the_plan(tmp_path):  # 7c review r2 M2
+    from watchtower.engine.workspace import WorkspaceError
+    ws = Workspace(tmp_path)
+    (tmp_path / "todo.db").write_bytes(b"x")
+    try:
+        ws.delete("todo.db")
+        undeletable = False
+    except WorkspaceError:
+        undeletable = True
+    plan, owned = apply(_plan(TODO), "Todo", ws)
+    assert owned and (not undeletable or (tmp_path / "todo.db").exists())

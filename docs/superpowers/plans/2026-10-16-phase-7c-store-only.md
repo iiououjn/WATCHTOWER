@@ -33,6 +33,17 @@ STORE_NOTE moved to skeleton.py (devfloor.py stays under 500 lines).
 - M4 exact names only (`Store.py` rejected). M5 a rejected file counts as a change (no UNCHANGED_NOTE).
 - Not fixed (pre-existing): `_link_entry` may rewrite the tower's entry.
 
+## Review round 2 (fixed)
+
+- I1 the store check was a denylist (evaded by xmlrpc.server, os.system, exec, string-built imports,
+  `__main__.show = str`). Now an import allowlist (json, copy, threading, collections, dataclasses, typing,
+  datetime, time, uuid, itertools, functools, re, html, __future__; tests add unittest, store, importlib),
+  banned calls (exec, eval, compile, open, __import__, import_module, breakpoint, input), no dunder names
+  except `__name__`/`__init__`, no relative imports. Cost if wrong: a legit store using another module loses a
+  round; the problem says why.
+- M2 apply() deletes are guarded (a refused file never stops the job). M3 ONLY_NOTE precedence. M4 store
+  problems listed first. M5 a plain store and its reload-style tests pass (false-positive guard).
+
 ## Review Focus
 
 1. Path tricks: `./store.py`, `STORE.PY`, `store.py/`, `sub/../store.py`, absolute paths, backslashes.
