@@ -48,3 +48,4 @@ Deferred:
 | 31 | todo | FAIL | F4 | pre-7a: XSS on last attempt |
 | 32 | todo | PASS (owner approved) | — | gate/CEO objections were false |
 | 33 | guestbook | FAIL | F4 | coder html.escape'd in store.py; server escapes again (double) x4 |
+| 34 | todo | PENDING (approve rec.) | — | all tower checks pass; gate/CEO objections false (SQLi/auth); spec said 'permanently', store is in-memory |
