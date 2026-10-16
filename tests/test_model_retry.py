@@ -116,7 +116,7 @@ def timed_socket(conn, settings, script, max_seconds, seconds_per_call=90.0):
         step = script.pop(0)
         if isinstance(step, BaseException):
             raise step
-        return fake_response("ok", 1, 1)
+        return fake_response("ok", 1, 1) if step == "ok" else step
     sock = ModelSocket(settings, budget, AuditLog(conn), completion_fn=complete, unload_fn=lambda m: None,
                        resident_fn=lambda: [], free_ram_fn=lambda: 100, clock=clock, sleep=lambda s: None)
     return sock, calls, budget
@@ -218,3 +218,19 @@ def test_a_locked_db_while_recording_a_failed_call_keeps_its_error(conn, setting
     with pytest.raises(ModelUnavailable, match="ollama pull") as info:
         sock.ask("small", [{"role": "user", "content": "x"}], "j")
     assert isinstance(info.value.__cause__, ValueError)
+
+
+def test_a_malformed_reply_is_charged_its_time(conn, settings):
+    # review r3: else every resume could spend another full call without moving the cap
+    malformed = __import__("types").SimpleNamespace(choices=[], usage=None)
+    sock, calls, budget = timed_socket(conn, settings, [malformed], max_seconds=3600)
+    with pytest.raises(ModelUnavailable, match="malformed"):
+        sock.ask("small", [{"role": "user", "content": "x"}], "t")
+    assert budget.usage("t")["used_seconds"] == 90 and budget.usage("t")["used_tokens"] == 0
+
+
+def test_an_interrupted_call_is_charged_its_time(conn, settings):
+    sock, calls, budget = timed_socket(conn, settings, [KeyboardInterrupt()], max_seconds=3600)
+    with pytest.raises(KeyboardInterrupt):  # still the interrupt: the runner pauses on it
+        sock.ask("small", [{"role": "user", "content": "x"}], "t")
+    assert budget.usage("t")["used_seconds"] == 90

@@ -138,27 +138,35 @@ class TowerPipeline:
         peek = lambda floor, query, hits=2, chars=700: look.ask(  # noqa: E731
             floor, query, job_id, lambda prompt: self._ask(r[f"glass.{floor}"], data, prompt), hits, chars)
         qa_round, saved = QARound(qa_office, qa, spec), progress.state
+
+        def qa_for(plan: dict) -> str:  # the QA office's checks for this plan, then the text F3 expects
+            qa_round.reset(self._plan_qa(data, plan, qa_office))
+            return page_text(spec["title"]) if dev.owned else f3_office.expect(spec, plan["routes"])
         if saved:  # 8b: resume after the last finished attempt: no re-plan, the send-back counter is kept
             plan, feedback, docs, focus, expect = (saved[k] for k in ("plan", "feedback", "docs", "focus", "expect"))
             dev.owned, units_due, model_heard = set(saved["owned"]), saved["units_due"], saved["model_heard"]
             qa_round.restore(saved["qa"])
+            look.restore(saved.get("looks", {}))
             self._known.update({(job_id, floor): text for floor, text in saved["known"].items()})
         else:
             docs = peek("f2", "python standard library http.server " + spec["title"])
             plan, feedback = self._approved_plan(data, dev, cto, research, lessons, [], docs), []
             units_due = True  # F2 workers write units on the first build and after each re-plan, never on a fix
             focus = oversight.focus(spec)
-            qa_round.reset(self._plan_qa(data, plan, qa_office))
-            expect = page_text(spec["title"]) if dev.owned else f3_office.expect(spec, plan["routes"])
+            expect = qa_for(plan)
             model_heard = False  # 6v: has the coder already heard a model-only gate objection?
+        qa_due = saved.get("qa_due", False)  # review r3: a re-plan was saved before its QA plan was written
 
         def save(next_attempt: int) -> None:  # durable, then the owner's pause acts: no finished attempt is lost
             progress.save({"attempt": next_attempt, "plan": plan, "feedback": feedback, "docs": docs, "focus": focus,
                            "expect": expect, "owned": sorted(dev.owned), "units_due": units_due,
-                           "model_heard": model_heard, "qa": qa_round.state(),
-                           "known": {f: t for (j, f), t in self._known.items() if j == job_id}})
+                           "model_heard": model_heard, "qa": qa_round.state(), "qa_due": qa_due,
+                           "looks": look.state(), "known": {f: t for (j, f), t in self._known.items() if j == job_id}})
         if not saved:
             save(0)
+        elif qa_due:  # the crash came between a re-plan and its QA plan: finish that plan first
+            expect, qa_due = qa_for(plan), False
+            save(saved["attempt"])
         for attempt in range(saved.get("attempt", 0), self._g.max_send_backs + 1):
             written: list[int] = []  # F2 workers write the missing planned files first (MVP unit first)
 
@@ -259,8 +267,9 @@ class TowerPipeline:
                 feedback += _reference("5", peek("f5", _finding_query(sec.checks_run[-1], self._g.security_fail_on), 1, 480))
             if verdict.route in ("design", "research"):
                 plan, units_due = self._approved_plan(data, dev, cto, research, lessons, feedback, docs), True
-                qa_round.reset(self._plan_qa(data, plan, qa_office))
-                expect = page_text(spec["title"]) if dev.owned else f3_office.expect(spec, plan["routes"])
+                qa_due = True  # review r3: the re-plan already changed the workspace: its plan is durable with it
+                save(attempt + 1)
+                expect, qa_due = qa_for(plan), False
             save(attempt + 1)
         progress.clear()  # out of send-backs: an owner's resume starts a fresh round on purpose
         self._retro(data, oversight, passed=False)

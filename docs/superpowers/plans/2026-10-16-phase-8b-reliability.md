@@ -125,3 +125,14 @@ Every new guard was mutation-checked: removing it makes its test fail.
   run outlives the terminal again. `_end` treats `unload_all` as best effort (`Exception` as well as
   `KeyboardInterrupt`), so a locked audit during cleanup cannot replace the recorded outcome.
 - Each fix has a test that failed first; the socket's audit guard was also mutation-checked on its own.
+
+## Review r3
+
+- Fixed: a re-plan in the dev loop is saved (`qa_due`) right after `_approved_plan` rewrites the workspace,
+  before the QA office and F3 `expect` run; a resume with `qa_due` writes that plan's QA checks first. A crash
+  in between no longer restores the old plan, owned paths and units flag against the new workspace (Review
+  Focus 1); tested in both directions (owned to not owned, and back).
+- Fixed (minors): a malformed reply is charged its seconds, and a call stopped by Ctrl-C or a stop signal is
+  charged its seconds before the interrupt goes on. The Lookout's per-floor search counter is in the dev
+  checkpoint, so a resumed `--research` job keeps the cap.
+- Each fix has a test that failed first; every guard was mutation-checked on its own.

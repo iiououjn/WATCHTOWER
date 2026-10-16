@@ -1,5 +1,7 @@
 """8b: the dev floor checkpoints every attempt. A crash or pause resumes after the last finished attempt with
 no re-plan and the send-back counter kept; only an owner's resume after the send-backs ran out starts afresh."""
+import pytest
+
 from runner_kit import *  # noqa: F403 — helpers and fixtures
 from runner_kit import app_tower  # noqa: F401
 
@@ -102,4 +104,56 @@ def test_resume_after_the_send_backs_ran_out_starts_a_fresh_round(app_tower, con
     assert runner.resume(job.id).status == "paused"
     assert dev_attempts(conn, job.id) == [0, 1, 2, 3] * 2
     assert model.calls.count("f2.architect") == 2
+    runner.close()
+
+
+@pytest.mark.parametrize("owned_first", [True, False])
+def test_a_crash_in_the_qa_office_after_a_replan_resumes_with_the_new_plan(app_tower, conn, owned_first):
+    # review r3: the re-plan rewrote the workspace (the tower's server dropped, or the AI's files deleted); a crash
+    # before the attempt's end must not restore the old plan, owned paths and units flag against the new workspace
+    from conftest import APP_REPLIES, STORE_CODER
+    from watchtower.engine.runner import Terminated
+    owned = dict(APP_REPLIES["f2.architect"][0])
+    owned["routes"] = owned["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
+    both = {"files": STORE_CODER[0]["files"] + APP_REPLIES["f2.coder"][0]["files"]}  # fits either plan
+    runner, model, sandbox, job = app_tower({
+        "f2.architect": [owned, APP_REPLIES["f2.architect"][0]][::1 if owned_first else -1], "f2.coder": [both],
+        "f5.dev_gate": [{"pass": False, "reasons": ["use a plain page"], "send_back_to": "design"},
+                        {"pass": True, "reasons": []}]})
+    real, state = runner._socket._complete, {"done": False}
+
+    def complete(**kw):  # the process dies in the QA office's first call after the re-plan, once
+        role = kw["messages"][0]["content"].split("]")[0].removeprefix("[role:")
+        if not state["done"] and role == "f4.lead" and model.calls.count("f2.architect") == 2:
+            state["done"] = True
+            raise Terminated("terminated by signal")
+        return real(**kw)
+    runner._socket._complete = complete
+    out = runner.start(job.id, extra={"auto_approve": True})
+    assert state["done"] and out.status == "paused"
+    again = runner.resume(job.id)
+    assert again.status == "done", again.reason
+    assert dev_attempts(conn, job.id) == [0, 1] and model.calls.count("f2.architect") == 2
+    assert model.calls.count("f4.lead") == 2  # the new plan's QA was written on resume, not the old plan's kept
+    assert "app.py" in [p.name for p in (sandbox.root / job.id).iterdir()]
+    runner.close()
+
+
+def test_a_resume_keeps_each_floors_web_lookups_used(lookout_tower):
+    # review r3: the per-floor search cap holds across a crash and resume, as it does in one run
+    from watchtower.beacon.lookout import MAX_PER_FLOOR
+    runner, model, sandbox, job, factory = lookout_tower(
+        {"f1.lead": [{"tasks": ["todo apps"]}], "f1.worker": [{"result": "todo", "sources": []}]},
+        qa_ok=[False, False, False, True])
+    real, state = sandbox.run, {"done": False}
+
+    def run(job_id, command, timeout=60.0):  # Docker goes away once, in the attempt after F4's first lookup
+        if not state["done"] and any(f == "f4" for f, q in factory.calls):
+            state["done"] = True
+            raise SandboxUnavailable("Docker is not running; start Docker Desktop, then resume")
+        return real(job_id, command, timeout)
+    sandbox.run = run
+    assert runner.start(job.id, extra={"auto_approve": True, "research": True}).status == "paused"
+    assert runner.resume(job.id).status == "done"
+    assert [f for f, q in factory.calls].count("f4") == MAX_PER_FLOOR
     runner.close()

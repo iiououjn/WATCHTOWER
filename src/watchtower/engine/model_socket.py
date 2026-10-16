@@ -241,6 +241,12 @@ class ModelSocket:
                 if not retry:
                     hint = f" Is Ollama running? Try: ollama pull {model.removeprefix(LOCAL_PREFIX)}" if local else ""
                     raise ModelUnavailable(f"{model} unavailable ({type(e).__name__}).{hint}") from e
+            except BaseException:  # review r3: Ctrl-C or a stop signal mid-call: the call's time is still spent
+                try:
+                    self._budget.record(job_id, seconds=self._clock() - start)
+                except Exception:  # noqa: BLE001 — never replaces the interrupt
+                    pass
+                raise
         seconds = self._clock() - start
 
         try:
@@ -248,6 +254,10 @@ class ModelSocket:
             pt = int(resp.usage.prompt_tokens or 0)
             ct = int(resp.usage.completion_tokens or 0)
         except (AttributeError, IndexError, TypeError) as e:
+            try:  # review r3: a malformed reply took its time too: charged, so a resume loop meets the cap
+                self._budget.record(job_id, seconds=seconds)
+            except Exception:  # noqa: BLE001 — the malformed-reply error is what the owner needs
+                pass
             self._audit.append("model_socket", "model_error", {"model": model, "error": "malformed response"}, job_id)
             raise ModelUnavailable(f"{model} returned a malformed response") from e
         usd = 0.0 if local else _litellm_cost(resp)
