@@ -1,54 +1,29 @@
+"""The `watchtower` command: jobs (ask, run, research, approve, pause, resume), status, logs, budget and doctor.
+Deploy and knowledge commands register themselves from their own modules (8d: cli.py split, audit E-A1)."""
 from __future__ import annotations
 
-import unicodedata
-from pathlib import Path
 from typing import Optional
 
 import click
 import typer
-import yaml
 
-from watchtower.config import Settings, load_settings
-from watchtower.beacon.beacon import Beacon
-from watchtower.beacon.fetcher import Fetcher
-from watchtower.beacon.glass import Glass, load_glass_rules
-from watchtower.beacon.search import Search, SearchUnavailable
+from watchtower.config import Settings
 from watchtower.engine.bus import Bus
-from watchtower.engine.db import connect
-from watchtower.floors.f4_qa_deploy.deploy import DeployError, Deployer
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.governor.budget import Budget
 from watchtower.engine.jobs import JobStore
-from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.model_socket import ModelSocket
 from watchtower.engine.runner import JobRunner, RunOutcome, owner_alive
 from watchtower.engine.sandbox import Sandbox
 from watchtower.engine.scheduler import Scheduler
-from watchtower.engine.system import free_ram_pct
 from watchtower.evidence import no_host_run
-
-def _clean(text: str) -> str:
-    """Strip terminal control characters from untrusted text (model output, web content, app logs). 8a (D-M5):
-    also Unicode format characters (bidi overrides, zero-width), which can disguise file names and commands."""
-    return "".join(c for c in text if c in "\n\t" or unicodedata.category(c) not in ("Cc", "Cf"))
-
-
-app = typer.Typer(no_args_is_help=True, help="THE WATCHTOWER — local agentic ecosystem.")
-EXIT = {"done": 0, "failed": 1, "paused": 3}
+from watchtower.interface import checks
+from watchtower.interface.shell import EXIT, app, clean, open_db
 
 
 def build_socket(settings: Settings, budget: Budget, audit: AuditLog) -> ModelSocket:
     return ModelSocket(settings, budget, audit)
-
-
-def _open():
-    try:
-        settings = load_settings()
-    except ValueError as e:  # e.g. a bad WATCHTOWER_WORK_MODEL: a clear message, not a traceback
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(2)
-    return settings, connect(settings.db_path)
 
 
 def make_sandbox(settings: Settings, conn) -> Sandbox:
@@ -61,7 +36,7 @@ def _check_guardrails(settings: Settings) -> None:
         load_guardrails(settings.home)
     except GuardrailsError as e:
         typer.echo(f"Error: {e} — fix or delete {settings.home / 'guardrails.yaml'}", err=True)
-        raise typer.Exit(2)
+        raise typer.Exit(2) from None
 
 
 def _runner(settings: Settings, conn) -> JobRunner:
@@ -76,7 +51,7 @@ def _runner(settings: Settings, conn) -> JobRunner:
 def _report(outcome: RunOutcome, conn) -> None:
     if outcome.status == "done":
         used = Budget(conn).usage(outcome.job_id)
-        typer.echo(_clean(outcome.answer or ""))
+        typer.echo(clean(outcome.answer or ""))
         typer.echo(f"\n[job {outcome.job_id} · {used['used_tokens']} tokens · ${used['used_usd']:.4f}]")
     elif outcome.status == "paused":
         pending = Approvals(conn).pending_for(outcome.job_id)
@@ -84,13 +59,13 @@ def _report(outcome: RunOutcome, conn) -> None:
             what = "App for job {} — awaiting your sign-off" if pending.kind == "signoff" else \
                 "Spec for job {} — awaiting your approval"
             typer.echo("\n" + what.format(outcome.job_id) + ":\n")
-            typer.echo(_clean(no_host_run(pending.summary)))  # 8a: a summary stored before 8a
+            typer.echo(clean(no_host_run(pending.summary)))  # 8a: a summary stored before 8a
             typer.echo(f"\nApprove with: watchtower approve {outcome.job_id}   (or add --reject)", err=True)
         else:
-            typer.echo(_clean(f"Job {outcome.job_id} paused: {outcome.reason}"), err=True)
+            typer.echo(clean(f"Job {outcome.job_id} paused: {outcome.reason}"), err=True)
             typer.echo(f"Resume with: watchtower resume {outcome.job_id}", err=True)
     else:
-        typer.echo(_clean(f"Job {outcome.job_id} failed: {outcome.reason}"), err=True)
+        typer.echo(clean(f"Job {outcome.job_id} failed: {outcome.reason}"), err=True)
     raise typer.Exit(EXIT[outcome.status])
 
 
@@ -104,7 +79,7 @@ def ask(
     if not prompt.strip():
         typer.echo("Error: prompt must not be empty", err=True)
         raise typer.Exit(2)
-    settings, conn = _open()
+    settings, conn = open_db()
     if tier not in settings.tiers:
         typer.echo(f"Error: unknown tier {tier!r}; choose from {sorted(settings.tiers)}", err=True)
         raise typer.Exit(2)
@@ -124,7 +99,7 @@ def ask(
 @app.command()
 def pause(job_id: str):
     """Ask a running job to pause after its current step or dev attempt."""
-    _, conn = _open()
+    _, conn = open_db()
     jobs = JobStore(conn)
     job = jobs.get(job_id)
     if job is None or job.status != "running":
@@ -142,7 +117,7 @@ def resume(
     force: bool = typer.Option(False, "--force", help="Kept for old scripts; a dead job's free lock is enough"),
 ):
     """Resume a paused job from its last finished step."""
-    settings, conn = _open()
+    settings, conn = open_db()
     runner = _runner(settings, conn)
     try:
         outcome = runner.resume(job_id, force=force)
@@ -150,7 +125,7 @@ def resume(
         typer.echo(f"Error: no job {job_id}", err=True)
         raise typer.Exit(2)
     except ValueError as e:
-        typer.echo(_clean(f"Error: {e}"), err=True)
+        typer.echo(clean(f"Error: {e}"), err=True)
         raise typer.Exit(2)
     finally:
         runner.close()
@@ -160,7 +135,7 @@ def resume(
 @app.command()
 def status(limit: int = 20):
     """List recent jobs."""
-    settings, conn = _open()
+    settings, conn = open_db()
     rows = JobStore(conn).list(limit)
     if not rows:
         typer.echo("No jobs yet.")
@@ -169,23 +144,23 @@ def status(limit: int = 20):
         line = f"{j.id}  {j.status:<8} {j.created_at[:19]}  {j.prompt[:60]}"
         if j.status == "running" and not owner_alive(settings.home, j.id):  # 8b: its process died
             line += "  (process gone; resume it)"
-        typer.echo(_clean(line + (f"  — {j.error}" if j.error else "")))  # gate reasons, app logs (8a)
+        typer.echo(clean(line + (f"  — {j.error}" if j.error else "")))  # gate reasons, app logs (8a)
 
 
 @app.command()
 def logs(job_id: Optional[str] = typer.Argument(None), limit: int = 100):
     """Show the audit log (optionally for one job) and verify its hash chain."""
-    _, conn = _open()
+    _, conn = open_db()
     audit = AuditLog(conn)
     for e in audit.entries(job_id=job_id, limit=limit):
-        typer.echo(_clean(f"#{e.seq} {e.ts[:19]} {e.actor:<13} {e.action:<14} {e.detail}"))
+        typer.echo(clean(f"#{e.seq} {e.ts[:19]} {e.actor:<13} {e.action:<14} {e.detail}"))
     typer.echo(f"chain: {'ok' if audit.verify() else 'BROKEN — audit log was tampered with'}")
 
 
 @app.command()
 def budget(job_id: str):
     """Show budget usage for a job."""
-    _, conn = _open()
+    _, conn = open_db()
     try:
         u = Budget(conn).usage(job_id)
     except KeyError:
@@ -196,122 +171,21 @@ def budget(job_id: str):
     typer.echo(f"usd: ${u['used_usd']:.4f} / ${u['max_usd']:.4f}")
 
 
-MAX_KNOWLEDGE_BYTES = 5 * 1024 * 1024
-knowledge_app = typer.Typer(help="Local knowledge store (full-text search with sources).")
-app.add_typer(knowledge_app, name="knowledge")
-
-
-def ollama_status(settings: Settings) -> tuple[bool, str]:
-    import httpx
-
-    try:
-        version = httpx.get(f"{settings.ollama_url}/api/version", timeout=3).json()["version"]
-        names = {m["name"] for m in httpx.get(f"{settings.ollama_url}/api/tags", timeout=3).json()["models"]}
-    except Exception:
-        return False, "not reachable — open the Ollama app"
-    missing = sorted({m.removeprefix("ollama/") for m in settings.tiers.values()} - names)
-    if missing:
-        return True, f"{version} · missing models: {', '.join(missing)} (ollama pull <name>)"
-    return True, f"{version} · all tier models present"
-
-
-def docker_status(settings: Settings, audit: AuditLog) -> tuple[bool, str]:
-    problem = Sandbox(settings, audit).check()
-    return (problem is None), (problem or f"ready ({settings.sandbox_image})")
-
-
-def guardrails_status(settings: Settings) -> tuple[bool, str]:
-    from watchtower.guardrails import GuardrailsError, load_guardrails
-    try:
-        g = load_guardrails(settings.home)
-    except GuardrailsError as e:
-        return False, str(e)
-    owner = (settings.home / "guardrails.yaml").is_file()
-    return True, f"{len(g.rules)} rules, {g.max_send_backs} send-backs ({'your copy' if owner else 'defaults'})"
-
-
-def glass_status() -> tuple[bool, str]:
-    """Every floor's glass rules file loads (a typo there would otherwise surface mid-job)."""
-    from watchtower.beacon import glass as glass_mod
-    for n in range(1, 6):
-        try:
-            glass_mod.load_glass_rules(f"f{n}", glass_mod.GLASS_DIR)
-        except (OSError, ValueError, TypeError, yaml.YAMLError) as e:
-            return False, f"f{n}.yaml: {str(e)[:120]} (in {glass_mod.GLASS_DIR})"
-    return True, "Glass 1–5 rules load"
-
-
-def bandit_status() -> tuple[bool, str]:
-    from importlib.metadata import PackageNotFoundError, version
-    try:
-        return True, f"{version('bandit')} (offline security scanner)"
-    except PackageNotFoundError:
-        return False, "not installed; run: uv sync"
-
-
 @app.command()
 def doctor():
     """Check that the tower's engine parts are healthy."""
-    settings, conn = _open()
-    audit = AuditLog(conn)
-    ram = free_ram_pct()
-    checks = [
-        ("Ollama", *ollama_status(settings)),
-        ("Docker", *docker_status(settings, audit)),
-        ("RAM", ram is None or ram >= settings.min_free_ram_pct,
-         "unknown" if ram is None else f"{ram}% free (need {settings.min_free_ram_pct}%)"),
-        ("Audit chain", audit.verify(), "ok" if audit.verify() else "BROKEN"),
-        ("Bandit", *bandit_status()),
-        ("Guardrails", *guardrails_status(settings)),
-        ("Glass", *glass_status()),
-    ]
-    for name, ok, detail in checks:
+    settings, conn = open_db()
+    found = checks.doctor_checks(settings, AuditLog(conn))
+    for name, ok, detail in found:
         typer.echo(f"{'✓' if ok else '✗'} {name:<12} {detail}")
-    raise typer.Exit(0 if all(ok for _, ok, _ in checks) else 1)
-
-
-@knowledge_app.command("add")
-def knowledge_add(
-    path: Path,
-    source: Optional[str] = typer.Option(None, help="Where this came from (default: the file URI)"),
-    title: Optional[str] = typer.Option(None),
-    trusted: bool = typer.Option(False, "--trusted", help="Mark as owner-verified"),
-):
-    """Add a text file to the knowledge store."""
-    if not path.is_file():
-        typer.echo(f"Error: {path} is not a file", err=True)
-        raise typer.Exit(2)
-    if path.stat().st_size > MAX_KNOWLEDGE_BYTES:
-        typer.echo("Error: file is larger than 5 MB", err=True)
-        raise typer.Exit(2)
-    _, conn = _open()
-    src = source or path.resolve().as_uri()
-    try:
-        doc_id = Knowledge(conn).add(path.read_text(errors="replace"), src, title or path.name, trusted)
-    except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(2)
-    AuditLog(conn).append("owner", "knowledge_added", {"doc_id": doc_id, "source": src, "trusted": trusted})
-    typer.echo(f"Added document {doc_id} from {src}")
-
-
-@knowledge_app.command("search")
-def knowledge_search(query: str, limit: int = typer.Option(5, min=1, max=50)):
-    """Search the knowledge store."""
-    _, conn = _open()
-    hits = Knowledge(conn).search(query, limit)
-    if not hits:
-        typer.echo("No matches.")
-        return
-    for h in hits:
-        typer.echo(_clean(f"[{h.doc_id}] {h.title} — {h.source}{'' if h.trusted else ' (untrusted)'}"))
-        typer.echo(f"    {_clean(h.snippet)}")
+    raise typer.Exit(0 if all(ok for _, ok, _ in found) else 1)
 
 
 @app.command()
 def run(
     idea: str,
-    yes: bool = typer.Option(False, "--yes", help="Skip CPO questions and auto-approve the spec; you still sign off the app"),
+    yes: bool = typer.Option(False, "--yes",
+                             help="Skip CPO questions and auto-approve the spec; you still sign off the app"),
     offline: bool = typer.Option(False, "--offline", help="Do not search the web"),
     research: bool = typer.Option(False, "--research", help="Floor 1 researches the web first"),
     max_tokens: Optional[int] = typer.Option(None, min=1, help="Token budget for this job"),
@@ -335,11 +209,11 @@ def _tower_job(goal: str, app: bool, yes: bool, offline: bool, research: bool, m
     if not goal.strip():
         typer.echo("Error: goal must not be empty", err=True)
         raise typer.Exit(2)
-    settings, conn = _open()
+    settings, conn = open_db()
     _check_guardrails(settings)
     if app:  # an app job needs the sandbox: say so now, before any model work is spent
         typer.echo("Checking Docker…", err=True)
-        ok, detail = docker_status(settings, AuditLog(conn))
+        ok, detail = checks.docker_status(settings, AuditLog(conn))
         if not ok:
             typer.echo(f"Error: {detail}", err=True)
             raise typer.Exit(2)
@@ -354,12 +228,12 @@ def _tower_job(goal: str, app: bool, yes: bool, offline: bool, research: bool, m
             try:
                 questions = runner.cpo_questions(job.id)
             except Exception as e:  # questions are optional; the spec step still runs
-                typer.echo(_clean(f"CPO could not ask questions ({type(e).__name__}: {e}); "
+                typer.echo(clean(f"CPO could not ask questions ({type(e).__name__}: {e}); "
                                   "continuing without questions."), err=True)
                 questions = []
             try:
                 for q in questions:
-                    answers.append({"q": q, "a": typer.prompt(f"CPO asks: {_clean(q)}", default="",
+                    answers.append({"q": q, "a": typer.prompt(f"CPO asks: {clean(q)}", default="",
                                                               show_default=False)})
             except (KeyboardInterrupt, click.exceptions.Abort):
                 runner.release(job.id)
@@ -374,9 +248,10 @@ def _tower_job(goal: str, app: bool, yes: bool, offline: bool, research: bool, m
 
 
 @app.command()
-def approve(job_id: str, reject: bool = typer.Option(False, "--reject", help="Reject instead (the spec, or the finished app)")):
+def approve(job_id: str,
+            reject: bool = typer.Option(False, "--reject", help="Reject instead (the spec, or the finished app)")):
     """Approve (or reject) what a job is waiting on — its spec or the finished app's sign-off — then resume it."""
-    settings, conn = _open()
+    settings, conn = open_db()
     approvals = Approvals(conn)
     pending = approvals.pending_for(job_id)
     if pending is None:
@@ -398,7 +273,7 @@ def approve(job_id: str, reject: bool = typer.Option(False, "--reject", help="Re
     try:
         outcome = runner.resume(job_id)
     except (KeyError, ValueError) as e:
-        typer.echo(_clean(f"Error: {e}"), err=True)
+        typer.echo(clean(f"Error: {e}"), err=True)
         typer.echo(f"Approval recorded. Resume with: watchtower resume {job_id}", err=True)
         raise typer.Exit(2)
     finally:
@@ -406,80 +281,4 @@ def approve(job_id: str, reject: bool = typer.Option(False, "--reject", help="Re
     _report(outcome, conn)
 
 
-def make_beacon(settings: Settings, conn) -> Beacon:
-    return Beacon(Search(), Fetcher(), Glass(load_glass_rules("f1")), Knowledge(conn), AuditLog(conn))
-
-
-@app.command()
-def beacon(query: str, pages: int = typer.Option(3, min=1, max=10)):
-    """Search the web and add pages that pass Glass 1 to the knowledge store."""
-    if not query.strip():
-        typer.echo("Error: query must not be empty", err=True)
-        raise typer.Exit(2)
-    settings, conn = _open()
-    audit = AuditLog(conn)
-    before = conn.execute("SELECT COALESCE(MAX(seq), 0) FROM audit_log").fetchone()[0]
-    try:
-        docs = make_beacon(settings, conn).research(query, None)
-    except SearchUnavailable as e:
-        typer.echo(_clean(f"Beacon paused: {e}"), err=True)
-        raise typer.Exit(3)
-    for e in audit.since(before, actor="beacon"):
-        if e.action in ("beacon_skip", "glass_reject"):
-            why = e.detail.get("reason") or "; ".join(e.detail.get("reasons", []))
-            typer.echo(_clean(f"✗ {e.detail.get('url')} — {why}"))
-        elif e.action == "glass_pass":
-            typer.echo(_clean(f"✓ {e.detail.get('url')}"))
-    typer.echo(f"{len(docs)} page(s) added to knowledge (untrusted).")
-
-
-def make_deployer(settings: Settings, conn) -> Deployer:
-    return Deployer(settings, conn, AuditLog(conn))
-
-
-def _deploy_call(fn, *args):
-    try:
-        return fn(*args)
-    except DeployError as e:
-        typer.echo(_clean(f"Deploy failed: {e}"), err=True)
-        raise typer.Exit(1)
-
-
-@app.command()
-def deploy(job_id: str, name: str = typer.Option("app", "--name", help="Deployment name (slot)")):
-    """Deploy a finished app job to local Docker: no internet for the app, reachable only on this Mac."""
-    settings, conn = _open()
-    job = JobStore(conn).get(job_id)
-    if job is None or job.pipeline != "app" or job.status != "done":
-        state = "unknown" if job is None else f"a {job.pipeline} job that is {job.status}"
-        typer.echo(f"Error: job {job_id} is {state}; only finished app jobs (watchtower run) can be deployed", err=True)
-        raise typer.Exit(2)
-    d = _deploy_call(make_deployer(settings, conn).deploy, job_id, name)
-    typer.echo(f"Deployed job {job_id} as '{d.name}' (deployment {d.id}): http://127.0.0.1:{d.port}\n"
-               "Isolated: the app has no internet, is reachable only from this Mac, and its pages may only "
-               "talk to the app itself (strict CSP). Links you click can still open other sites.\n"
-               f"Stop it: watchtower undeploy {d.name}    Previous version: watchtower rollback {d.name}")
-
-
-@app.command()
-def rollback(name: str):
-    """Go back to the previous deployment of NAME."""
-    settings, conn = _open()
-    d = _deploy_call(make_deployer(settings, conn).rollback, name)
-    typer.echo(f"'{d.name}' rolled back to deployment {d.id} (job {d.job_id}): http://127.0.0.1:{d.port}")
-
-
-@app.command()
-def undeploy(name: str):
-    """Stop and remove the running deployment NAME (images are kept for rollback)."""
-    settings, conn = _open()
-    _deploy_call(make_deployer(settings, conn).undeploy, name)
-    typer.echo(f"'{name}' stopped.")
-
-
-@app.command()
-def deployments(limit: int = typer.Option(20, min=1, max=200)):
-    """List deployments, newest first."""
-    settings, conn = _open()
-    for d in make_deployer(settings, conn).list(limit):
-        typer.echo(f"{d.id:>4}  {d.name:<12} job {d.job_id}  127.0.0.1:{d.port}  {d.status:<11} {d.created_at}")
+from watchtower.interface import deploy_cmds, knowledge_cmds  # noqa: E402,F401 — register their commands on app

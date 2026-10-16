@@ -162,9 +162,9 @@ def test_pause_flags_running_job():
 
 
 def test_doctor_all_ok(monkeypatch):
-    monkeypatch.setattr(cli, "ollama_status", lambda s: (True, "Ollama 0.32 · models ok"))
-    monkeypatch.setattr(cli, "docker_status", lambda s, a: (True, "ready"))
-    monkeypatch.setattr(cli, "free_ram_pct", lambda: 55)
+    monkeypatch.setattr(checks, "ollama_status", lambda s: (True, "Ollama 0.32 · models ok"))
+    monkeypatch.setattr(checks, "docker_status", lambda s, a: (True, "ready"))
+    monkeypatch.setattr(checks, "free_ram_pct", lambda: 55)
     result = runner.invoke(cli.app, ["doctor"])
     assert result.exit_code == 0, result.output
     for word in ("Ollama", "Docker", "RAM", "55%", "Audit chain"):
@@ -172,9 +172,9 @@ def test_doctor_all_ok(monkeypatch):
 
 
 def test_doctor_reports_docker_down(monkeypatch):
-    monkeypatch.setattr(cli, "ollama_status", lambda s: (True, "ok"))
-    monkeypatch.setattr(cli, "docker_status", lambda s, a: (False, "Docker is not running; start Docker Desktop"))
-    monkeypatch.setattr(cli, "free_ram_pct", lambda: 55)
+    monkeypatch.setattr(checks, "ollama_status", lambda s: (True, "ok"))
+    monkeypatch.setattr(checks, "docker_status", lambda s, a: (False, "Docker is not running; start Docker Desktop"))
+    monkeypatch.setattr(checks, "free_ram_pct", lambda: 55)
     result = runner.invoke(cli.app, ["doctor"])
     assert result.exit_code == 1
     assert "start Docker Desktop" in result.output
