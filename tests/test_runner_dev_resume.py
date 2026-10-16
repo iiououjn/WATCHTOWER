@@ -45,6 +45,16 @@ def test_crash_mid_attempt_resumes_that_attempt_without_replanning(app_tower, co
     runner.close()
 
 
+def test_crash_in_the_first_attempt_keeps_the_approved_plan(app_tower, conn):
+    runner, model, sandbox, job = app_tower()
+    crash_once_after_gate(sandbox, model, gate_calls=0)
+    assert runner.start(job.id, extra={"auto_approve": True}).status == "paused"
+    before = planned(model)
+    assert runner.resume(job.id).status == "done"
+    assert planned(model) == before and dev_attempts(conn, job.id) == [0]
+    runner.close()
+
+
 def test_resume_keeps_what_the_coder_already_heard(app_tower, conn):
     # 6v: a lone model objection is sent back once; the second goes to the owner. A resume must not reset that,
     # nor the tower's server (7a owned paths) written at planning.
@@ -59,6 +69,7 @@ def test_resume_keeps_what_the_coder_already_heard(app_tower, conn):
     pending = Approvals(conn).pending_for(job.id)
     assert out.status == "paused" and pending.kind == "signoff"
     assert "objected though every tower check passed" in pending.summary
+    assert "the tower wrote the web server" in pending.summary  # the owned server survived the resume
     assert dev_attempts(conn, job.id) == [0, 1] and model.calls.count("f2.architect") == 1
     runner.close()
 
