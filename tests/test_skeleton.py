@@ -397,3 +397,28 @@ def test_a_file_the_workspace_cannot_delete_does_not_stop_the_plan(tmp_path):  #
         undeletable = True
     plan, owned = apply(_plan(TODO), "Todo", ws)
     assert owned and (not undeletable or (tmp_path / "todo.db").exists())
+
+
+ALIASES = ("from uuid import os\n", "import uuid\nuuid.os.system('x')\n", "import threading\nthreading._os\n",
+           "import typing\ntyping.sys.modules\n", "import dataclasses\ndataclasses.inspect\n", "e = exec\n",
+           "x = [eval][0]\n", "g = globals()\n", "getattr(object, '__subcl' + 'asses__')\n", "from json import *\n",
+           "v = vars\n", "from collections import _sys\n")
+
+
+def test_allowed_modules_cannot_reach_dangerous_ones(tmp_path):  # 7c review r3 C1, C2
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    for code in ALIASES:
+        ws.write("store.py", code)
+        assert any("store.py" in p for p in store_problems(ws)), code
+
+
+def test_store_tests_may_use_sys_os_and_file(tmp_path):  # 7c review r3 I4: tests run in Docker only
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    ws.write("store.py", STORE)
+    ws.write("test_store.py", "import os\nimport sys\nfrom unittest import mock\nimport unittest\n"
+                              "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\nimport store\n")
+    assert store_problems(ws) == []
+    ws.write("test_store.py", "import socket\n")
+    assert store_problems(ws)

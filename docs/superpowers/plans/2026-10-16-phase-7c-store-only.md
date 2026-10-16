@@ -44,6 +44,18 @@ STORE_NOTE moved to skeleton.py (devfloor.py stays under 500 lines).
 - M2 apply() deletes are guarded (a refused file never stops the job). M3 ONLY_NOTE precedence. M4 store
   problems listed first. M5 a plain store and its reload-style tests pass (false-positive guard).
 
+## Review round 3 (fixed) and the boundary ruling
+
+- C1 allowed modules re-export dangerous ones (`from uuid import os`, `typing.sys.modules`, `threading._os`):
+  ImportFrom names and attributes in DANGER, any `_private` name, and `import *` are flagged.
+- C2 banned builtins aliased (`e = exec`, `[eval][0]`, `getattr(..., '__subcl'+'asses__')`): BANNED names are
+  flagged when referenced at all; getattr/setattr/delattr/globals/vars/locals added.
+- I4 test_store.py may use sys, os and `__file__` (it runs in Docker; reload/sys.path idioms cost rounds).
+- **Ruling:** `store_problems` is an accident guard against a 7B's mistakes, not a sandbox — static checks
+  cannot contain hostile Python. The boundary stays: checks run in Docker, `watchtower deploy` runs isolated,
+  and the release note tells the owner to read store.py before running it on the Mac. Cost if wrong: a
+  deliberately obfuscated store.py passes the guard and is caught only by the owner's read.
+
 ## Review Focus
 
 1. Path tricks: `./store.py`, `STORE.PY`, `store.py/`, `sub/../store.py`, absolute paths, backslashes.
@@ -56,4 +68,4 @@ STORE_NOTE moved to skeleton.py (devfloor.py stays under 500 lines).
 
 - [x] RED: tests/test_skeleton.py — only store.py/test_store.py written; stray delete allowed; no-skeleton path
       unchanged. GREEN: devfloor._write allowlist.
-- [ ] 3 opus review rounds (security), merge `--no-ff`, tag `phase-7c`, runs 37-39 (+ a fresh todo for 36).
+- [x] 3 opus review rounds (security), merge `--no-ff`, tag `phase-7c`, runs 37-39 (+ a fresh todo for 36).

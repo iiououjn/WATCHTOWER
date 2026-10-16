@@ -18,8 +18,12 @@ MARK = TOWER_MARK
 ONLY_NOTE = "Write only store.py and test_store.py; any other file is rejected.\n"  # 7c review r1 I3
 SAFE = {"__future__", "json", "copy", "threading", "collections", "dataclasses", "typing", "datetime", "time",
         "uuid", "itertools", "functools", "re", "html"}  # 7c review r2: store.py runs inside the tower's server
-SAFE_TESTS = SAFE | {"unittest", "store", "importlib"}  # importlib.reload(store) resets it between tests
-BANNED_CALLS = {"exec", "eval", "compile", "open", "__import__", "import_module", "breakpoint", "input"}
+SAFE_TESTS = SAFE | {"unittest", "store", "importlib", "sys", "os"}  # tests run in Docker; reload(store), sys.path
+BANNED = {"exec", "eval", "compile", "open", "__import__", "import_module", "breakpoint", "input", "getattr",
+          "setattr", "delattr", "globals", "vars", "locals"}  # by name, called or aliased (review r3)
+DANGER = {"os", "sys", "subprocess", "builtins", "importlib", "inspect", "ctypes", "socket", "shutil", "pty", "posix",
+          "runpy", "code", "pickle", "marshal", "gc", "signal", "urllib", "http", "xmlrpc", "ftplib", "smtplib",
+          "asyncio", "multiprocessing", "io", "pathlib"}  # reachable through allowed modules: uuid.os, typing.sys
 STORE_NOTE = ("The tower's server escapes all text when it builds the page: store.py keeps text exactly as "
               "given. Never call html.escape or quote on it.\n")  # 7b (run 33): the escape hint made it escape twice
 
@@ -153,19 +157,22 @@ def store_problems(ws: Workspace) -> list[str]:
             tree = ast.parse(ws.read(name))
         except (SyntaxError, ValueError, RecursionError, MemoryError):
             continue  # the unit tests report it
-        for node in ast.walk(tree):
-            why = ""
+        for node in ast.walk(tree):  # an accident guard, not a sandbox: Docker and the owner's read are that
+            why, test = "", name == STORE_TESTS
             if isinstance(node, ast.Import):
                 why = next((f"imports {a.name}" for a in node.names if a.name.split(".")[0] not in safe), "")
             elif isinstance(node, ast.ImportFrom):
                 mod = node.module or ""
-                why = f"imports {'.' * node.level}{mod}" if node.level or mod.split(".")[0] not in safe else ""
-            elif isinstance(node, ast.Call):
-                fn = getattr(node.func, "attr", getattr(node.func, "id", ""))
-                why = f"calls {fn}()" if fn in BANNED_CALLS else ""
-            elif isinstance(node, (ast.Attribute, ast.Name)):
-                n = node.attr if isinstance(node, ast.Attribute) else node.id
-                why = f"uses {n}" if n.startswith("__") and n.endswith("__") and n not in ("__name__", "__init__") else ""
+                why = (f"imports {'.' * node.level}{mod}" if node.level or mod.split(".")[0] not in safe else
+                       next((f"imports {a.name} from {mod}" for a in node.names if a.name == "*"
+                             or a.name.startswith("_") and mod != "__future__" or a.name in DANGER - safe), ""))
+            elif isinstance(node, ast.Attribute):
+                why = f"uses .{node.attr}" if (node.attr.startswith("_") or node.attr in BANNED
+                                               or node.attr in DANGER - safe) else ""
+            elif isinstance(node, ast.Name):
+                n = node.id
+                why = f"uses {n}" if n in BANNED or n.startswith("__") and n not in (
+                    "__name__", "__init__", *(("__file__",) if test else ())) else ""
             if why:
                 out.append(f"{name} {why}: the tower runs the web server; {name} only keeps data in memory")
                 break
