@@ -176,6 +176,39 @@ def store_problems(ws: Workspace) -> list[str]:
             if why:
                 out.append(f"{name} {why}: the tower runs the web server; {name} only keeps data in memory")
                 break
+        if name == STORE:
+            out += _contract(tree)
+    return out
+
+
+def _contract(tree: ast.Module) -> list[str]:
+    """7d (run 38: a list named items, the function get_items): the tower's server calls store.add(entry) and
+    store.items(). Both must be plain module-level functions that take those arguments, and nothing rebinds them."""
+    defs, rebound = {}, set()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            defs[node.name] = node
+            continue
+        for sub in ast.walk(node):
+            names = ([sub.id] if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)
+                     else [a.asname or a.name.split(".")[0] for a in sub.names]
+                     if isinstance(sub, (ast.Import, ast.ImportFrom)) else [])
+            rebound |= {n for n in names if n in ("add", "items")}
+    out = []
+    for fn, want, ok in (("add", "def add(entry): saves one entry",
+                          lambda a, n, req: req <= 1 and (n >= 1 or a.vararg is not None)),
+                         ("items", "def items(): returns the saved entries, oldest first",
+                          lambda a, n, req: req == 0)):
+        node = defs.get(fn)
+        if node is not None and fn not in rebound:
+            a = node.args
+            n = len(a.posonlyargs) + len(a.args)
+            required = n - len(a.defaults)
+            if ok(a, n, required) and all(d is not None for d in a.kw_defaults):
+                continue
+        why = (f"'{fn}' is also assigned or imported: rename that" if fn in rebound
+               else "it is missing" if node is None else "its arguments do not match")
+        out.append(f"{STORE} must define {want} ({why}): the tower's server calls it")
     return out
 
 

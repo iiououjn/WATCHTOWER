@@ -422,3 +422,21 @@ def test_store_tests_may_use_sys_os_and_file(tmp_path):  # 7c review r3 I4: test
     assert store_problems(ws) == []
     ws.write("test_store.py", "import socket\n")
     assert store_problems(ws)
+
+
+def test_the_store_must_define_add_and_items_functions(tmp_path):  # 7d (run 38: a list named items, get_items())
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    bad = {"items = []\n\ndef add(entry):\n    items.append(entry)\n\ndef get_items():\n    return items[:]\n": "items",
+           "E = []\n\ndef add(entry):\n    E.append(entry)\n": "items",
+           "E = []\n\ndef items():\n    return E\n": "add",
+           "E = []\n\ndef add():\n    pass\n\ndef items():\n    return E\n": "add",
+           "E = []\n\ndef add(entry):\n    E.append(entry)\n\ndef items(n):\n    return E\n": "items",
+           "E = []\n\ndef add(entry):\n    pass\n\ndef items():\n    return E\n\nitems = E\n": "items"}
+    for code, name in bad.items():
+        ws.write("store.py", code)
+        assert any(f"def {name}(" in p for p in store_problems(ws)), code
+    for good in (STORE, "E = []\n\ndef add(entry, *rest):\n    E.append(entry)\n\ndef items(limit=None):\n    return E\n",
+                 "class S:\n    pass\n\nE = []\n\ndef add(e):\n    E.append(e)\n\ndef items():\n    return list(E)\n"):
+        ws.write("store.py", good)
+        assert store_problems(ws) == [], good
