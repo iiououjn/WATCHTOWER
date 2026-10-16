@@ -22,6 +22,8 @@ from watchtower.floors.f2_dev.lint import handler_state_problems, idiom_notes
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
 from watchtower.floors.f2_dev.unittest_runner import TEST_COMMAND, TEST_RUNNER, test_summary  # noqa: F401 (re-export)
+from watchtower.floors.f2_dev.prompt_fit import (FILES_MIN, PROMPT_CHARS, RESEARCH_CHARS, SPEC_CHARS,  # noqa: F401
+                                                 fit, plan_text, room_left, spec_text as _spec_text)
 from watchtower.roles import Role
 
 _SAFE_ENTRY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*\.py")  # importable by tests
@@ -53,7 +55,6 @@ HR_PROMPT = (
 MAX_HR_ASKS = 2
 MAX_DIAGNOSES = 2
 FEEDBACK_ITEM, FEEDBACK_TOTAL, QA_CHARS = 600, 2000, 1500  # keep the coder prompt inside num_ctx
-PROMPT_CHARS = 9_000  # + system (~1.2k) + tower brief (~0.8k) ≈ 3.4k tokens; + 2048 output < num_ctx 6144
 _UNSAFE = re.compile(r"[<>{}\x00-\x1f\x7f]")
 
 
@@ -70,11 +71,14 @@ ESCAPE_NOTE = ('Checks with "expect_escaped": true post text containing <&> (wri
 
 
 
-def _qa_block(head: str, checks: Sequence[dict], store_only: bool = False) -> str:
-    """The QA checks for a coder prompt; notes sit outside the untrusted block (6z). `store_only`: 7a-7c."""
+def _qa_block(head: str, checks: Sequence[dict], store_only: bool = False, shown: bool = True) -> str:
+    """The QA checks for a coder prompt; notes sit outside the untrusted block (6z). `store_only`: 7a-7c.
+    `shown=False` (8c): the prompt is full; the notes stay, the checks go."""
     note = (ONLY_NOTE if store_only else "") + (
         (STORE_NOTE if store_only else ESCAPE_NOTE) if any(c.get("expect_escaped") for c in checks) else "")
-    return head + untrusted("f4", _compact_checks(checks)) + "\n" + note if checks else note
+    if not checks:
+        return note
+    return (head + untrusted("f4", _compact_checks(checks)) if shown else "(QA's HTTP checks not shown)") + "\n" + note
 
 
 TEST_DIAGNOSE_PROMPT = (
@@ -150,10 +154,6 @@ def units(plan: dict, owned=frozenset()) -> list[list[dict]]:
     return split[:MAX_UNITS]
 
 
-def _spec_text(spec: dict) -> str:
-    return json.dumps({k: spec.get(k) for k in ("title", "goal", "acceptance", "out_of_scope")}, indent=1)
-
-
 class DevFloor:
     """Floor 2: the architect plans files; the coder writes and fixes them in a loop driven by real
     sandbox test results (tool-using agent), until tests pass or the round budget runs out."""
@@ -170,13 +170,16 @@ class DevFloor:
         self.owned: set[str] = set()  # 7a: paths the tower wrote (the web server); the coder never changes them
 
     def plan(self, spec: dict, research: str, feedback: Sequence[str], lessons: str = "", reference: str = "") -> dict:
-        note = ("\nThe reviewer rejected the last design:\n" + "\n".join(untrusted("gate", str(f)[:FEEDBACK_ITEM])
+        note = ("\nThe reviewer rejected the last design:\n" + "\n".join(_capped("gate", str(f), FEEDBACK_ITEM)
                                                                     for f in feedback[:5])) if feedback else ""
-        out = self._ask(self._architect, PLAN_PROMPT.format(
-            spec=_spec_text(spec), research=untrusted("f1", research) if research else "(none)", feedback=note,
-            lessons=("\nLessons from past jobs:\n" + untrusted("retro", lessons[:800]) + "\n") if lessons else "",
-            reference=("\nReference docs (from the web through Glass 2; may be wrong):\n" + reference + "\n")
-            if reference else ""))
+        parts = dict(spec=_spec_text(spec), feedback=note,  # 8c (C-M5): every part capped after escaping
+                     research=_capped("f1", research, RESEARCH_CHARS) if research else "(none)",
+                     lessons=("\nLessons from past jobs:\n" + _capped("retro", lessons, 800) + "\n") if lessons else "",
+                     reference=("\nReference docs (from the web through Glass 2; may be wrong):\n" + reference + "\n")
+                     if reference else "")
+        out = self._ask(self._architect, PLAN_PROMPT.format(**fit(PLAN_PROMPT, parts, [
+            ("reference", ""), ("lessons", ""), ("research", _capped("f1", research, 500) if research else "(none)"),
+            ("spec", _spec_text(spec, SPEC_CHARS))])))
         files, seen = [], set()
         for f in out.get("files") or []:
             path = _plan_path(f.get("path")) if isinstance(f, dict) else None
@@ -203,14 +206,18 @@ class DevFloor:
         todo = [[f for f in u if f["path"].lower() not in present] for u in units(plan, self.owned)]
         todo = [u for u in todo if u]  # a worker writes only files that do not exist yet: never a fixed one
         qa = _qa_block("Floor 4 QA will run these HTTP checks against the app:\n", qa_checks, bool(self.owned))
+        qa_short = _qa_block("", qa_checks, bool(self.owned), shown=False)
         notes: list[str] = []
         stray: list[str] = []
         for i, unit in enumerate(todo, start=1):
             paths = [f["path"] for f in unit]
-            parts = dict(spec=_spec_text(spec), plan=untrusted("f2.architect", json.dumps(plan)), qa=qa, i=i,
-                         n=len(todo), unit=untrusted("f2.architect", "\n".join(f"- {f['path']}: {f['purpose']}"
-                                                                               for f in unit)))
-            room = max(1500, min(6000, PROMPT_CHARS - len(UNIT_PROMPT.format(files="", **parts))))
+            listed = untrusted("f2.architect", "\n".join(f"- {f['path']}: {f['purpose']}" for f in unit))
+            parts = fit(UNIT_PROMPT, dict(spec=_spec_text(spec), plan=plan_text(plan), qa=qa, i=i, n=len(todo),
+                                          files="", unit=listed),
+                        [("qa", qa_short), ("plan", plan_text(plan, False)), ("spec", _spec_text(spec, SPEC_CHARS))],
+                        FILES_MIN)
+            room = room_left(UNIT_PROMPT, parts)
+            del parts["files"]
             try:
                 reply = self._ask(self._coder, UNIT_PROMPT.format(
                     files=untrusted_code("workspace", self._ws.snapshot(room) or "(none yet)"), **parts))
@@ -238,16 +245,21 @@ class DevFloor:
             kept.append(item)
             used += len(item)
         notes = [f"Reviewer feedback to address:\n{_capped('gate', f, 800)}" for f in kept]
-        qa = _qa_block("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n", qa_checks, bool(self.owned))
+        qa = _qa_block("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n", qa_checks,
+                       bool(self.owned))
+        qa_short = _qa_block("", qa_checks, bool(self.owned), shown=False)
         checks, output, passed, hr_asks, hr_question = [], "", False, 0, None
         last_failing, diagnoses, diagnosis, diagnosed_for, carry = None, 0, "", None, []  # stuck = same set twice
         for round_no in range(self._max_rounds):
-            parts = dict(spec=_spec_text(spec), plan=untrusted("f2.architect", json.dumps(plan)), qa=qa,
+            parts = dict(spec=_spec_text(spec), plan=plan_text(plan), qa=qa, files="",
                          feedback=("\n" + "\n".join(notes)) if notes else "")
-            while len(notes) > 1 and len(CODE_PROMPT.format(files="", **parts)) > PROMPT_CHARS - 1500:
+            while len(notes) > 1 and len(CODE_PROMPT.format(**parts)) > PROMPT_CHARS - FILES_MIN:
                 notes = notes[1:]  # oldest notes go first (the newest, most important one is kept)
                 parts["feedback"] = ("\n" + "\n".join(notes)) if notes else ""
-            room = max(1500, min(6000, PROMPT_CHARS - len(CODE_PROMPT.format(files="", **parts))))
+            parts = fit(CODE_PROMPT, parts, [("qa", qa_short), ("plan", plan_text(plan, False)),
+                                             ("spec", _spec_text(spec, SPEC_CHARS))], FILES_MIN)  # 8c (C-M5)
+            room = room_left(CODE_PROMPT, parts)
+            del parts["files"]
             if test_first and round_no == 0:  # the unit workers just wrote every file: test before rewriting
                 notes = []
             else:
@@ -343,9 +355,11 @@ class DevFloor:
     def _hr_review(self, spec: dict, plan: dict) -> tuple[bool, str] | None:
         """Floor 2 HR: a second model family reads the passing code against the spec. Garbage → skipped."""
         try:
-            out = self._ask(self._hr, HR_PROMPT.format(spec=_spec_text(spec),
-                                                        plan=untrusted("f2.architect", json.dumps(plan)),
-                                                        code=untrusted_code("workspace", self._ws.snapshot(4500))))
+            parts = fit(HR_PROMPT, dict(spec=_spec_text(spec), plan=plan_text(plan), code=""),
+                        [("plan", plan_text(plan, False)), ("spec", _spec_text(spec, SPEC_CHARS))], FILES_MIN)
+            room = room_left(HR_PROMPT, parts, 4500)
+            out = self._ask(self._hr, HR_PROMPT.format(**{**parts, "code": untrusted_code("workspace",
+                                                                                          self._ws.snapshot(room))}))
         except ADVISORY_ERRORS:
             return None
         if not isinstance(out.get("pass"), bool):  # no clear verdict from a sloppy model: skip, never veto
