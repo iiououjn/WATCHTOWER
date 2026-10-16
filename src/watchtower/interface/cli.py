@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import re
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
@@ -27,13 +27,12 @@ from watchtower.engine.runner import JobRunner, RunOutcome
 from watchtower.engine.sandbox import Sandbox
 from watchtower.engine.scheduler import Scheduler
 from watchtower.engine.system import free_ram_pct
-
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
-
+from watchtower.evidence import no_host_run
 
 def _clean(text: str) -> str:
-    """Strip terminal control characters from untrusted text (model output, web content)."""
-    return _CONTROL.sub("", text)
+    """Strip terminal control characters from untrusted text (model output, web content, app logs). 8a (D-M5):
+    also Unicode format characters (bidi overrides, zero-width), which can disguise file names and commands."""
+    return "".join(c for c in text if c in "\n\t" or unicodedata.category(c) not in ("Cc", "Cf"))
 
 
 app = typer.Typer(no_args_is_help=True, help="THE WATCHTOWER — local agentic ecosystem.")
@@ -86,13 +85,13 @@ def _report(outcome: RunOutcome, conn) -> None:
             what = "App for job {} — awaiting your sign-off" if pending.kind == "signoff" else \
                 "Spec for job {} — awaiting your approval"
             typer.echo("\n" + what.format(outcome.job_id) + ":\n")
-            typer.echo(_clean(pending.summary))
+            typer.echo(_clean(no_host_run(pending.summary)))  # 8a: a summary stored before 8a
             typer.echo(f"\nApprove with: watchtower approve {outcome.job_id}   (or add --reject)", err=True)
         else:
             typer.echo(_clean(f"Job {outcome.job_id} paused: {outcome.reason}"), err=True)
             typer.echo(f"Resume with: watchtower resume {outcome.job_id}", err=True)
     else:
-        typer.echo(f"Job {outcome.job_id} failed: {outcome.reason}", err=True)
+        typer.echo(_clean(f"Job {outcome.job_id} failed: {outcome.reason}"), err=True)
     raise typer.Exit(EXIT[outcome.status])
 
 
@@ -152,7 +151,7 @@ def resume(
         typer.echo(f"Error: no job {job_id}", err=True)
         raise typer.Exit(2)
     except ValueError as e:
-        typer.echo(f"Error: {e}", err=True)
+        typer.echo(_clean(f"Error: {e}"), err=True)
         raise typer.Exit(2)
     finally:
         runner.close()
@@ -169,7 +168,7 @@ def status(limit: int = 20):
         return
     for j in rows:
         line = f"{j.id}  {j.status:<8} {j.created_at[:19]}  {j.prompt[:60]}"
-        typer.echo(line + (f"  — {j.error}" if j.error else ""))
+        typer.echo(_clean(line + (f"  — {j.error}" if j.error else "")))  # gate reasons, app logs (8a)
 
 
 @app.command()
@@ -178,7 +177,7 @@ def logs(job_id: Optional[str] = typer.Argument(None), limit: int = 100):
     _, conn = _open()
     audit = AuditLog(conn)
     for e in audit.entries(job_id=job_id, limit=limit):
-        typer.echo(f"#{e.seq} {e.ts[:19]} {e.actor:<13} {e.action:<14} {e.detail}")
+        typer.echo(_clean(f"#{e.seq} {e.ts[:19]} {e.actor:<13} {e.action:<14} {e.detail}"))
     typer.echo(f"chain: {'ok' if audit.verify() else 'BROKEN — audit log was tampered with'}")
 
 
@@ -311,7 +310,7 @@ def knowledge_search(query: str, limit: int = typer.Option(5, min=1, max=50)):
 @app.command()
 def run(
     idea: str,
-    yes: bool = typer.Option(False, "--yes", help="Skip CPO questions; auto-approve spec and sign-off (a CEO reject still waits for you)"),
+    yes: bool = typer.Option(False, "--yes", help="Skip CPO questions and auto-approve the spec; you still sign off the app"),
     offline: bool = typer.Option(False, "--offline", help="Do not search the web"),
     research: bool = typer.Option(False, "--research", help="Floor 1 researches the web first"),
     max_tokens: Optional[int] = typer.Option(None, min=1, help="Token budget for this job"),
@@ -354,8 +353,8 @@ def _tower_job(goal: str, app: bool, yes: bool, offline: bool, research: bool, m
             try:
                 questions = runner.cpo_questions(job.id)
             except Exception as e:  # questions are optional; the spec step still runs
-                typer.echo(f"CPO could not ask questions ({type(e).__name__}: {e}); "
-                           "continuing without questions.", err=True)
+                typer.echo(_clean(f"CPO could not ask questions ({type(e).__name__}: {e}); "
+                                  "continuing without questions."), err=True)
                 questions = []
             try:
                 for q in questions:
@@ -398,7 +397,7 @@ def approve(job_id: str, reject: bool = typer.Option(False, "--reject", help="Re
     try:
         outcome = runner.resume(job_id)
     except (KeyError, ValueError) as e:
-        typer.echo(f"Error: {e}", err=True)
+        typer.echo(_clean(f"Error: {e}"), err=True)
         typer.echo(f"Approval recorded. Resume with: watchtower resume {job_id}", err=True)
         raise typer.Exit(2)
     finally:
@@ -422,7 +421,7 @@ def beacon(query: str, pages: int = typer.Option(3, min=1, max=10)):
     try:
         docs = make_beacon(settings, conn).research(query, None)
     except SearchUnavailable as e:
-        typer.echo(f"Beacon paused: {e}", err=True)
+        typer.echo(_clean(f"Beacon paused: {e}"), err=True)
         raise typer.Exit(3)
     for e in audit.since(before, actor="beacon"):
         if e.action in ("beacon_skip", "glass_reject"):

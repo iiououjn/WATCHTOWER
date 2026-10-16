@@ -15,7 +15,7 @@ RECOMMEND_PROMPT = (
 
 class CEO:
     """C-suite CEO: the tower's final recommendation to the owner before sign-off. Returns (None, "") when
-    it has no clear view; a clear reject makes the owner look even when --yes was given."""
+    it has no clear view. Advice only: the owner signs off every app (8a), and sees this verdict there."""
 
     def __init__(self, role: Role, ask: Callable[[Role, str], dict]):
         self._role, self._ask = role, ask
@@ -35,7 +35,7 @@ _WORDS = {"true": True, "yes": True, "approve": True, "approved": True, "accept"
 
 
 def _verdict(value) -> bool | None:
-    """Small models often answer booleans as words; a reject in any spelling must still stop --yes."""
+    """Small models often answer booleans as words; a reject in any spelling must still read as REJECT."""
     if isinstance(value, bool):
         return value
     return _WORDS.get(str(value).strip().lower()) if isinstance(value, str) else None

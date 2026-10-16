@@ -1,10 +1,11 @@
+import re
 import subprocess
 from types import SimpleNamespace
 
 import pytest
 
 from watchtower.engine.governor.audit import AuditLog
-from watchtower.engine.sandbox import MAX_OUTPUT, Sandbox, SandboxUnavailable
+from watchtower.engine.sandbox import EMIT, LAUNCH, MAX_OUTPUT, Sandbox, SandboxUnavailable
 
 
 class FakeDocker:
@@ -40,10 +41,32 @@ def test_runs_command_with_hardening_flags(settings, audit):
     assert (result.exit_code, result.stdout, result.timed_out) == (0, "hello\n", False)
     argv = docker.run_argv()
     for flag in ["--network", "none", "--read-only", "--cap-drop", "ALL", "--pids-limit", "128",
-                 "--memory", "512m", "--user", "1000:1000", "--pull", "never", "no-new-privileges"]:
+                 "--memory", "512m", "--user", "0:0", "--pull", "never", "no-new-privileges"]:
         assert flag in argv
     assert f"{settings.home / 'workspaces' / 'job1'}:/src:ro" in argv
-    assert argv[-3:] == ["python", "-c", "print('hello')"]
+    assert argv[-4:] == ["app", "python", "-c", "print('hello')"]  # not a harness: runs as the app uid
+
+
+def test_only_setuid_and_setgid_are_added_back(settings, audit):
+    """Review r3: the container starts as uid 0 so the launcher can split uids; it keeps no other capability."""
+    docker = FakeDocker()
+    Sandbox(settings, audit, run=docker).run("j", ["true"])
+    argv = docker.run_argv()
+    added = [argv[i + 1] for i, a in enumerate(argv) if a == "--cap-add"]
+    assert sorted(added) == ["SETGID", "SETUID"] and argv[argv.index("--cap-drop") + 1] == "ALL"
+
+
+def test_a_tower_harness_runs_in_harness_mode(settings, audit):
+    docker = FakeDocker()
+    Sandbox(settings, audit, run=docker).run("j", ["python", "-I", "-c", EMIT + "emit('X', '1')", "app.py"])
+    assert docker.run_argv()[-6] == "harness"
+    Sandbox(settings, audit, run=docker).run("j", ["python", "-I", "-c", "print(1)" + EMIT, "app.py"])
+    assert [a for a in docker.calls if a[:2] == ["docker", "run"]][-1][-6] == "app"  # EMIT must lead the script
+
+
+def test_the_launcher_drops_every_non_harness_command_to_the_app_uid():
+    assert "drop(APP_UID)" in LAUNCH and LAUNCH.index('"harness"') < LAUNCH.rindex("drop(APP_UID)")
+    assert 'os.environ["WT_SPLIT"] = "1"' in LAUNCH
 
 
 @pytest.mark.parametrize("bad", ["../../Users/rishi", "a/b", "", "job 1", ".."])
@@ -70,7 +93,7 @@ def test_docker_not_installed(settings, audit):
 
 
 def test_image_missing_gives_pull_hint(settings, audit):
-    with pytest.raises(SandboxUnavailable, match="docker pull python:latest"):
+    with pytest.raises(SandboxUnavailable, match=f"docker pull {re.escape(settings.sandbox_image)}"):
         Sandbox(settings, audit, run=FakeDocker(image=False)).run("j", ["true"])
 
 
@@ -105,7 +128,7 @@ def test_container_has_hard_in_container_time_limit(settings, audit):
     docker = FakeDocker()
     Sandbox(settings, audit, run=docker).run("j", ["sleep", "999"], timeout=5)
     argv = docker.run_argv()
-    assert argv[argv.index("python:latest") + 1:][:4] == ["timeout", "-s", "KILL", "5"]
+    assert argv[argv.index(settings.sandbox_image) + 1:][:4] == ["timeout", "-s", "KILL", "5"]
 
 
 def test_failed_kill_falls_back_to_force_remove(settings, audit):
@@ -158,7 +181,62 @@ def test_workspace_is_mounted_read_only_and_copied_to_capped_scratch(settings, a
     argv = docker.run_argv()
     assert f"{settings.home / 'workspaces' / 'j'}:/src:ro" in argv
     assert not any(a.endswith(":/work:rw") for a in argv)
-    assert "/work:rw,size=64m,uid=1000,gid=1000" in argv
-    tail = argv[argv.index("python:latest") + 1:]
-    assert tail[:4] == ["timeout", "-s", "KILL", "60"] and "cp -a /src/. /work/" in tail[6]
+    assert "/work:rw,size=64m,uid=1001,gid=1001" in argv  # review r3: the app uid owns the scratch dir
+    tail = argv[argv.index(settings.sandbox_image) + 1:]
+    assert tail[:4] == ["timeout", "-s", "KILL", "60"] and tail[4:8] == ["python", "-I", "-c", LAUNCH]
+    assert '"cp", "-a", "/src/.", "/work/"' in LAUNCH
     assert tail[-3:] == ["python", "-m", "unittest"]
+
+
+# 8a (audit D-M2): AI code can print gigabytes inside its time limit; the host keeps only a bounded tail
+import sys  # noqa: E402
+import tracemalloc  # noqa: E402
+
+from watchtower.engine.sandbox import capped_run  # noqa: E402
+
+
+def test_sandbox_captures_through_the_bounded_reader_by_default(settings, audit):
+    assert Sandbox(settings, audit)._run is capped_run
+
+
+def test_capped_run_keeps_a_bounded_tail_of_a_flood():
+    flood = "import sys\nfor _ in range(300): sys.stdout.write('x' * 99_999 + 'y')\nsys.stderr.write('done')"
+    tracemalloc.start()
+    try:
+        proc = capped_run([sys.executable, "-c", flood], capture_output=True, text=True, timeout=60)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert proc.returncode == 0 and proc.stderr == "done" and proc.stdout.endswith("xy")
+    assert MAX_OUTPUT <= len(proc.stdout) <= 4 * MAX_OUTPUT
+    assert peak < 3_000_000  # 30 MB went through; subprocess.run would have held all of it
+
+
+def test_capped_run_times_out_and_kills():
+    import time
+    start = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        capped_run([sys.executable, "-c", "import time; print('hi', flush=True); time.sleep(30)"], timeout=1)
+    assert time.monotonic() - start < 10  # killed, not waited out
+
+
+def test_capped_run_replaces_broken_utf8_and_keeps_the_exit_code():
+    proc = capped_run([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok\\xff'); sys.exit(3)"],
+                      timeout=30)
+    assert (proc.returncode, proc.stdout) == (3, "ok�")
+
+
+def test_a_cut_off_output_is_flagged(settings, audit):
+    """Review r2: a result tag evicted from the kept tail must be told apart from one never printed."""
+    def result(**kw):
+        return Sandbox(settings, audit, run=FakeDocker(run_result=SimpleNamespace(returncode=0, **kw))).run("j", ["x"])
+    assert result(stdout="ok", stderr="").truncated is False
+    assert result(stdout="x" * (MAX_OUTPUT + 1), stderr="").truncated is True
+    assert result(stdout="ok", stderr="x" * (MAX_OUTPUT + 1)).truncated is True
+    assert result(stdout="ok", stderr="", truncated=True).truncated is True  # capped_run already dropped bytes
+
+
+def test_capped_run_flags_what_it_dropped():
+    small = capped_run([sys.executable, "-c", "print('hi')"], timeout=30)
+    big = capped_run([sys.executable, "-c", "import sys; sys.stderr.write('é' * 30)"], timeout=30, limit=40)
+    assert small.truncated is False and big.truncated is True  # 60 bytes > 40, though under 40 chars decoded

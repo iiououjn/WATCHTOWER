@@ -18,6 +18,7 @@ from typing import Callable
 from watchtower.config import Settings
 from watchtower.engine.db import now
 from watchtower.floors.f4_qa_deploy.deploy_scripts import EDGE, FORWARD
+from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.floors.f4_qa_deploy.releases import Releases
 
@@ -108,6 +109,9 @@ class Deployer:
         release = self._releases.get(job_id)
         if release is None:
             raise DeployError(f"job {job_id} has no release: only apps that passed QA can be deployed")
+        if not Approvals(self._conn).signed_off(job_id):  # 8a (D-M1): e.g. released by --yes before 8a
+            raise DeployError(f"job {job_id} has no owner sign-off (released without one before 8a); re-run the idea "
+                              "with `watchtower run`, read the app and sign it off, then deploy the new job")
         root = self._s.home / "workspaces" / job_id
         problems = self._releases.verify(job_id, root)
         if problems:
@@ -150,7 +154,9 @@ class Deployer:
         rows = [] if current is None else self._conn.execute(
             "SELECT id FROM deployments WHERE name=? AND status='replaced' AND id<? ORDER BY id DESC",
             (name, current.id)).fetchall()
-        target = next((self._get(r["id"]) for r in rows if self._image_exists(self._get(r["id"]).image)), None)
+        signed = Approvals(self._conn).signed_off  # 8a review r1: rollback must not reopen what deploy refuses
+        target = next((d for d in (self._get(r["id"]) for r in rows)
+                       if signed(d.job_id) and self._image_exists(d.image)), None)
         if target is None:  # checked before anything is stopped
             raise DeployError(f"nothing to roll back to for {name!r}")
         try:

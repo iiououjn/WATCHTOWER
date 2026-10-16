@@ -276,7 +276,7 @@ def apply(plan: dict, title: str, ws: Workspace, previous=frozenset()) -> tuple[
                 pass
     config = "\n".join(f"{k} = {v!r}" for k, v in (("TITLE", str(title).encode("utf-8", "replace").decode()[:100]), ("FIELDS", fields),
                        ("LIST_PAGE", page), ("FORM_PAGE", form_page), ("ADD_PATH", add)))
-    ws.write(entry, TEMPLATE.replace("__CONFIG__", config))
+    ws.write_tower(entry, TEMPLATE.replace("__CONFIG__", config))
     files = [{"path": entry, "purpose": "web server, written by the tower: do not change it"},
              {"path": STORE, "purpose": _store_purpose(fields)},
              {"path": STORE_TESTS, "purpose": "unittest tests for store.add and store.items"}]

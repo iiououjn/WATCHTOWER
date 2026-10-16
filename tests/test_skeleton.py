@@ -1,4 +1,5 @@
 """Phase 7a: the tower writes the web server for add-and-list apps; the coder writes only store.py."""
+from conftest import start_signed
 import json
 import os
 import socket
@@ -118,7 +119,7 @@ def test_tower_writes_the_server_and_tells_the_coder_the_store_contract(app_towe
     arch = dict(APP_REPLIES["f2.architect"][0])
     arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
     runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
     assert coder and "store.py" in coder[0] and "add(entry)" in coder[0]
     assert "written by the tower" in Workspace(sandbox.workspace(job.id)).read("app.py")
@@ -240,7 +241,7 @@ def test_release_note_says_who_wrote_what_and_data_is_in_memory(app_tower):  # 7
     arch = dict(APP_REPLIES["f2.architect"][0])
     arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
     runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER})
-    answer = runner.start(job.id, extra={"auto_approve": True}).answer
+    answer = start_signed(runner, job.id).answer
     assert "the tower wrote the web server" in answer and "in memory" in answer
     runner.close()
 

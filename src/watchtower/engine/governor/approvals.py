@@ -41,6 +41,16 @@ class Approvals:
         ).fetchone()
         return Approval(**dict(row)) if row else None
 
+    def latest(self, job_id: str, kind: str) -> Approval | None:
+        row = self._conn.execute("SELECT * FROM approvals WHERE job_id=? AND kind=? ORDER BY id DESC LIMIT 1",
+                                 (job_id, kind)).fetchone()
+        return Approval(**dict(row)) if row else None
+
+    def signed_off(self, job_id: str) -> bool:
+        """8a: the owner approved this job's finished app (not only its spec). Only `approve` sets this."""
+        return self._conn.execute("SELECT 1 FROM approvals WHERE job_id=? AND kind='signoff' AND status='approved'",
+                                  (job_id,)).fetchone() is not None
+
     def pending(self) -> list[Approval]:
         rows = self._conn.execute("SELECT * FROM approvals WHERE status='pending' ORDER BY id").fetchall()
         return [Approval(**dict(r)) for r in rows]

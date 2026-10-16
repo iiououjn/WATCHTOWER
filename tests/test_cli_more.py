@@ -86,8 +86,11 @@ def test_build_app_end_to_end_with_fakes(monkeypatch, tmp_path):
     use_roles(monkeypatch, APP_REPLIES)
     monkeypatch.setattr(cli, "make_sandbox", lambda settings, conn: FakeSandbox(tmp_path / "apps"))
     result = runner.invoke(cli.app, ["run", "a todo web app", "--yes"])
-    assert result.exit_code == 0, result.output
-    assert "App ready" in result.output and "python app.py" in result.output
+    assert result.exit_code == 3, result.output  # 8a (D-M1): --yes approves the spec; the app waits for you
+    assert "awaiting your sign-off" in result.output and "App ready" in result.output
+    assert "python app.py" not in result.output  # 8a (D-H1)
+    done = runner.invoke(cli.app, ["approve", latest_job_id()])
+    assert done.exit_code == 0 and "App ready" in done.output and "python app.py" not in done.output
 
 
 def test_deploy_done_app_prints_local_url(monkeypatch, tmp_path):

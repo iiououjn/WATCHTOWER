@@ -1,5 +1,5 @@
 """Phase 6u: the deciding F4 checks come from the routes contract, not the small model (runs 18-21)."""
-from conftest import STORE_CODER
+from conftest import STORE_CODER, start_signed
 from watchtower.floors.f4_qa_deploy.contract import coder_token, contract_checks
 import re
 
@@ -92,7 +92,7 @@ def test_the_pipeline_ships_when_tower_checks_pass_and_small_model_checks_fail(a
     arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
     runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER}, qa_fn=lambda checks: [
         {"name": c["name"], "pass": c["name"].startswith("[tower]"), "status": 200, "detail": ""} for c in checks])
-    out = runner.start(job.id, extra={"auto_approve": True})
+    out = start_signed(runner, job.id)
     assert out.status == "done"
     coder = [p for c, p in zip(model.calls, model.prompts) if c == "f2.coder"]
     assert any("[tower] POST /add adds" in p for p in coder)
@@ -147,7 +147,7 @@ def test_a_silent_small_model_does_not_pause_a_job_with_tower_checks(app_tower):
     arch = dict(APP_REPLIES["f2.architect"][0])
     arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
     runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER, "f4.qa": [{"checks": []}]})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     runner.close()
 
 

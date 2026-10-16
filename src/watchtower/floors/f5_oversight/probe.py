@@ -4,20 +4,20 @@ import json
 import re
 from typing import Callable
 
-from watchtower.engine.sandbox import SandboxResult
+from watchtower.engine.sandbox import EMIT, SandboxResult, result_tag
 
 # Runs INSIDE the sandbox. argv: entry, plan-JSON {"posts": [{"path", "fields", "marker"}], "gets": [path]}.
 # F5's HTML-injection worker, by code: post a harmless tag into every form field, then read every page. A page
 # that returns the tag raw (not escaped) would run attacker HTML in a browser. The app's own output goes to a log
-# file, so it cannot print a result line.
-XSS_SCRIPT = """\
+# file; a result tag it writes to this script's stdout anyway, even spliced onto the real line, makes two tags or
+# a killed script: both fail (8a, review r1).
+XSS_SCRIPT = EMIT + """\
 import json, os, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 port = os.environ.get("WT_PORT", "8000")
 base = "http://127.0.0.1:" + port
 plan = json.loads(sys.argv[2])
 log = open("/tmp/xss.log", "wb")
-p = subprocess.Popen([sys.executable, sys.argv[1]], env={**os.environ, "PORT": port},
-                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+p = start(sys.argv[1], port, log)
 for _ in range(40):
     if p.poll() is not None:
         break
@@ -64,15 +64,11 @@ for path in plan["gets"]:
 hits = [{"post": post["path"], "field": field, "page": page.rsplit(" ", 1)[0] if page.startswith("POST") else page}
         for post in plan["posts"] for field, marker in post["markers"].items()
         for page, body in pages.items() if marker.lower() in body]
-try:
-    os.killpg(p.pid, 9)
-except Exception:
-    p.kill()
+stop(p)
 log.close()
-print("WATCHTOWER_XSS " + json.dumps({"answered": answered, "hits": hits, "slow": sorted(set(slow))[:5],
-                                      "partial": time.time() > deadline}))
+emit("WATCHTOWER_XSS", fit({"answered": answered, "hits": hits, "slow": sorted(set(slow))[:5],
+                           "partial": time.time() > deadline}, 9000, "hits"))
 """
-_RESULT = re.compile(r"^WATCHTOWER_XSS (.*)$", re.M)
 _PATH = re.compile(r"/[A-Za-z0-9._~/-]{0,80}")
 MAX_POSTS, MAX_GETS = 8, 8
 
@@ -88,8 +84,9 @@ def _finding(severity: str, entry: str, text: str) -> dict:
 
 def xss_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: list[dict]) -> list[dict]:
     """Floor 5 worker: HTML injection through the app's own forms. A raw marker on any page = HIGH finding.
-    No form routes → nothing to probe. A missing, doubled or empty result (no page answered) → MEDIUM: an
-    incomplete probe fails the build (default fail_on), it never passes as clean."""
+    No form routes → nothing to probe. A missing, doubled or empty result (no page answered), or a script that
+    did not exit 0 (8a: the app can print a line, then kill it) → MEDIUM: an incomplete probe fails the build
+    (default fail_on), it never passes as clean."""
     posts = [r for r in routes if r.get("method") == "POST" and r.get("fields") and _safe(r.get("path"))][:MAX_POSTS]
     if not posts:
         return []
@@ -98,9 +95,9 @@ def xss_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: lis
     plan = {"posts": [{"path": r["path"], "markers": {f: f"<i>wtprobe{n}x{k}</i>" for k, f in enumerate(r["fields"])}}
                       for n, r in enumerate(posts)], "gets": gets}
     result = run(["python", "-I", "-c", XSS_SCRIPT, entry, json.dumps(plan)])  # -I: app files can't shadow json
-    found = _RESULT.findall((result.stdout or "") + (result.stderr or ""))
+    found = result_tag(result, "WATCHTOWER_XSS")  # review r1-r2: exactly once anywhere, in uncut output
     try:
-        out = json.loads(found[0]) if len(found) == 1 and not result.timed_out else None
+        out = json.loads(found) if found is not None and result.exit_code == 0 and not result.timed_out else None
     except ValueError:
         out = None
     hits = out.get("hits") if isinstance(out, dict) else None

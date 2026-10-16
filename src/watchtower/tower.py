@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import shlex
 from pathlib import Path
 from typing import Callable
 
@@ -22,7 +21,7 @@ from watchtower.floors.f3_build.office import F3Office
 from watchtower.floors.f5_oversight.office import OversightOffice
 from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
 from watchtower.evidence import (  # noqa: F401 — re-export
-    _evidence, _finding_query, _reference, _status_query, model_objection, objection_note)
+    _evidence, _finding_query, _reference, _status_query, model_objection, no_host_run, objection_note)
 from watchtower.floors.f5_oversight.oversight import security_package, security_scan
 from watchtower.floors.f5_oversight.probe import xss_probe
 from watchtower.floors.f2_dev.handoff import board_line, f2_handoff, for_gate, static_feedback
@@ -51,7 +50,7 @@ MEMO_PROMPT = (
 BOARD_HEADER = "\n\nTower board (what the other floors know and what comes next):\n"
 DEV_ROUTES = ("research", "design", "code")
 OWNED_NOTE = ("Note: the tower wrote the web server; a local AI wrote store.py and its tests, tested only "
-              "inside the sandbox. Read store.py before running it. store.py was asked to keep data in memory: "
+              "inside the sandbox. Read store.py before you approve it. store.py was asked to keep data in memory: "
               "it is likely lost when the app stops.\n")  # 7b (run 34): the spec may promise more
 CONTEXT_CHARS = 1500
 QUESTIONS_PROMPT = (
@@ -222,12 +221,11 @@ class TowerPipeline:
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
                                    + (OWNED_NOTE if dev.owned else
                                       "Note: written by a local AI and tested only inside the sandbox — untested on "
-                                      "your Mac. Read the code before running it.\n")
+                                      "your Mac. Read the code before you approve it.\n")
                                    + ("" if tests_ok else "Note: the coder's own unit tests fail (advisory); "
                                       "the tower's start, QA and security checks passed.\n")
-                                   + f"Run it: cd {shlex.quote(str(ws.root))} && python {shlex.quote(plan['entry'])}"
-                                   "  (then open http://127.0.0.1:8000)\n"
-                                   f"Safer — deploy it isolated, with no internet: watchtower deploy {job_id}")}
+                                   # 8a (D-H1): never a host-run line; AI code runs only in Docker
+                                   + f"Deploy it isolated, with no internet: watchtower deploy {job_id}")}
             feedback = verdict.reasons or ["the reviewer rejected the app without reasons"]
             feedback = feedback + static_feedback(go, reasons, plan["entry"], ws.files())
             if f3 is not None and not f3.checks_run[-1]["pass"]:  # show the coder the app's real error
@@ -252,28 +250,31 @@ class TowerPipeline:
 
     def _signoff_request(self, data: dict) -> dict:
         """Lifecycle: final audit → CEO recommendation → owner sign-off → done. Nothing is released until the
-        owner signs off; --yes signs off automatically unless the CEO recommends rejecting."""
+        owner signs off; 8a (D-M1): --yes covers the spec only, never this step, whatever the CEO says."""
+        return {"signoff_id": self._approvals.request(data["job_id"], "signoff", self._signoff_summary(data))}
+
+    def _signoff_summary(self, data: dict) -> str:
         ceo = data.get("ceo") or {}
-        if data.get("auto_approve") and ceo.get("approve") is not False and not data.get("objection"):
-            return {"signoff_id": None}
-        answer = data["answer"].replace(  # deploying needs a release, and a release needs this sign-off first
-            f"Safer — deploy it isolated, with no internet: watchtower deploy {data['job_id']}",
+        answer = no_host_run(data["answer"]).replace(  # deploying needs a release, and a release needs the sign-off
+            f"Deploy it isolated, with no internet: watchtower deploy {data['job_id']}",
             f"After you approve: watchtower deploy {data['job_id']}  (isolated, no internet)")
         verdict = {True: "approve", False: "REJECT"}.get(ceo.get("approve"), "no clear view")
         spec = spec_text(data["spec"]) + "\n\n" if data.get("auto_approve") else ""  # the owner never saw it
         note = f" — {ceo['note']}" if ceo.get("note") else ""
-        return {"signoff_id": self._approvals.request(data["job_id"], "signoff",
-                                                     f"{answer}\n\n{spec}Evidence:\n{data['evidence']}\n\n"
-                                                     f"CEO recommends: {verdict}{note}"
-                                                     + (f"\n{data['objection']}" if data.get("objection") else ""))}
+        return (f"{answer}\n\n{spec}Evidence:\n{data['evidence']}\n\nCEO recommends: {verdict}{note}"
+                + (f"\n{data['objection']}" if data.get("objection") else ""))
 
     def _signoff(self, data: dict) -> dict:
-        if data.get("signoff_id") is not None:
-            status = self._approvals.get(data["signoff_id"]).status
-            if status == "rejected":
-                raise AppRejected("app rejected by owner")
-            if status != "approved":
-                raise NeedsOwner(f"app awaiting your sign-off; review it, then: watchtower approve {data['job_id']}")
+        signoff_id = data.get("signoff_id")
+        if signoff_id is None:  # 8a: a checkpoint saved when --yes skipped the sign-off; the owner signs it now
+            found = self._approvals.latest(data["job_id"], "signoff")
+            signoff_id = found.id if found else self._approvals.request(data["job_id"], "signoff",
+                                                                        self._signoff_summary(data))
+        status = self._approvals.get(signoff_id).status
+        if status == "rejected":
+            raise AppRejected("app rejected by owner")
+        if status != "approved":
+            raise NeedsOwner(f"app awaiting your sign-off; review it, then: watchtower approve {data['job_id']}")
         if not data.get("manifest"):
             raise NeedsOwner("this job was checkpointed before release pinning; run it again with: watchtower run")
         problems = manifest_problems(Path(data["workspace"]), data["manifest"])
@@ -283,7 +284,7 @@ class TowerPipeline:
         if self._releases is not None:
             self._releases.record_manifest(data["job_id"], data["entry"], data["manifest"])
         self._bus.publish("app.released", {"entry": data["entry"], "files": len(data["files"])}, data["job_id"])
-        return {"released": True}
+        return {"released": True, "answer": no_host_run(data["answer"])}  # a pre-8a checkpoint's answer too
 
     def _lessons(self, data: dict) -> str:
         """Past retrospectives that match this job (stored untrusted; shown to the architect wrapped)."""

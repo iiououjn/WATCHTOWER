@@ -5,13 +5,14 @@ import re
 from typing import Callable
 
 from watchtower.floors.framework import WorkPackage
-from watchtower.engine.sandbox import SandboxResult
+from watchtower.engine.sandbox import EMIT, SandboxResult, result_log, result_tag
 
-SMOKE_SCRIPT = """\
-import os, subprocess, sys, time, urllib.request
+# Runs INSIDE the sandbox. argv: entry[, expected home text]. Three tower lines, then the app's log as one JSON
+# line (8a): nothing the app prints can pose as a tower line, and each tag must appear exactly once (review r1).
+SMOKE_SCRIPT = EMIT + """\
+import json, os, subprocess, sys, time, urllib.request
 log = open("/tmp/app.log", "wb")
-p = subprocess.Popen([sys.executable, sys.argv[1]], env={**os.environ, "PORT": "8000"},
-                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+p = start(sys.argv[1], "8000", log)
 status, body = None, ""
 for _ in range(40):
     if p.poll() is not None:
@@ -26,24 +27,26 @@ for _ in range(40):
             break
         time.sleep(0.25)
 code = p.poll() if status is None else None  # the app stopped by itself before it answered
-try:
-    os.killpg(p.pid, 9)
-except Exception:
-    p.kill()
+stop(p)
 log.close()
 out = open("/tmp/app.log", "rb").read().decode(errors="replace")[-1500:]
-print("SMOKE_STATUS", status)
-print("SMOKE_EXIT", code)
+emit("SMOKE_STATUS", str(status))
+emit("SMOKE_EXIT", str(code))
 expect = sys.argv[2] if len(sys.argv) > 2 else ""
-print("SMOKE_TEXT", "yes" if expect and expect in body else "no")
-print(out)
+emit("SMOKE_TEXT", "yes" if expect and expect in body else "no")
+emit("SMOKE_LOG", fit(out, 6000))
 """
-_STATUS = re.compile(r"SMOKE_STATUS (\S+)")
-_TEXT = re.compile(r"SMOKE_TEXT (yes|no)")
-_EXIT = re.compile(r"SMOKE_EXIT (-?\d+|None)")
+_STATUS = ("SMOKE_STATUS", re.compile(r"\S+"))
+_TEXT = ("SMOKE_TEXT", re.compile(r"yes|no"))
+_EXIT = ("SMOKE_EXIT", re.compile(r"-?\d+|None"))
 EXITED = ("App {entry} exited with code {code} before answering any request: it ran and stopped. When run as "
           "`python {entry}` it must start its HTTP server and keep serving, e.g. end the file with "
           "`if __name__ == \"__main__\":` and a call to the function that calls serve_forever().")
+
+
+def _one(spec: tuple[str, re.Pattern], result: SandboxResult) -> str | None:
+    value = result_tag(result, spec[0])
+    return value if value is not None and spec[1].fullmatch(value) else None
 
 
 def smoke_test(run: Callable[[list[str]], SandboxResult], entry: str, expect: str = "") -> WorkPackage:
@@ -51,26 +54,33 @@ def smoke_test(run: Callable[[list[str]], SandboxResult], entry: str, expect: st
     home-page text is a soft check: a miss becomes an open question for the gate, not a failure."""
     result = run(["python", "-I", "-c", SMOKE_SCRIPT, entry] + ([expect] if expect else []))
     output = (result.stdout or "") + (result.stderr or "")
-    match = _STATUS.search(output)
-    status = match.group(1) if match and match.group(1) != "None" else None
-    passed = status == "200" and not result.timed_out
-    exited = _EXIT.search(output)  # first match: the tower's own line comes before the app's log
+    ours = result.exit_code == 0 and not result.timed_out  # 8a: the app can print a line, then kill the script
+    status, exited, text = (_one(p, result) if ours else None for p in (_STATUS, _EXIT, _TEXT))  # never the first
+    status = None if status == "None" else status
+    passed = status == "200"
     head = (f"App {entry} {'answered HTTP 200 on GET /' if passed else f'did not answer HTTP 200 (got {status})'}")
-    if not passed and exited and exited.group(1) == "0":  # it ran to the end: nothing started the server
+    if not ours:
+        ended = "timed out" if result.timed_out else f"exited with code {result.exit_code}"
+        head = f"App {entry}: the smoke test {ended}"
+    elif result.truncated:
+        head = f"App {entry}: smoke output was cut off (too long); its result cannot be trusted"
+    elif result_tag(result, _STATUS[0]) is None:
+        head = f"App {entry}: smoke result missing or duplicated"
+    elif not passed and exited == "0":  # it ran to the end: nothing started the server
         head = EXITED.format(entry=entry, code=0)
-    elif not passed and exited and exited.group(1) != "None":  # a crash: short head, the error below stays seen
-        head = f"App {entry} crashed (exit code {exited.group(1)}) before answering any request; its error is below."
-    summary = f"{head}\n{output[-1200:]}"
-    text = _TEXT.search(output)
+    elif not passed and exited not in (None, "None"):  # a crash: short head, the error below stays seen
+        head = f"App {entry} crashed (exit code {exited}) before answering any request; its error is below."
+    log = result_log(result, "SMOKE_LOG", output)
+    summary = f"{head}\n{str(log)[-1200:]}"
     questions = [] if passed else ["app did not answer HTTP 200"]
-    if passed and expect and not (text and text.group(1) == "yes"):
+    if passed and expect and text != "yes":
         questions.append(f"home page does not show {expect!r} (F3 Build Lead expected it)")
     return WorkPackage("f3", summary, [entry], [], [{"check": "http", "pass": passed, "status": status}], questions)
 
 
 # Runs INSIDE the sandbox. argv: entry, paths-JSON. F3's workers, by code: start the app, GET every route of
 # the contract (redirects are not followed: a 3xx is an answer), print one WATCHTOWER_PROBE line, then the log.
-PROBE_SCRIPT = """\
+PROBE_SCRIPT = EMIT + """\
 import json, os, subprocess, sys, time, urllib.error, urllib.request
 port = os.environ.get("WT_PORT", "8000")
 base = "http://127.0.0.1:" + port
@@ -79,8 +89,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 opener = urllib.request.build_opener(NoRedirect)
 log = open("/tmp/probe.log", "wb")
-p = subprocess.Popen([sys.executable, sys.argv[1]], env={**os.environ, "PORT": port},
-                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+p = start(sys.argv[1], port, log)
 for _ in range(40):
     if p.poll() is not None:
         break
@@ -101,18 +110,13 @@ for path in json.loads(sys.argv[2]):
     except Exception:
         status = None
     results.append({"path": path, "status": status})
-try:
-    os.killpg(p.pid, 9)
-except Exception:
-    p.kill()
+stop(p)
 log.close()
-print("WATCHTOWER_PROBE " + json.dumps(results))
-print("WATCHTOWER_LOG " + json.dumps(open(log.name, "rb").read().decode(errors="replace")[-2500:]))
+emit("WATCHTOWER_PROBE", fit(results, 6000))
+emit("WATCHTOWER_LOG", fit(open(log.name, "rb").read().decode(errors="replace")[-2500:], 6000))
 """
 _ACCESS = re.compile(r'"(GET|POST|HEAD|PUT|DELETE) \S* HTTP/[\d.]+" \d{3}')
 _ERROR = re.compile(r"\b\w*(Error|Exception)\b")
-_PROBE = re.compile(r"^WATCHTOWER_PROBE (.*)$", re.M)
-_PROBE_LOG = re.compile(r"^WATCHTOWER_LOG (.*)$", re.M)
 _ROUTE_PATH = re.compile(r"/[A-Za-z0-9._~/?=&%+-]{0,80}")
 MAX_PROBES = 8
 
@@ -126,30 +130,28 @@ def _probe_paths(routes: list[dict]) -> list[str]:
 
 def route_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: list[dict]) -> WorkPackage:
     """Floor 3, full app: every GET route of the architect's contract must answer (no 404, no 5xx, no
-    silence). Exactly one result line counts: a second one means the app tried to forge it."""
+    silence). Only exactly one result line from a probe that exited 0 counts (8a; since review r3 the app runs under
+    its own uid, and these rules remain a second line)."""
     paths = _probe_paths(routes)
     if not paths:
         return WorkPackage("f3", "Full app: no other GET routes to probe (MVP: GET / answered)", [entry], [],
                            [{"check": "routes", "pass": True, "results": []}], [])
     result = run(["python", "-I", "-c", PROBE_SCRIPT, entry, json.dumps(paths)])
-    output = (result.stdout or "") + (result.stderr or "")
-    found = _PROBE.findall(output)
+    found = result_tag(result, "WATCHTOWER_PROBE")  # review r1-r2: exactly once anywhere, in uncut output
     try:
-        results = json.loads(found[0]) if len(found) == 1 else None
+        results = json.loads(found) if found is not None and result.exit_code == 0 else None
     except ValueError:
         results = None
     if not isinstance(results, list) or [r.get("path") if isinstance(r, dict) else None for r in results] != paths:
         results = [{"path": p, "status": None} for p in paths]
-        bad_note = "probe result missing, duplicated or incomplete"
+        bad_note = (f"probe exited with code {result.exit_code}" if result.exit_code
+                    else "probe output was cut off (too long)" if result.truncated
+                    else "probe result missing, duplicated or incomplete")
     else:
         bad_note = ""
     failed = [r for r in results if not isinstance(r.get("status"), int) or r["status"] >= 500
               or r["status"] == 404]
-    logs = _PROBE_LOG.findall(output)
-    try:
-        log = json.loads(logs[-1]) if logs else ""
-    except ValueError:
-        log = ""
+    log = result_log(result, "WATCHTOWER_LOG", "")
     if result.timed_out:
         bad_note = "probe timed out: the app answered too slowly"
     useful = [ln.strip() for ln in str(log).splitlines() if ln.strip() and not _ACCESS.search(ln)]

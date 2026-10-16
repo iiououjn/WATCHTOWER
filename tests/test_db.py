@@ -77,8 +77,9 @@ def test_knowledge_tables_exist(conn):
 
 def test_sandbox_image_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
-    monkeypatch.setenv("WATCHTOWER_SANDBOX_IMAGE", "python:latest")
-    assert load_settings().sandbox_image == "python:latest"
+    pinned = "python:3.12-slim@sha256:" + "b" * 64  # 8a: overrides must be digest-pinned too
+    monkeypatch.setenv("WATCHTOWER_SANDBOX_IMAGE", pinned)
+    assert load_settings().sandbox_image == pinned
 
 
 def test_approvals_table_exists(conn):

@@ -6,7 +6,7 @@ from typing import Callable
 
 from watchtower.floors.framework import WorkPackage, untrusted_code
 from watchtower.engine.model_socket import BadModelOutput
-from watchtower.engine.sandbox import SandboxResult
+from watchtower.engine.sandbox import EMIT, SandboxResult, result_log, result_tag
 from watchtower.roles import Role
 
 MAX_CHECKS = 8
@@ -24,13 +24,12 @@ TEXT_NOTE = ("\nYour last checks had no usable expect_text. expect_text must be 
 
 # Runs INSIDE the sandbox. argv: entry, checks-JSON. Starts the app, runs each check in order against it,
 # prints one WATCHTOWER_QA line with the results, then the app's log tail.
-QA_SCRIPT = """\
+QA_SCRIPT = EMIT + """\
 import html, html.parser, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 port = os.environ.get("WT_PORT", "8000")
 base = "http://127.0.0.1:" + port
 log = open("/tmp/app.log", "wb")
-p = subprocess.Popen([sys.executable, sys.argv[1]], env={**os.environ, "PORT": port},
-                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+p = start(sys.argv[1], port, log)
 for _ in range(40):
     if p.poll() is not None:
         break
@@ -120,18 +119,20 @@ for c in json.loads(sys.argv[2]):
             hint = "user text is escaped more than once: call html.escape once, when you build the HTML; "
         detail = f"{hint}expected {c['expect_status']} with {want!r}, got {status}: {body[:300]}"
     results.append({"name": c["name"], "pass": ok, "status": status, "detail": detail})
-try:
-    os.killpg(p.pid, 9)
-except Exception:
-    p.kill()
+stop(p)
 log.close()
-# the app's own output is JSON-encoded on one line, so nothing it prints can pose as a result line; it goes first
-# and unescaped (escaping grows non-ASCII text 6x) so the sandbox's output tail always keeps the result line
-print("WATCHTOWER_LOG " + json.dumps(open(log.name, "rb").read().decode(errors="replace")[-4000:], ensure_ascii=False))
-print("WATCHTOWER_QA " + json.dumps(results))
+# the app's own output is JSON-encoded on one line, so nothing it prints can pose as a result line. Both lines are
+# capped (review r2): "_" grows 6x, and output cut off by the sandbox's limit now fails the run
+def shrink(results, cap):
+    for n in (300, 120, 40, 0):
+        for r in results:
+            r["detail"] = r["detail"][:n]
+        if len(js(results)) <= cap:
+            break
+    return results
+emit("WATCHTOWER_LOG", fit(open(log.name, "rb").read().decode(errors="replace")[-4000:], 6000))
+emit("WATCHTOWER_QA", fit(shrink(results, 9000), 9000))
 """
-_RESULT = re.compile(r"^WATCHTOWER_QA (.*)$", re.M)
-_LOG = re.compile(r"^WATCHTOWER_LOG (.*)$", re.M)
 _FRAME = re.compile(r'^\s+File "([^"]+)", line (\d+), in (\S+)')
 _EXC_LINE = re.compile(r"^[A-Za-z_][\w.]*(Error|Exception|Exit|Warning): ")
 
@@ -335,20 +336,17 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
                            [{"check": "qa", "pass": False, "results": []}], ["no QA checks"])
     result = run(["python", "-I", "-c", QA_SCRIPT, entry, json.dumps(checks)])
     output = (result.stdout or "") + (result.stderr or "")
-    found = _RESULT.findall(output)
-    try:
-        results = json.loads(found[0]) if len(found) == 1 else None  # a second line means someone forged one
+    found = result_tag(result, "WATCHTOWER_QA")  # review r1-r2: exactly once anywhere, in uncut output
+    try:  # 8a: the app shares the runner's uid; it can print a line, then kill the runner (exit 137)
+        results = json.loads(found) if found is not None and result.exit_code == 0 else None
     except ValueError:
         results = None
     if (not isinstance(results, list) or not all(isinstance(r, dict) for r in results)
             or [r.get("name") for r in results] != [c["name"] for c in checks]):
-        results = [{"name": "qa", "pass": False, "status": None,
-                    "detail": "QA runner result missing, duplicated or incomplete"}]
-    logs = _LOG.findall(output)
-    try:
-        app_log = json.loads(logs[-1]) if logs else output
-    except ValueError:
-        app_log = output
+        why = (f"exited with code {result.exit_code}" if result.exit_code else "output cut off (too long)"
+               if result.truncated else "result missing, duplicated or incomplete")
+        results = [{"name": "qa", "pass": False, "status": None, "detail": f"QA runner {why}"}]
+    app_log = result_log(result, "WATCHTOWER_LOG", output)
     complete = len(results) == len(checks)  # else results is the one 'runner result missing' row: it decides
     # 7b (run 35): with no tower checks, a model check that got its status but not its text is advisory when
     # that text is computed (exact prose, wrong maths): the coder cannot fix the check. Echo checks (text some

@@ -11,6 +11,7 @@ from watchtower.floors.f4_qa_deploy.deploy import DeployError, Deployer, http_ok
 from watchtower.floors.f4_qa_deploy.deploy_scripts import EDGE, FORWARD
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.floors.f4_qa_deploy.releases import Releases
+from watchtower.engine.governor.approvals import Approvals
 
 
 class Docker:
@@ -38,17 +39,29 @@ class Docker:
 
 @pytest.fixture
 def setup(conn, settings):
-    def make(health=lambda port: True, busy=(), **docker_kw):
+    def make(health=lambda port: True, busy=(), signed=True, **docker_kw):
         ws = settings.home / "workspaces" / "job1"
         ws.mkdir(parents=True, exist_ok=True)
         (ws / "app.py").write_text("print('app')\n")
         (ws / "test_app.py").write_text("import unittest\n")
         Releases(conn).record("job1", "app.py", ws, ["app.py", "test_app.py"])
+        if signed:  # 8a: the owner approved the app's sign-off
+            approvals = Approvals(conn)
+            approvals.decide(approvals.request("job1", "signoff", "app"), True)
         docker = Docker(**docker_kw)
         dep = Deployer(settings, conn, AuditLog(conn), run=docker, health=health,
                        port_free=lambda p: p not in busy)
         return dep, docker, ws
     return make
+
+
+def test_deploy_refuses_a_release_the_owner_never_signed_off(setup):
+    dep, docker, _ = setup(signed=False)  # 8a (D-M1): e.g. released by --yes before 8a
+    with pytest.raises(DeployError, match="sign-off") as err:
+        dep.deploy("job1")
+    assert docker.calls == []
+    # review r3: `watchtower approve` cannot sign off a done job; re-running it is the only way forward
+    assert "watchtower run" in str(err.value) and "approve" not in str(err.value)
 
 
 def test_deploy_builds_offline_and_runs_isolated_on_localhost(setup):
@@ -231,6 +244,17 @@ def test_rollback_skips_targets_whose_image_is_gone_before_stopping_anything(set
     with pytest.raises(DeployError, match="nothing to roll back"):
         dep.rollback("app")
     assert not any(c[:3] == ["docker", "rm", "-f"] for c in docker.calls[before:])
+
+
+def test_rollback_never_reactivates_a_job_the_owner_never_signed_off(setup, conn):
+    dep, docker, _ = setup()
+    dep.deploy("job1")
+    dep.deploy("job1")
+    conn.execute("UPDATE approvals SET status='rejected'")  # as if job1 was released by --yes before 8a
+    before = len(docker.calls)
+    with pytest.raises(DeployError, match="nothing to roll back"):
+        dep.rollback("app")
+    assert not any(c[:2] == ["docker", "run"] for c in docker.calls[before:])
 
 
 def test_prune_never_deletes_rollback_targets_for_failed_deploys(setup):
