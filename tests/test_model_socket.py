@@ -95,6 +95,7 @@ def test_budget_exceeded_stops(parts):
     settings, budget, audit = parts
     budget.open("tiny", max_tokens=5, max_seconds=600, max_usd=0.0)
     sock, _ = make(parts)
+    sock.ask("small", [{"role": "user", "content": "x"}], "tiny")  # 8b: an overshooting reply is kept
     with pytest.raises(BudgetExceeded):
         sock.ask("small", [{"role": "user", "content": "x"}], "tiny")
 

@@ -244,7 +244,7 @@ class ModelSocket:
             self._audit.append("model_socket", "model_error", {"model": model, "error": "malformed response"}, job_id)
             raise ModelUnavailable(f"{model} returned a malformed response") from e
         usd = 0.0 if local else _litellm_cost(resp)
-        self._budget.charge(job_id, tokens=pt + ct, seconds=seconds, usd=usd)
+        self._budget.record(job_id, tokens=pt + ct, seconds=seconds, usd=usd)  # over the cap: kept; next check stops
         self._audit.append(
             "model_socket", "model_reply",
             {"model": model, "tokens": pt + ct, "seconds": round(seconds, 3), "usd": usd}, job_id,
