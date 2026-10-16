@@ -194,3 +194,14 @@ def test_notes_only_replies_are_retried_and_json_memo_only_is_kept(parts):
     assert len(seen) == 2 and out["files"] == [] and out["notes"]  # after the last try, the notes reach the coder
     out = sock(['{"files": [], "memo": {"to": "f3", "question": "port?"}}'], []).ask_files("work", msgs, "j")
     assert out["memo"] == {"to": "f3", "question": "port?"}
+
+
+def test_a_prose_fence_after_the_code_is_not_part_of_the_file():  # 8c (audit A-F6): it was a SyntaxError
+    reply = ("### FILE: app.py\n```python\nprint('hi')\n```\nRun it with:\n```\npython app.py\n```\n"
+             "### FILE: index.html\n```html\n<p>x</p>\n```\nOpen it:\n```\nopen index.html\n```\n")
+    assert parse_files(reply)["files"] == [{"path": "app.py", "content": "print('hi')\n"},
+                                           {"path": "index.html", "content": "<p>x</p>\n"}]
+    md = "### FILE: notes.md\n```markdown\n# A\n```bash\nls\n```\nend\n```\nThat's all.\n```\nx\n```\n"
+    assert parse_files(md)["files"][0]["content"] == "# A\n```bash\nls\n```\nend\n"  # ```lang opens a pair
+    broken = "### FILE: app.py\n```python\nif x\n```\nRun:\n```\npython app.py\n```\n"
+    assert parse_files(broken)["files"][0]["content"].startswith("if x\n```\nRun:")  # nothing parses: unchanged

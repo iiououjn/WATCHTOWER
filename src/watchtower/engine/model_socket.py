@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ast
 import json
 import re
 import time
+import warnings
 from dataclasses import dataclass
 from typing import Callable
 
@@ -86,11 +88,39 @@ def _header(line: str) -> tuple[str, str] | None:
     return (m.group(1).upper(), path) if m and _PATH_OK.fullmatch(path) else None
 
 
+def _close(path: str, lines: list[str], open_at: int, closes: list[int], fence: str, indent: str) -> int:
+    """Which closing fence ends a file (8c, audit A-F6: a prose fence after the code made app.py a SyntaxError).
+    Python: the last one whose body parses (``` inside a string still works; nothing parses → the last). Other
+    files: the first bare fence not paired with a ```lang fence opened inside the body."""
+    if path.endswith(".py"):
+        for k in reversed(closes[-10:]):
+            body = "\n".join(ln[len(indent):] if indent and ln.startswith(indent) else ln
+                             for ln in lines[open_at + 1:k])
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    ast.parse(body)
+                return k
+            except (SyntaxError, ValueError, RecursionError, MemoryError):
+                continue
+        return closes[-1]
+    depth = 0
+    for k in range(open_at + 1, closes[-1] + 1):
+        line = lines[k].strip()
+        if k in closes:
+            if not depth:
+                return k
+            depth -= 1
+        elif line.startswith(fence) and line.lstrip(fence[0]).strip():  # ```bash: an inner block opens
+            depth += 1
+    return closes[-1]
+
+
 def parse_files(text: str) -> dict:
     """Code as plain fenced blocks ('### FILE: path' + a fence), so no character ever needs escaping — the
     coder's JSON escaping of newlines and quotes was the commonest cause of broken files. A file starts at a
-    marked header followed by a fence and ends at the LAST closing fence before the next file (so ``` lines
-    inside code never cut it short); a block with no closing fence is rejected with a note, never written half.
+    marked header followed by a fence and ends at the closing fence _close() picks before the next file (so ```
+    lines inside code never cut it short); a block with no closing fence is rejected with a note, never written half.
     DELETE / MEMO lines count only outside code; the model's own order is kept."""
     lines = (text or "").replace("\r\n", "\n").split("\n")
     starts = []  # (header line, fence line, path)
@@ -113,9 +143,10 @@ def parse_files(text: str) -> dict:
             notes.append(f"File {path} was cut off (no closing fence); send it again, shorter" if last else
                          f"File {path} was not closed with a fence before the next file; it was not written")
             continue
-        body = [ln[len(indent):] if indent and ln.startswith(indent) else ln for ln in lines[open_at + 1:closes[-1]]]
+        close = _close(path, lines, open_at, closes, fence, indent)
+        body = [ln[len(indent):] if indent and ln.startswith(indent) else ln for ln in lines[open_at + 1:close]]
         entries.append((head_at, {"path": path, "content": "\n".join(body) + ("\n" if body else "")}))
-        outside += list(range(closes[-1] + 1, end))
+        outside += list(range(close + 1, end))
     memo = None
     for k in outside:  # text outside every code block: deletes, a memo, headers that never got a fence
         head = _header(lines[k])
