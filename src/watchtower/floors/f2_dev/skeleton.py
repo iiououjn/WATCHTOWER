@@ -169,26 +169,30 @@ def store_problems(ws: Workspace) -> list[str]:
 
 
 def _scan(name: str, safe: set[str], tree: ast.Module) -> list[str]:
-    """7c: imports, banned names and dunders, for one file; the first problem only."""
+    """7c: imports, banned names and dunders, for one file; the first problem only, with its fix (8c, C-M1)."""
+    test = name == STORE_TESTS
+    allowed = f"import only {', '.join(sorted(safe - {'__future__'}))}"
     for node in ast.walk(tree):  # an accident guard, not a sandbox: Docker and the owner's read are that
-        why, test = "", name == STORE_TESTS
+        why, fix = "", "remove it"
         if isinstance(node, ast.Import):
-            why = next((f"imports {a.name}" for a in node.names if a.name.split(".")[0] not in safe), "")
+            why, fix = next((f"imports {a.name}" for a in node.names if a.name.split(".")[0] not in safe), ""), allowed
         elif isinstance(node, ast.ImportFrom):
             mod = node.module or ""
-            why = (f"imports {'.' * node.level}{mod}" if node.level or mod.split(".")[0] not in safe else
-                   next((f"imports {a.name} from {mod}" for a in node.names if a.name == "*"
-                         or a.name.startswith("_") and mod != "__future__" or a.name in DANGER - safe), ""))
-        elif isinstance(node, ast.Attribute):
-            private = node.attr.startswith("__") or node.attr.startswith("_") and not test  # 8c: store._x in tests
-            why = f"uses .{node.attr}" if (private or node.attr in BANNED
+            why, fix = ((f"imports {'.' * node.level}{mod}", allowed) if node.level or mod.split(".")[0] not in safe
+                        else (next((f"imports {a.name} from {mod}" for a in node.names if a.name == "*"
+                                    or a.name.startswith("_") and mod != "__future__" or a.name in DANGER - safe), ""),
+                              f"import {mod} itself and use its public names"))
+        elif isinstance(node, ast.Attribute):  # private module aliases (collections._sys) reach sys: store.py only
+            dunder, private = node.attr.startswith("__"), node.attr.startswith("_") and not test
+            why = f"uses .{node.attr}" if (dunder or private or node.attr in BANNED - {"compile"}  # re.compile
                                            or node.attr in DANGER - safe) else ""
+            fix = "rename it without the leading underscore" if private and not dunder else fix
         elif isinstance(node, ast.Name):
             n = node.id
             why = f"uses {n}" if n in BANNED or n.startswith("__") and n not in (
-                "__name__", "__init__", *(("__file__",) if test else ())) else ""
+                "__name__", "__init__", "__all__", "__slots__", *(("__file__",) if test else ())) else ""
         if why:
-            return [f"{name} {why}: the tower runs the web server; {name} only keeps data in memory"]
+            return [f"{name} {why}: {fix}" + ("" if test else f" ({name} only keeps data in memory)")]
     return []
 
 

@@ -77,3 +77,27 @@ def test_auto_repair_adds_only_imports_the_file_may_have(tmp_path):  # C-H2.3: `
     floor._write([{"path": "test_store.py", "content": "import store\nD = tempfile.mkdtemp()\nX = os.sep\n"}])
     text = Workspace(tmp_path).read("test_store.py")
     assert "import os" in text and "import tempfile" not in text
+
+
+def test_ordinary_store_code_is_not_rejected(tmp_path):  # C-M1: re.compile, __all__, __slots__
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    for fine in ("import re\nPAT = re.compile('[a-z]+')\n", "__all__ = ['add', 'items']\n",
+                 "class Entry:\n    __slots__ = ('name',)\n"):
+        ws.write("store.py", STORE + fine)
+        assert store_problems(ws) == [], fine
+
+
+def test_every_store_problem_says_what_to_do(tmp_path):  # C-M1: "only keeps data in memory" was no fix
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    ws.write("store.py", STORE)
+    ws.write("test_store.py", "import tempfile\nimport store\n")
+    [p] = store_problems(ws)
+    assert "imports tempfile: import only" in p and "unittest" in p and "in memory" not in p and len(p) <= 200
+    ws.delete("test_store.py")
+    for code, fix in (("import os\n", "import only collections"), ("exec('1')\n", "remove it"),
+                      ("class S:\n    def __init__(self):\n        self._rows = []\n", "leading underscore")):
+        ws.write("store.py", STORE + code)
+        [p] = store_problems(ws)
+        assert fix in p and len(p) <= 200, p
