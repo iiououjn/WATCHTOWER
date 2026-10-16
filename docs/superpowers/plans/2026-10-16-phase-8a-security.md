@@ -40,11 +40,13 @@ D-M7 (security); E-A6, E-T2, E-S5, E-S7 (tests/stack). Baseline `uv run pytest -
    thread per pipe keeping a bounded tail; output is decoded with `errors="replace"`.
 5. `_clean` strips Unicode `Cc`/`Cf` except `\n`/`\t`; `status`, `logs`, the failed reason and the CPO error go
    through it.
-6. `Workspace.write_tower` records the hash of what the tower wrote; `snapshot` stubs only those paths, and
-   only while the bytes still match. `skeleton.apply` writes the server through it.
+6. `Workspace.write_tower` records the hash of what the tower wrote (shared per workspace root in this
+   process: the tower re-opens the workspace per step); `snapshot` stubs only those paths, and only while the
+   bytes still match. `skeleton.apply` writes the server through it.
 7. `Settings.sandbox_image` = `python:3.14.8@sha256:b9767f56…` (the digest already local, so no pull and no
-   behaviour change); `WATCHTOWER_SANDBOX_IMAGE` must be digest-pinned. `.python-version` = 3.12; CI uses it
-   with `uv sync --locked`.
+   behaviour change); `WATCHTOWER_SANDBOX_IMAGE` must be digest-pinned (`name[:tag]@sha256:<64 hex>`, which
+   also keeps docker flags and Dockerfile lines out). `.python-version` = 3.12 (uv reads it); CI runs
+   `uv sync --locked`.
 8. litellm offline env (D-M3): skipped — batch 4 removes litellm.
 
 ## Critique, counters, rulings
@@ -80,6 +82,10 @@ D-M7 (security); E-A6, E-T2, E-S5, E-S7 (tests/stack). Baseline `uv run pytest -
   every existing check (3.14 → 3.12). **Ruling:** pin the 3.14.8 digest already local; the 3.12 vs 3.14 stdlib
   mismatch is batch 3 (C-M4). Cost if wrong: the owner pulls once if the digest is missing (`doctor` says so).
 - *Strip `Cf` everywhere* also drops soft hyphens and joiners from model text in the terminal. Cost: cosmetic.
+- *`logs` was already safe* (the detail dict's repr escapes control characters); it goes through `_clean` too, so
+  a later change to the detail format cannot reopen it. Its test is a regression guard, not RED-first.
+- *`--yes` legacy path:* a checkpoint saved before 8a with no `signoff_id` reuses the job's latest sign-off row or
+  requests one, then waits. The request step and this path each have their own test (either alone would hold).
 - Reviews: 3 rounds (security).
 
 ## Review Focus
@@ -101,3 +107,8 @@ D-M7 (security); E-A6, E-T2, E-S5, E-S7 (tests/stack). Baseline `uv run pytest -
 5. Terminal-safe CLI output.
 6. Tower-mark stub only for tower-written bytes.
 7. Pin the sandbox image (digest) and the project Python (`.python-version`, CI).
+
+## Result
+
+Seven task commits, each RED first; every new guard mutation-checked (removing it fails its test).
+`uv run pytest -q` → 1132 passed (baseline 1097; +35 tests), on Python 3.12.12.
