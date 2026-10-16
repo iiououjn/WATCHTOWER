@@ -28,6 +28,7 @@ class Settings:
     sandbox_image: str = "python:latest"
     num_ctx: int = 6144  # set explicitly so Ollama never silently truncates the system prompt
     max_output_tokens: int = 2048
+    call_timeout_s: int = 600  # one model call; real replies took up to 327 s on 8 GB (runs 36-39)
     online: bool = False  # the Beacon may search the web
 
     @property

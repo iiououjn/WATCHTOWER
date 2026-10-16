@@ -204,17 +204,11 @@ class ModelSocket:
         if not local and not self._s.cloud_enabled:
             raise CloudDisabled(f"cloud model {model} is disabled; enable cloud models explicitly")
         self._budget.check(job_id)
-        usage = self._budget.usage(job_id)
         if local:
             self._swap_to(model, job_id)
 
         self._audit.append("model_socket", "model_call", {"tier": tier, "model": model}, job_id)
-        kwargs = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max(1, min(self._s.max_output_tokens, usage["max_tokens"] - usage["used_tokens"])),
-            "timeout": max(1.0, usage["max_seconds"] - usage["used_seconds"]),
-        }
+        kwargs = {"model": model, "messages": messages}
         if local:
             kwargs["api_base"] = self._s.ollama_url
             kwargs["num_ctx"] = self._s.num_ctx
@@ -224,11 +218,13 @@ class ModelSocket:
             if attempt:  # a transient failure: back off, then only if the budget still has room
                 self._sleep(RETRY_DELAYS[attempt - 1])
                 self._budget.check(job_id)
+            kwargs.update(self._limits(job_id))
             start = self._clock()
             try:
                 resp = self._complete(**kwargs)
                 break
             except Exception as e:
+                self._budget.record(job_id, seconds=self._clock() - start)  # a failed call costs its time too
                 retry = transient(e) and attempt < len(RETRY_DELAYS)
                 self._audit.append(
                     "model_socket", "model_error",
@@ -254,6 +250,12 @@ class ModelSocket:
             {"model": model, "tokens": pt + ct, "seconds": round(seconds, 3), "usd": usd}, job_id,
         )
         return Reply(text, model, pt, ct, seconds, usd)
+
+    def _limits(self, job_id: str) -> dict:
+        """This call's hard limits: what is left of the job's budget, and never more than one call's timeout."""
+        usage = self._budget.usage(job_id)
+        return {"max_tokens": max(1, min(self._s.max_output_tokens, usage["max_tokens"] - usage["used_tokens"])),
+                "timeout": max(1.0, min(self._s.call_timeout_s, usage["max_seconds"] - usage["used_seconds"]))}
 
     def ask_files(self, tier: str, messages: list[dict], job_id: str, retries: int = 1) -> dict:
         """Ask for files as fenced blocks (plain text, no JSON escaping). A JSON {"files": [...]} reply is still
