@@ -77,3 +77,20 @@ def test_owner_alive_reads_the_job_lock(env, settings):
         fcntl.flock(other, fcntl.LOCK_EX)
         assert owner_alive(settings.home, job.id) is True
     assert owner_alive(settings.home, job.id) is False
+
+
+def test_an_unexpected_error_pauses_with_the_error_recorded(env):
+    import sqlite3
+    runner, jobs, bus, model, unloaded, job = env
+    real = runner._socket.ask
+
+    def locked(*a, **kw):
+        runner._socket.ask = real  # the database is busy once (A-F9), then fine again
+        raise sqlite3.OperationalError("database is locked")
+    runner._socket.ask = locked
+    out = runner.start(job.id, "small")
+    assert out.status == "paused" and out.reason.startswith("unexpected error: OperationalError: database is locked")
+    error = bus.events(job_id=job.id, topic="job.error")[-1].detail
+    assert error["type"] == "OperationalError" and "database is locked" in error["error"]
+    assert "runner.py:" in error["where"]
+    assert runner.resume(job.id).status == "done"

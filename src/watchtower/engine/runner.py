@@ -4,6 +4,7 @@ import fcntl
 import signal
 import sqlite3
 import threading
+import traceback
 from contextlib import contextmanager
 from pathlib import Path
 from dataclasses import dataclass
@@ -180,11 +181,23 @@ class JobRunner:
             return self._end(job_id, "paused", f"{e}; resume it")
         except FAIL_ERRORS as e:
             return self._end(job_id, "failed", str(e))
-        except Exception as e:
-            return self._end(job_id, "failed", f"unexpected error: {type(e).__name__}: {str(e)[:200]}")
+        except Exception as e:  # 8b (A-F9): the checkpoint is intact, so an unknown error pauses and resume retries
+            self._record_error(job_id, e)
+            return self._end(job_id, "paused", f"unexpected error: {type(e).__name__}: {str(e)[:200]}")
         if result.status == "paused":
             return self._end(job_id, "paused", result.reason)
         return self._end(job_id, "done", None, result.data.get("answer"))
+
+    def _record_error(self, job_id: str, error: Exception) -> None:
+        """Where the tower's own code raised (the last frame inside the package), for the owner and the audit."""
+        frames = traceback.extract_tb(error.__traceback__)
+        frame = ([f for f in frames if "/watchtower/" in f.filename] or frames or [None])[-1]
+        where = f"{frame.filename.rsplit('/watchtower/', 1)[-1]}:{frame.lineno}" if frame else "?"
+        try:
+            self._bus.publish("job.error", {"type": type(error).__name__, "error": str(error)[:300], "where": where},
+                              job_id)
+        except Exception:  # noqa: BLE001 — recording must never replace the error being reported
+            pass
 
     def _end(self, job_id: str, status: str, reason: str | None, answer: str | None = None) -> RunOutcome:
         # record the outcome first, so a second Ctrl-C during cleanup cannot leave the job 'running'

@@ -70,7 +70,7 @@ def test_run_rejects_non_positive_max_tokens(monkeypatch, bad):
     assert "No jobs" in runner.invoke(cli.app, ["status"]).output
 
 
-@pytest.mark.parametrize("exc,code,status", [(KeyboardInterrupt, 3, "paused"), (RuntimeError, 1, "failed")])
+@pytest.mark.parametrize("exc,code,status", [(KeyboardInterrupt, 3, "paused"), (RuntimeError, 3, "paused")])
 def test_unexpected_error_never_leaves_job_running(monkeypatch, exc, code, status):
     class Exploding:
         def ask(self, *a, **kw):
