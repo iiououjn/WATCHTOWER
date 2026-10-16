@@ -316,6 +316,8 @@ def qa_headline(results: list[dict], passed: bool | None = None, decide: int = 0
     soft = "; ".join(str(r.get("name"))[:40] for r in advisory if r.get("pass") is not True)
     tail = f"; advisory failing: {soft}" if soft else ""
     tag = " tower" if decide else ""
+    if not bad and passed is False and advisory:  # 7b review r1 M3
+        return f"QA checks FAILED: no check with page text passed; {len(advisory)} judged by status only"[:300]
     if not bad and passed is False:
         return f"QA checks FAILED (0/{len(deciding)}{tag}): the QA run timed out or its result was incomplete"
     if not bad:
@@ -351,17 +353,20 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
     # 7b (run 35): with no tower checks, a model check that got its status but not its text is advisory when
     # that text is computed (exact prose, wrong maths): the coder cannot fix the check. Echo checks (text some
     # check posted) still gate: those the model cannot get wrong
+    def echo(text: str) -> bool:  # either way round: post 'Buy milk', expect 'milk' (review r1 M4)
+        return any(v in text or (len(text.strip()) >= 3 and text.strip() in v) for v in posted)
     posted = {str(v).strip() for c in checks for v in c.get("form", {}).values()
               if len(str(v).strip()) >= 3 and re.search(r"[A-Za-z]", str(v))}
+    results = [{k: v for k, v in r.items() if k != "advisory"} for r in results]  # only run_qa marks advisory
     soft = set() if decide or not complete else {
         i for i, (r, c) in enumerate(zip(results, checks)) if r.get("pass") is not True
         and type(r.get("status")) is int and r["status"] == c["expect_status"]
-        and not c.get("expect_escaped") and not c.get("expect_form")
-        and not any(v in str(c.get("expect_text", "")) for v in posted)}
+        and not c.get("expect_escaped") and not c.get("expect_form") and not echo(str(c.get("expect_text", "")))}
     results = [{**r, "advisory": True} if i in soft else r for i, r in enumerate(results)]
     deciding = results[:decide] if decide and complete else [r for i, r in enumerate(results) if i not in soft]
-    passed = (not result.timed_out and all(r.get("pass") is True for r in deciding)
-              and (not soft or any(r.get("pass") is True for r in results)))  # one check must fully pass
+    passed = (not result.timed_out and all(r.get("pass") is True for r in deciding)  # and one check with real
+              and (not soft or any(r.get("pass") is True and re.search(r"\w{2,}", c["expect_text"])  # text
+                                   for r, c in zip(results, checks))))  # fully passed: '' matches any page (r1 I2)
     advisory = {i for i, r in enumerate(results) if decide and complete and i >= decide and r.get("pass") is not True}
     advisory |= soft
     hints = _same_request_hints(checks, results)

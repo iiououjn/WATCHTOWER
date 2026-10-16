@@ -285,7 +285,7 @@ CALC = [{"name": "tip", "method": "POST", "path": "/calc", "form": {"bill": "10"
 
 def test_without_tower_checks_a_wrong_text_with_the_right_status_is_advisory():  # 7b (run 35)
     qa = _status_only([{"name": "home", "pass": True, "status": 200},
-                       {"name": "tip", "pass": False, "status": 200, "detail": "expected ... got 200"}], MODEL + CALC)
+                       {"name": "tip", "pass": False, "status": 200, "detail": "expected ... got 200"}], [HOME] + CALC)
     assert qa["pass"] is True and qa["advisory_failed"] == 1 and qa["results"][1]["pass"] is False
 
 
@@ -325,3 +325,43 @@ def test_an_echo_check_keeps_gating():  # 7b: text the check posted itself is no
     qa = _status_only([{"name": "home", "pass": True, "status": 200}, {"name": "tip", "pass": False, "status": 200}],
                       checks)
     assert qa["pass"] is False
+
+
+HOME = {"name": "home", "method": "GET", "path": "/", "form": {}, "expect_status": 200, "expect_text": "Tip calculator"}
+
+
+def test_the_gate_hears_status_only_not_tower_checks_passed():  # 7b review r1 I1
+    from watchtower.floors.f4_qa_deploy.contract import QA_ADVISORY, gate_qa_note
+    assert gate_qa_note({"pass": True, "decide": 0, "advisory_failed": 1})[0].startswith("1 model QA check")
+    assert gate_qa_note({"pass": True, "decide": 3, "advisory_failed": 1}) == (QA_ADVISORY,)
+    assert gate_qa_note({"pass": False, "decide": 0, "advisory_failed": 1}) == ()
+    assert gate_qa_note({"pass": True, "decide": 0, "advisory_failed": 0}) == ()
+
+
+def test_status_only_needs_a_full_pass_with_real_text():  # 7b review r1 I2: '' matches any page
+    post = {**HOME, "name": "post", "method": "POST", "expect_text": ""}
+    qa = _status_only([{"name": "post", "pass": True, "status": 200}, {"name": "tip", "pass": False, "status": 200}],
+                      [post] + CALC)
+    assert qa["pass"] is False
+    ok = _status_only([{"name": "home", "pass": True, "status": 200}, {"name": "tip", "pass": False, "status": 200}],
+                      [HOME] + CALC)
+    assert ok["pass"] is True
+
+
+def test_the_board_says_why_a_status_only_suite_failed():  # 7b review r1 M3
+    from watchtower.floors.f4_qa_deploy.qafloor import qa_headline
+    line = qa_headline([{"name": "tip", "pass": False, "advisory": True}], False)
+    assert "timed out" not in line and "no check with page text passed" in line
+
+
+def test_an_echo_check_counts_both_ways():  # 7b review r1 M4: post 'Buy milk', expect 'milk'
+    checks = [HOME, {**CALC[0], "form": {"item": "Buy milk"}, "expect_text": "milk"}]
+    qa = _status_only([{"name": "home", "pass": True, "status": 200}, {"name": "tip", "pass": False, "status": 200}],
+                      checks)
+    assert qa["pass"] is False
+
+
+def test_an_incoming_advisory_flag_is_ignored():  # 7b review r1: only run_qa marks advisory
+    qa = _status_only([{"name": "home", "pass": True, "status": 200},
+                       {"name": "tip", "pass": False, "status": 500, "advisory": True}], [HOME] + CALC)
+    assert qa["pass"] is False and "advisory" not in qa["results"][1]

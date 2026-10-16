@@ -12,6 +12,19 @@ from watchtower.floors.f4_qa_deploy.qafloor import parse_checks
 
 QA_ADVISORY = ("small-model QA checks failed (advisory) but the tower's contract checks passed: "
                "judge the app on the contract checks and the spec")
+
+
+def gate_qa_note(qa: dict) -> tuple[str, ...]:
+    """What the gate hears about advisory QA failures on a passing F4 (7b review r1 I1): with tower checks,
+    QA_ADVISORY; without, that model checks were judged by status only (the page text is unverified)."""
+    if not (qa.get("pass") and qa.get("advisory_failed")):
+        return ()
+    if qa.get("decide"):
+        return (QA_ADVISORY,)
+    return (f"{qa['advisory_failed']} model QA check(s) judged by status only: the page text did not match the "
+            "small model's expected text, which may itself be wrong; check the spec's results yourself",)
+
+
 _ADDS = re.compile(r"add|new|create|submit|post|save|entr|message|item|comment|note|todo|guest", re.I)
 _DESTRUCTIVE = re.compile(r"delete|remove|clear|done|toggle|edit|update|complete|sign|log", re.I)
 _TEXT = {"item", "task", "todo", "title", "name", "text", "message", "body", "content", "note", "comment",

@@ -27,7 +27,7 @@ from watchtower.floors.f5_oversight.oversight import security_package, security_
 from watchtower.floors.f5_oversight.probe import xss_probe
 from watchtower.floors.f2_dev.handoff import board_line, f2_handoff, for_gate, static_feedback
 from watchtower.floors.f2_dev.skeleton import apply as apply_skeleton, page_text
-from watchtower.floors.f4_qa_deploy.contract import QA_ADVISORY, coder_token, contract_checks, fresh_token
+from watchtower.floors.f4_qa_deploy.contract import coder_token, gate_qa_note, contract_checks, fresh_token
 from watchtower.floors.f4_qa_deploy.qafloor import QAFloor, qa_headline, run_qa
 from watchtower.engine.advisory import ADVISORY_ERRORS
 from watchtower.beacon.glass import INJECTION, normalize
@@ -51,8 +51,8 @@ MEMO_PROMPT = (
 BOARD_HEADER = "\n\nTower board (what the other floors know and what comes next):\n"
 DEV_ROUTES = ("research", "design", "code")
 OWNED_NOTE = ("Note: the tower wrote the web server; a local AI wrote store.py and its tests, tested only "
-              "inside the sandbox. Read store.py before running it. Data is kept in memory: it is lost "
-              "when the app stops.\n")  # 7b (run 34): the spec may promise more
+              "inside the sandbox. Read store.py before running it. store.py was asked to keep data in memory: "
+              "it is likely lost when the app stops.\n")  # 7b (run 34): the spec may promise more
 CONTEXT_CHARS = 1500
 QUESTIONS_PROMPT = (
     "Owner's goal:\n{goal}\n\nReference data:\n{context}\n\nAsk at most 3 short clarifying questions whose answers would most change "
@@ -196,8 +196,7 @@ class TowerPipeline:
                         audit = oversight.audit(spec, focus, ws.snapshot(3000), f4.summary)
                 later = [p for p in (f3, f4, sec) if p is not None]
                 f2_summary, f2_questions, notes = for_gate(package.summary, package.open_questions, tests_ok)
-                notes += (QA_ADVISORY,) if f4 is not None and f4.checks_run[-1]["pass"] and f4.checks_run[-1].get(
-                    "advisory_failed") else ()
+                notes += gate_qa_note(f4.checks_run[-1]) if f4 is not None else ()
                 package = WorkPackage("dev", "\n\n".join([f2_summary] + [p.summary for p in later]
                                                          + ([f"Oversight audit:\n{audit}"] if audit else []))
                                       + f"\n\nCode:\n{ws.snapshot(3000)}", ws.files(), [],
