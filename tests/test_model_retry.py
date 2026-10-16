@@ -1,5 +1,5 @@
 """8b: transient model failures (connection reset, timeout, 5xx) are retried with backoff at the socket's own
-call boundary, so the retry outlives the library behind it (litellm today, httpx later)."""
+call boundary, so the retry outlives the client behind it (litellm until 8d, a direct httpx call since)."""
 import sqlite3
 
 import pytest
@@ -11,11 +11,11 @@ from watchtower.engine.governor.budget import Budget, BudgetExceeded
 from watchtower.engine.model_socket import LowMemory, ModelSocket, ModelUnavailable, transient
 
 
-class APIConnectionError(Exception):  # litellm's name for a dropped connection
+class NetworkError(Exception):  # httpx's name for a dropped connection
     pass
 
 
-class ReadTimeout(APIConnectionError):  # a subclass: matched through the MRO
+class ReadTimeout(NetworkError):  # a subclass: matched through the MRO
     pass
 
 
@@ -24,7 +24,7 @@ class Status(Exception):
         super().__init__(f"HTTP {code}")
         if on_response:  # httpx.HTTPStatusError carries it on .response
             self.response = type("R", (), {"status_code": code})()
-        else:  # litellm's errors carry it on the exception
+        else:  # a client error may carry it on the exception
             self.status_code = code
 
 
@@ -53,7 +53,7 @@ def real_delays(monkeypatch):
 
 
 @pytest.mark.parametrize("error", [ConnectionError("reset by peer"), TimeoutError("timed out"),
-                                   APIConnectionError("refused"), ReadTimeout("slow"),
+                                   NetworkError("refused"), ReadTimeout("slow"),
                                    Status(503), Status(500, on_response=True)])
 def test_transient_errors_are_retried_with_backoff(conn, settings, error):
     sleeps = []
@@ -161,18 +161,6 @@ def test_a_reply_that_overshoots_the_budget_is_kept(conn, settings):
     assert budget.usage("o")["used_tokens"] == 5990
     with pytest.raises(BudgetExceeded):  # the cap stops the next call
         sock.ask("small", [{"role": "user", "content": "x"}], "o")
-
-
-def _litellm_errors():
-    litellm = pytest.importorskip("litellm")  # skipped once litellm is swapped out; the stand-ins above remain
-    args = {"message": "x", "model": "m", "llm_provider": "ollama"}
-    return litellm.Timeout(**args), litellm.APIConnectionError(**args), litellm.NotFoundError(**args)
-
-
-def test_real_litellm_errors_are_classified():
-    timeout, dropped, missing = _litellm_errors()
-    assert timeout.status_code == 408  # a timeout carries a 4xx code, so the name has to win over it
-    assert transient(timeout) and transient(dropped) and not transient(missing)
 
 
 def test_a_retry_reads_ram_again_before_reloading(conn, settings):
