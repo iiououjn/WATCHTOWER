@@ -457,3 +457,16 @@ def test_the_store_contract_sees_every_rebinding(tmp_path):  # 7d review r1 M1-M
                  "def helper():\n    items = 2\n    return items\n"):
         ws.write("store.py", base + fine)
         assert not any("def items(" in p or "def add(" in p for p in store_problems(ws)), fine
+
+
+def test_the_store_contract_survives_a_deep_store_and_reads_python_scopes(tmp_path):  # 7d review r2
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    base = "E = []\n\ndef add(entry):\n    E.append(entry)\n\ndef items():\n    return E\n"
+    ws.write("store.py", base + "S = " + " + ".join(["'a'"] * 3000) + "\n")
+    assert any("store.py" in p for p in store_problems(ws))  # a problem, never a crash (I1)
+    for fine in ("X = [items for items in E]\n", "items: list\n"):  # comprehension-local; annotation binds nothing
+        ws.write("store.py", base + fine)
+        assert not any("def items(" in p for p in store_problems(ws)), fine
+    ws.write("store.py", base + "X = [(items := 1) for _ in E]\n")  # a walrus in a comprehension binds the module
+    assert any("def items(" in p for p in store_problems(ws))

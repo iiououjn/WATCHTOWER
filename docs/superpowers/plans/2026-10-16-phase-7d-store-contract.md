@@ -35,3 +35,10 @@ M1-M3, M5: scoped binding collector — module-level del, except-as, match names
 targets, a later class/async def/second def of the name, and `global` in any function count as rebinding;
 class and function bodies stay local. Tests for each, plus legit decorated/hinted/class-attribute stores.
 M4 deferred: with 4+ problems only 3 are shown, so a contract problem can wait one round (rare).
+
+## Review round 2 (fixed)
+
+I1 a deep store crashed F2 (RecursionError in the collector) and a parse overflow silently skipped the 7c
+scan: both now report "nested too deeply to check" (scan split into `_scan`). M2 comprehension targets are
+local; M3 bare annotations bind nothing. Deferred (contrived): walrus in defaults/decorators/bases/lambdas,
+`case {**items}`; a conditional def gets a "rename" hint though it still blocks.

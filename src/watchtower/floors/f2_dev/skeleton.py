@@ -155,30 +155,40 @@ def store_problems(ws: Workspace) -> list[str]:
             continue
         try:
             tree = ast.parse(ws.read(name))
-        except (SyntaxError, ValueError, RecursionError, MemoryError):
+        except (SyntaxError, ValueError):
             continue  # the unit tests report it
-        for node in ast.walk(tree):  # an accident guard, not a sandbox: Docker and the owner's read are that
-            why, test = "", name == STORE_TESTS
-            if isinstance(node, ast.Import):
-                why = next((f"imports {a.name}" for a in node.names if a.name.split(".")[0] not in safe), "")
-            elif isinstance(node, ast.ImportFrom):
-                mod = node.module or ""
-                why = (f"imports {'.' * node.level}{mod}" if node.level or mod.split(".")[0] not in safe else
-                       next((f"imports {a.name} from {mod}" for a in node.names if a.name == "*"
-                             or a.name.startswith("_") and mod != "__future__" or a.name in DANGER - safe), ""))
-            elif isinstance(node, ast.Attribute):
-                why = f"uses .{node.attr}" if (node.attr.startswith("_") or node.attr in BANNED
-                                               or node.attr in DANGER - safe) else ""
-            elif isinstance(node, ast.Name):
-                n = node.id
-                why = f"uses {n}" if n in BANNED or n.startswith("__") and n not in (
-                    "__name__", "__init__", *(("__file__",) if test else ())) else ""
-            if why:
-                out.append(f"{name} {why}: the tower runs the web server; {name} only keeps data in memory")
-                break
-        if name == STORE:
-            out += _contract(tree)
+        except (RecursionError, MemoryError):
+            tree = None
+        try:
+            if tree is None:
+                raise RecursionError
+            out += _scan(name, safe, tree) + (_contract(tree) if name == STORE else [])
+        except (RecursionError, MemoryError):  # 7d review r2: too deep to check is a problem, never a pass or a crash
+            out.append(f"{name} is nested too deeply to check: keep it a short list and two plain functions")
     return out
+
+
+def _scan(name: str, safe: set[str], tree: ast.Module) -> list[str]:
+    """7c: imports, banned names and dunders, for one file; the first problem only."""
+    for node in ast.walk(tree):  # an accident guard, not a sandbox: Docker and the owner's read are that
+        why, test = "", name == STORE_TESTS
+        if isinstance(node, ast.Import):
+            why = next((f"imports {a.name}" for a in node.names if a.name.split(".")[0] not in safe), "")
+        elif isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            why = (f"imports {'.' * node.level}{mod}" if node.level or mod.split(".")[0] not in safe else
+                   next((f"imports {a.name} from {mod}" for a in node.names if a.name == "*"
+                         or a.name.startswith("_") and mod != "__future__" or a.name in DANGER - safe), ""))
+        elif isinstance(node, ast.Attribute):
+            why = f"uses .{node.attr}" if (node.attr.startswith("_") or node.attr in BANNED
+                                           or node.attr in DANGER - safe) else ""
+        elif isinstance(node, ast.Name):
+            n = node.id
+            why = f"uses {n}" if n in BANNED or n.startswith("__") and n not in (
+                "__name__", "__init__", *(("__file__",) if test else ())) else ""
+        if why:
+            return [f"{name} {why}: the tower runs the web server; {name} only keeps data in memory"]
+    return []
 
 
 def _contract(tree: ast.Module) -> list[str]:
@@ -188,6 +198,12 @@ def _contract(tree: ast.Module) -> list[str]:
     scoped = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
 
     def bound(node) -> None:  # module-level bindings only: a function's or class's own names stay local (r1 M1)
+        if isinstance(node, ast.comprehension):  # its target is comprehension-local; a walrus inside still binds
+            rebound.update(w.target.id for w in ast.walk(node) if isinstance(w, ast.NamedExpr)
+                           and w.target.id in ("add", "items"))
+            return
+        if isinstance(node, ast.AnnAssign) and node.value is None:  # 'items: list' binds nothing at runtime
+            return
         names = ([node.id] if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))
                  else [a.asname or a.name.split(".")[0] for a in node.names]
                  if isinstance(node, (ast.Import, ast.ImportFrom)) else
