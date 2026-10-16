@@ -422,3 +422,51 @@ def test_store_tests_may_use_sys_os_and_file(tmp_path):  # 7c review r3 I4: test
     assert store_problems(ws) == []
     ws.write("test_store.py", "import socket\n")
     assert store_problems(ws)
+
+
+def test_the_store_must_define_add_and_items_functions(tmp_path):  # 7d (run 38: a list named items, get_items())
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    bad = {"items = []\n\ndef add(entry):\n    items.append(entry)\n\ndef get_items():\n    return items[:]\n": "items",
+           "E = []\n\ndef add(entry):\n    E.append(entry)\n": "items",
+           "E = []\n\ndef items():\n    return E\n": "add",
+           "E = []\n\ndef add():\n    pass\n\ndef items():\n    return E\n": "add",
+           "E = []\n\ndef add(entry):\n    E.append(entry)\n\ndef items(n):\n    return E\n": "items",
+           "E = []\n\ndef add(entry):\n    pass\n\ndef items():\n    return E\n\nitems = E\n": "items"}
+    for code, name in bad.items():
+        ws.write("store.py", code)
+        assert any(f"def {name}(" in p for p in store_problems(ws)), code
+    for good in (STORE, "E = []\n\ndef add(entry, *rest):\n    E.append(entry)\n\ndef items(limit=None):\n    return E\n",
+                 "class S:\n    pass\n\nE = []\n\ndef add(e):\n    E.append(e)\n\ndef items():\n    return list(E)\n"):
+        ws.write("store.py", good)
+        assert store_problems(ws) == [], good
+
+
+def test_the_store_contract_sees_every_rebinding(tmp_path):  # 7d review r1 M1-M3, M5
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    base = "E = []\n\ndef add(entry):\n    E.append(entry)\n\ndef items():\n    return E\n"
+    for extra in ("del items\n", "try:\n    pass\nexcept Exception as items:\n    pass\n", "class items:\n    pass\n",
+                  "async def items():\n    return E\n", "def _init():\n    global items\n    items = []\n",
+                  "from json import loads as items\n", "for items in []:\n    pass\n",
+                  "with open('x') as items:\n    pass\n", "if (items := 1):\n    pass\n"):
+        ws.write("store.py", base + extra)
+        assert any("def items(" in p for p in store_problems(ws)), extra
+    for fine in ("class Box:\n    items = 1\n\n    def get(self):\n        items = list(E)\n        return items\n",
+                 "import functools\n\n@functools.lru_cache\ndef cached() -> list:\n    return E\n",
+                 "def helper():\n    items = 2\n    return items\n"):
+        ws.write("store.py", base + fine)
+        assert not any("def items(" in p or "def add(" in p for p in store_problems(ws)), fine
+
+
+def test_the_store_contract_survives_a_deep_store_and_reads_python_scopes(tmp_path):  # 7d review r2
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    base = "E = []\n\ndef add(entry):\n    E.append(entry)\n\ndef items():\n    return E\n"
+    ws.write("store.py", base + "S = " + " + ".join(["'a'"] * 3000) + "\n")
+    assert any("store.py" in p for p in store_problems(ws))  # a problem, never a crash (I1)
+    for fine in ("X = [items for items in E]\n", "items: list\n"):  # comprehension-local; annotation binds nothing
+        ws.write("store.py", base + fine)
+        assert not any("def items(" in p for p in store_problems(ws)), fine
+    ws.write("store.py", base + "X = [(items := 1) for _ in E]\n")  # a walrus in a comprehension binds the module
+    assert any("def items(" in p for p in store_problems(ws))
