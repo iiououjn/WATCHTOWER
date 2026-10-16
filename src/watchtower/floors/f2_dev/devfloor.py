@@ -16,7 +16,7 @@ from watchtower.floors.f2_dev.feedback import (NOTE_CAP, STUCK_NOTE, UNCHANGED_N
                                                _capped, _failure_note, _failure_rows, _problem_note, failures,
                                                stuck_note)
 from watchtower.floors.f2_dev.repair import repair_imports, repair_main, repair_names, repair_strings, sibling_names
-from watchtower.floors.f2_dev.skeleton import STORE, STORE_NOTE, STORE_TESTS
+from watchtower.floors.f2_dev.skeleton import ONLY_NOTE, STORE, STORE_NOTE, STORE_TESTS, store_problems
 from watchtower.floors.f2_dev.lint import handler_state_problems, idiom_notes
 from watchtower.floors.f2_dev.stdlib_check import import_problems
 from watchtower.engine.workspace import ALLOWED_SUFFIXES, Workspace, WorkspaceError
@@ -131,11 +131,10 @@ ESCAPE_NOTE = ('Checks with "expect_escaped": true post text containing <&> (wri
 
 
 def _qa_block(head: str, checks: Sequence[dict], store_only: bool = False) -> str:
-    """The QA checks for a coder prompt; the escape note sits outside the untrusted block (6z). With
-    `store_only` the tower wrote the server (7a), so the coder hears to keep text as given (7b)."""
+    """The QA checks for a coder prompt; notes sit outside the untrusted block (6z). `store_only`: 7a-7c."""
     if not checks:
-        return ""
-    note = (STORE_NOTE if store_only else ESCAPE_NOTE) if any(c.get("expect_escaped") for c in checks) else ""
+        return ONLY_NOTE if store_only else ""
+    note = (ONLY_NOTE if store_only else "") + (STORE_NOTE if store_only else ESCAPE_NOTE) if any(c.get("expect_escaped") for c in checks) else ""
     return head + untrusted("f4", _compact_checks(checks)) + "\n" + note
 
 
@@ -382,7 +381,7 @@ class DevFloor:
         found = handler_state_problems(self._ws) + (import_problems(self._ws) if self._stdlib_only else [])
         return [f"write {STORE} with add(entry) and items(): the tower's web server imports it"
                 if self.owned and p.endswith(f"imports {STORE[:-3]} (not in the Python standard library)") else p
-                for p in found]
+                for p in found] + (store_problems(self._ws) if self.owned else [])  # 7c r1: no server in the store
 
     def _diagnose_tests(self, report: str) -> str:
         """Floor 2 HR, only when the coder is stuck: plain words on why the same tests keep failing. Advisory."""
@@ -447,9 +446,10 @@ class DevFloor:
                 notes.append(f"{str(f.get('path'))[:100]!r} belongs to the tower's web server and was not changed: "
                              f"write {STORE} (add and items) instead")
                 continue
-            if self.owned and f.get("delete") is not True and str(given).lower() not in (STORE, STORE_TESTS):
+            if self.owned and f.get("delete") is not True and str(given) not in (STORE, STORE_TESTS):
                 notes.append(f"File rejected: {str(f.get('path'))[:100]!r}: write only {STORE} and {STORE_TESTS}")
-                continue  # 7c (run 36): a stray AI-written XSS server shipped beside the tower's
+                changed = True  # 7c (run 36): a stray AI-written XSS server shipped beside the tower's
+                continue
             if f.get("delete") is not True:
                 if written >= MAX_FILES_PER_ROUND:  # deletes don't use up the cap; writes beyond it are dropped
                     changed = True  # it sent more than was written: never tell it "unchanged"

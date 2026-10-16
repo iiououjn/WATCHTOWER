@@ -23,6 +23,16 @@ STORE_NOTE moved to skeleton.py (devfloor.py stays under 500 lines).
 - *Stray files already on disk* (written before the skeleton applied): out of scope; run 36's came from the
   build loop. Cost if wrong: a stray from an earlier plan ships (the owner reads the file list).
 
+## Review round 1 (fixed)
+
+- I1 server moved into store.py: `store_problems` blocks store.py/test_store.py importing http, socket,
+  socketserver, wsgiref, subprocess, multiprocessing, asyncio, ssl (also via import_module/__import__).
+- I2 an earlier plan's AI files: `apply()` deletes every file but the entry, store.py, test_store.py
+  (reverses the out-of-scope ruling: cheap, and they shipped).
+- I3 the coder hears "Write only store.py and test_store.py" up front (ONLY_NOTE, outside untrusted).
+- M4 exact names only (`Store.py` rejected). M5 a rejected file counts as a change (no UNCHANGED_NOTE).
+- Not fixed (pre-existing): `_link_entry` may rewrite the tower's entry.
+
 ## Review Focus
 
 1. Path tricks: `./store.py`, `STORE.PY`, `store.py/`, `sub/../store.py`, absolute paths, backslashes.

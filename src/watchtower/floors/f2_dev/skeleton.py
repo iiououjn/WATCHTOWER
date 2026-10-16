@@ -3,6 +3,7 @@ server and the coder writes only plain Python: store.add(entry) and store.items(
 plumbing the 7B kept getting wrong one piece per attempt (imports, quote_plus, XSS, items not shown)."""
 from __future__ import annotations
 
+import ast
 import sys
 from pathlib import PurePosixPath
 
@@ -14,6 +15,8 @@ from watchtower.floors.f4_qa_deploy.contract import contract_checks
 STORE, STORE_TESTS = "store.py", "test_store.py"
 SHADOWS = {"html.py", "os.py", "traceback.py", "http", "urllib", "store"}  # 'store/' would shadow store.py  # what the server imports: a coder copy would win
 MARK = TOWER_MARK
+ONLY_NOTE = "Write only store.py and test_store.py; any other file is rejected.\n"  # 7c review r1 I3
+NETWORK = {"http", "socket", "socketserver", "wsgiref", "subprocess", "multiprocessing", "asyncio", "ssl"}
 STORE_NOTE = ("The tower's server escapes all text when it builds the page: store.py keeps text exactly as "
               "given. Never call html.escape or quote on it.\n")  # 7b (run 33): the escape hint made it escape twice
 
@@ -136,6 +139,29 @@ def page_text(title: str) -> str:
     return title if title and html.escape(title) == title else ""
 
 
+def store_problems(ws: Workspace) -> list[str]:
+    """7c review r1: the store holds data, never a server or a process: the tower's server imports it."""
+    out = []
+    for name in (STORE, STORE_TESTS):
+        if name not in ws.files():
+            continue
+        try:
+            tree = ast.parse(ws.read(name))
+        except (SyntaxError, ValueError, RecursionError, MemoryError):
+            continue  # the unit tests report it
+        for node in ast.walk(tree):
+            mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                    else [node.module or ""] if isinstance(node, ast.ImportFrom)
+                    else [str(a.value) for a in node.args[:1] if isinstance(a, ast.Constant)]
+                    if isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", ""))
+                    in ("import_module", "__import__") else [])
+            bad = sorted({m.split(".")[0] for m in mods} & NETWORK)
+            if bad:
+                out.append(f"{name} imports {bad[0]}: the tower runs the web server; {name} only keeps data")
+                break
+    return out
+
+
 def _drop_stale(ws: Workspace, previous, keep: str = "") -> None:
     """A re-plan without the skeleton (or with a new entry): remove the tower's old server so a unit rewrites
     it (7a review r1). Only a file that still carries the tower's mark: never the coder's own."""
@@ -164,6 +190,9 @@ def apply(plan: dict, title: str, ws: Workspace, previous=frozenset()) -> tuple[
     fields = list(checks[1]["form"])
     entry = plan["entry"]
     _drop_stale(ws, previous, keep=entry)
+    for path in ws.files():  # 7c review r1 I2: an earlier plan's AI-written files must not ship with the server
+        if path not in (entry, STORE, STORE_TESTS):
+            ws.delete(path)
     config = "\n".join(f"{k} = {v!r}" for k, v in (("TITLE", str(title).encode("utf-8", "replace").decode()[:100]), ("FIELDS", fields),
                        ("LIST_PAGE", page), ("FORM_PAGE", form_page), ("ADD_PATH", add)))
     ws.write(entry, TEMPLATE.replace("__CONFIG__", config))
