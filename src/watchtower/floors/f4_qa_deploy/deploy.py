@@ -110,7 +110,8 @@ class Deployer:
         if release is None:
             raise DeployError(f"job {job_id} has no release: only apps that passed QA can be deployed")
         if not Approvals(self._conn).signed_off(job_id):  # 8a (D-M1): e.g. released by --yes before 8a
-            raise DeployError(f"job {job_id} has no owner sign-off; read the app, then approve it before deploying")
+            raise DeployError(f"job {job_id} has no owner sign-off (released without one before 8a); re-run the idea "
+                              "with `watchtower run`, read the app and sign it off, then deploy the new job")
         root = self._s.home / "workspaces" / job_id
         problems = self._releases.verify(job_id, root)
         if problems:

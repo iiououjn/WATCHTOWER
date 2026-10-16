@@ -65,7 +65,17 @@ D-M7 (security); E-A6, E-T2, E-S5, E-S7 (tests/stack). Baseline `uv run pytest -
   stdout until the real tag falls out of the kept 20 kB tail. `SandboxResult.truncated` now marks any cut-off
   output (`capped_run` dropped bytes, or a stream over `MAX_OUTPUT`) and `sandbox.result_tag` never reads a
   tag from it; every variable-size harness line is capped (`fit`) so honest runs stay under the limit.
-  **Remaining path:** a same-uid app that can `ptrace` the harness or the container's PID 1 (`timeout`) can
+  *Corrected in review r3:* "not feasible" was wrong: the tower sets those flags itself. A probe app in the real
+  sandbox ptraced the harness and PID 1 and opened their `/proc/<pid>/mem` read-write (no Yama). Now done
+  instead of the later step below: the container starts as uid 0 with `--cap-drop ALL --cap-add SETUID
+  --cap-add SETGID` and `no-new-privileges`; `sandbox.LAUNCH` copies the workspace as the app uid (1001) and
+  drops every plain command to it; a tower harness (a `python -I -c` script that starts with `EMIT`) keeps uid
+  0 just long enough to start the app as 1001 (`start()`, no groups), then drops itself to 1000. The app can no
+  longer ptrace, read `/proc/<pid>/mem` or `/proc/<pid>/fd` of the harness or of PID 1. `start()` raises when told
+  to split without root, so the harness fails instead of sharing its uid. The exit-0 and one-tag rules stay as
+  a second line. Cost if wrong: if a custom sandbox image lacks a working `setresuid` (any normal Python image
+  has it), every sandbox run fails closed until the image is fixed.
+  **Remaining path (before r3):** a same-uid app that can `ptrace` the harness or the container's PID 1 (`timeout`) can
   still rewrite them; an escaped setsid child can still write to the harness's streams, which now only fails
   the run (two tags or cut-off output). **Structural step (later phase):** run the app and the checker in separate containers on
   a per-run `--internal` network, the checker image holding only the harness. Cost if wrong: a hostile app with ptrace can still forge F3/F4/F5 evidence;
@@ -114,6 +124,17 @@ D-M7 (security); E-A6, E-T2, E-S5, E-S7 (tests/stack). Baseline `uv run pytest -
   (no leading `-` reaching `docker run` as a flag); the app log in smoke/QA/probe is read exactly once
   (`result_log`), a second log line shows a note instead of a fake. Each guard mutation-checked. Deferred
   minors: none.
+- *Review r3 (1 critical, 1 minor).* Critical: same-uid ptrace of the harness and PID 1 (the r1-r2 ruling
+  above corrected; the uid split is in). Tests in `tests/test_sandbox_uids.py` run the pinned image when Docker
+  has it (skipped otherwise): a ptrace/`mem`/`fd` probe app fails against both targets and sees the harness at
+  uid 1000, a plain command runs as 1001 with no capabilities, and an honest app still passes smoke. Each guard
+  mutation-checked (no split, always plain mode, split only as root, harness not dropping, launcher not
+  dropping). The harness can no longer signal an app of another uid; the app dies with the container when the
+  harness exits. Minor: a pre-8a `--yes` release refused at deploy now says to re-run with `watchtower run`
+  (`watchtower approve` cannot sign off a done job). Deferred minors: none.
+- *Review r3: reuse deploy's two-container `--internal` network instead.* More moving parts (a network per run,
+  a second container start inside the 90 s limit) for the same boundary. **Ruling:** uid split in one container.
+  Cost if wrong: a kernel bug that crosses uids inside one container would also cross the container boundary.
 
 ## Review Focus
 
@@ -141,3 +162,4 @@ Seven task commits, each RED first; every new guard mutation-checked (removing i
 `uv run pytest -q` → 1132 passed (baseline 1097; +35 tests), on Python 3.12.12.
 Review r1: `uv run pytest -q` → 1146 passed.
 Review r2: `uv run pytest -q` → 1165 passed.
+Review r3: `uv run pytest -q` → 1176 passed (Docker tests ran against the pinned image).

@@ -68,13 +68,57 @@ class SandboxResult:
     truncated: bool = False  # review r2: output was cut to its tail; a result tag in it proves nothing
 
 
-# Prepended to every in-sandbox harness (8a review r1). The app shares the harness's uid and can write to its
-# stdout: a forged line plus one byte with no newline makes the real line start mid-line. emit() writes each tower
-# line on a fresh line in one write; js() writes "_" as _ inside the JSON, so no value (app log, page text,
-# route path) can contain a tag: every tag in the output is either the harness's own or a forgery. fit() caps a
-# variable-size line (review r2): "_" grows 6x, and an honest run cut off by MAX_OUTPUT now fails.
-EMIT = """\
-import json, sys
+APP_UID, HARNESS_UID = 1001, 1000
+# Review r3: one shared uid let the app ptrace the harness (or PID 1) and rewrite its result in memory. The
+# container now starts as uid 0 with only SETUID/SETGID; drop() leaves uid 0 for good (all three ids, no groups,
+# so the kernel clears every capability and marks the process non-dumpable).
+_DROP = """\
+def drop(uid):
+    os.setgroups([])
+    os.setresgid(uid, uid, uid)
+    os.setresuid(uid, uid, uid)
+"""
+
+# Runs first in every container (as uid 0). It copies the workspace as the app uid, then drops any command to
+# the app uid, except a tower harness: the harness starts the app itself (start() in EMIT), then drops to its own.
+LAUNCH = "import os, sys\n" + f"APP_UID = {APP_UID}\n" + _DROP + """\
+if os.fork() == 0:
+    drop(APP_UID)
+    os.execvp("cp", ["cp", "-a", "/src/.", "/work/"])
+if os.wait()[1]:
+    sys.exit(1)
+if sys.argv[1] == "harness":
+    os.environ["WT_SPLIT"] = "1"
+else:
+    drop(APP_UID)
+os.execvp(sys.argv[2], sys.argv[2:])
+"""
+
+# Prepended to every in-sandbox harness (8a review r1). emit() writes each tower line on a fresh line in one
+# write; js() writes "_" as _ inside the JSON, so no value (app log, page text, route path) can contain a tag:
+# every tag in the output is either the harness's own or a forgery. fit() caps a variable-size line (review r2):
+# "_" grows 6x, and an honest run cut off by MAX_OUTPUT now fails. start() runs the app under APP_UID and drops
+# the harness to HARNESS_UID (review r3) when the sandbox says so (WT_SPLIT); without root that raises, so the
+# harness fails instead of sharing its uid. Host tests run without WT_SPLIT. stop() may not reach an app of
+# another uid: it dies with the container when the harness exits.
+EMIT = "import json, os, subprocess, sys\n" + f"APP_UID, HARNESS_UID = {APP_UID}, {HARNESS_UID}\n" + _DROP + """\
+def start(entry, port, log):
+    split = os.environ.get("WT_SPLIT") == "1"
+    ids = {"user": APP_UID, "group": APP_UID, "extra_groups": []} if split else {}
+    env = {k: v for k, v in os.environ.items() if k != "WT_SPLIT"}
+    p = subprocess.Popen([sys.executable, entry], env={**env, "PORT": port}, stdout=log,
+                         stderr=subprocess.STDOUT, start_new_session=True, **ids)
+    if split:
+        drop(HARNESS_UID)
+    return p
+def stop(p):
+    try:
+        os.killpg(p.pid, 9)
+    except Exception:
+        try:
+            p.kill()
+        except Exception:
+            pass
 def js(value):
     return json.dumps(value, ensure_ascii=False).replace("_", "\\\\u005f")
 def fit(value, cap, key=None):
@@ -124,6 +168,11 @@ def result_log(result: SandboxResult, tag: str, missing: str) -> str:
         return LOG_BAD
 
 
+def _is_harness(command: list[str]) -> bool:
+    """A tower harness: `python -I -c <script>` whose script starts with EMIT. Only tower code builds commands."""
+    return command[:3] == ["python", "-I", "-c"] and len(command) > 3 and command[3].startswith(EMIT)
+
+
 class Sandbox:
     """Runs agent code in a locked-down Docker container. The job's workspace is mounted READ-ONLY and
     copied into a 64 MB in-memory scratch dir, so executed code can never change, plant or fill files on
@@ -171,12 +220,13 @@ class Sandbox:
             "docker", "run", "--rm", "--name", name, "--pull", "never",
             "--network", "none", "--read-only", "--tmpfs", "/tmp:rw,size=64m",
             "--memory", "512m", "--cpus", "1", "--pids-limit", "128",
-            "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "1000:1000",
-            "-v", f"{workspace}:/src:ro", "--tmpfs", "/work:rw,size=64m,uid=1000,gid=1000", "-w", "/work",
+            "--cap-drop", "ALL", "--cap-add", "SETUID", "--cap-add", "SETGID",  # review r3: LAUNCH splits uids
+            "--security-opt", "no-new-privileges", "--user", "0:0",
+            "-v", f"{workspace}:/src:ro", "--tmpfs", f"/work:rw,size=64m,uid={APP_UID},gid={APP_UID}", "-w", "/work",
             self._s.sandbox_image,
             # hard limit inside the container, so it dies even if the host-side kill misses it
             "timeout", "-s", "KILL", str(max(1, int(timeout))),
-            "sh", "-c", 'cp -a /src/. /work/ && exec "$@"', "sh", *command,
+            "python", "-I", "-c", LAUNCH, "harness" if _is_harness(command) else "app", *command,
         ]
         self._audit.append("sandbox", "sandbox_run", {"program": command[0], "argc": len(command)}, job_id)
         try:

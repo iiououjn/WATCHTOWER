@@ -57,9 +57,11 @@ def setup(conn, settings):
 
 def test_deploy_refuses_a_release_the_owner_never_signed_off(setup):
     dep, docker, _ = setup(signed=False)  # 8a (D-M1): e.g. released by --yes before 8a
-    with pytest.raises(DeployError, match="sign-off"):
+    with pytest.raises(DeployError, match="sign-off") as err:
         dep.deploy("job1")
     assert docker.calls == []
+    # review r3: `watchtower approve` cannot sign off a done job; re-running it is the only way forward
+    assert "watchtower run" in str(err.value) and "approve" not in str(err.value)
 
 
 def test_deploy_builds_offline_and_runs_isolated_on_localhost(setup):

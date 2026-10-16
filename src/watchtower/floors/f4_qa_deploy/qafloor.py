@@ -29,8 +29,7 @@ import html, html.parser, json, os, re, subprocess, sys, time, urllib.error, url
 port = os.environ.get("WT_PORT", "8000")
 base = "http://127.0.0.1:" + port
 log = open("/tmp/app.log", "wb")
-p = subprocess.Popen([sys.executable, sys.argv[1]], env={**os.environ, "PORT": port},
-                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+p = start(sys.argv[1], port, log)
 for _ in range(40):
     if p.poll() is not None:
         break
@@ -120,10 +119,7 @@ for c in json.loads(sys.argv[2]):
             hint = "user text is escaped more than once: call html.escape once, when you build the HTML; "
         detail = f"{hint}expected {c['expect_status']} with {want!r}, got {status}: {body[:300]}"
     results.append({"name": c["name"], "pass": ok, "status": status, "detail": detail})
-try:
-    os.killpg(p.pid, 9)
-except Exception:
-    p.kill()
+stop(p)
 log.close()
 # the app's own output is JSON-encoded on one line, so nothing it prints can pose as a result line. Both lines are
 # capped (review r2): "_" grows 6x, and output cut off by the sandbox's limit now fails the run

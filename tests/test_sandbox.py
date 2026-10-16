@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from watchtower.engine.governor.audit import AuditLog
-from watchtower.engine.sandbox import MAX_OUTPUT, Sandbox, SandboxUnavailable
+from watchtower.engine.sandbox import EMIT, LAUNCH, MAX_OUTPUT, Sandbox, SandboxUnavailable
 
 
 class FakeDocker:
@@ -41,10 +41,32 @@ def test_runs_command_with_hardening_flags(settings, audit):
     assert (result.exit_code, result.stdout, result.timed_out) == (0, "hello\n", False)
     argv = docker.run_argv()
     for flag in ["--network", "none", "--read-only", "--cap-drop", "ALL", "--pids-limit", "128",
-                 "--memory", "512m", "--user", "1000:1000", "--pull", "never", "no-new-privileges"]:
+                 "--memory", "512m", "--user", "0:0", "--pull", "never", "no-new-privileges"]:
         assert flag in argv
     assert f"{settings.home / 'workspaces' / 'job1'}:/src:ro" in argv
-    assert argv[-3:] == ["python", "-c", "print('hello')"]
+    assert argv[-4:] == ["app", "python", "-c", "print('hello')"]  # not a harness: runs as the app uid
+
+
+def test_only_setuid_and_setgid_are_added_back(settings, audit):
+    """Review r3: the container starts as uid 0 so the launcher can split uids; it keeps no other capability."""
+    docker = FakeDocker()
+    Sandbox(settings, audit, run=docker).run("j", ["true"])
+    argv = docker.run_argv()
+    added = [argv[i + 1] for i, a in enumerate(argv) if a == "--cap-add"]
+    assert sorted(added) == ["SETGID", "SETUID"] and argv[argv.index("--cap-drop") + 1] == "ALL"
+
+
+def test_a_tower_harness_runs_in_harness_mode(settings, audit):
+    docker = FakeDocker()
+    Sandbox(settings, audit, run=docker).run("j", ["python", "-I", "-c", EMIT + "emit('X', '1')", "app.py"])
+    assert docker.run_argv()[-6] == "harness"
+    Sandbox(settings, audit, run=docker).run("j", ["python", "-I", "-c", "print(1)" + EMIT, "app.py"])
+    assert [a for a in docker.calls if a[:2] == ["docker", "run"]][-1][-6] == "app"  # EMIT must lead the script
+
+
+def test_the_launcher_drops_every_non_harness_command_to_the_app_uid():
+    assert "drop(APP_UID)" in LAUNCH and LAUNCH.index('"harness"') < LAUNCH.rindex("drop(APP_UID)")
+    assert 'os.environ["WT_SPLIT"] = "1"' in LAUNCH
 
 
 @pytest.mark.parametrize("bad", ["../../Users/rishi", "a/b", "", "job 1", ".."])
@@ -159,9 +181,10 @@ def test_workspace_is_mounted_read_only_and_copied_to_capped_scratch(settings, a
     argv = docker.run_argv()
     assert f"{settings.home / 'workspaces' / 'j'}:/src:ro" in argv
     assert not any(a.endswith(":/work:rw") for a in argv)
-    assert "/work:rw,size=64m,uid=1000,gid=1000" in argv
+    assert "/work:rw,size=64m,uid=1001,gid=1001" in argv  # review r3: the app uid owns the scratch dir
     tail = argv[argv.index(settings.sandbox_image) + 1:]
-    assert tail[:4] == ["timeout", "-s", "KILL", "60"] and "cp -a /src/. /work/" in tail[6]
+    assert tail[:4] == ["timeout", "-s", "KILL", "60"] and tail[4:8] == ["python", "-I", "-c", LAUNCH]
+    assert '"cp", "-a", "/src/.", "/work/"' in LAUNCH
     assert tail[-3:] == ["python", "-m", "unittest"]
 
 

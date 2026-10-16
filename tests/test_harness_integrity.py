@@ -1,6 +1,6 @@
 """8a (audit B-H1, D-M4, E-T2): a sandbox result counts only when the tower's harness exited 0 and printed
-exactly one result line. The app runs as the harness's uid: it can write a line to the harness's stdout and
-kill the harness, or print a result line before the harness does."""
+exactly one result line. Before review r3 the app ran as the harness's uid: it could write a line to the
+harness's stdout and kill the harness, or print a result line before the harness does (uid split: test_sandbox_uids)."""
 import json
 
 import pytest

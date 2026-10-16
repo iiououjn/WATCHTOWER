@@ -12,8 +12,7 @@ from watchtower.engine.sandbox import EMIT, SandboxResult, result_log, result_ta
 SMOKE_SCRIPT = EMIT + """\
 import json, os, subprocess, sys, time, urllib.request
 log = open("/tmp/app.log", "wb")
-p = subprocess.Popen([sys.executable, sys.argv[1]], env={**os.environ, "PORT": "8000"},
-                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+p = start(sys.argv[1], "8000", log)
 status, body = None, ""
 for _ in range(40):
     if p.poll() is not None:
@@ -28,10 +27,7 @@ for _ in range(40):
             break
         time.sleep(0.25)
 code = p.poll() if status is None else None  # the app stopped by itself before it answered
-try:
-    os.killpg(p.pid, 9)
-except Exception:
-    p.kill()
+stop(p)
 log.close()
 out = open("/tmp/app.log", "rb").read().decode(errors="replace")[-1500:]
 emit("SMOKE_STATUS", str(status))
@@ -93,8 +89,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 opener = urllib.request.build_opener(NoRedirect)
 log = open("/tmp/probe.log", "wb")
-p = subprocess.Popen([sys.executable, sys.argv[1]], env={**os.environ, "PORT": port},
-                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+p = start(sys.argv[1], port, log)
 for _ in range(40):
     if p.poll() is not None:
         break
@@ -115,10 +110,7 @@ for path in json.loads(sys.argv[2]):
     except Exception:
         status = None
     results.append({"path": path, "status": status})
-try:
-    os.killpg(p.pid, 9)
-except Exception:
-    p.kill()
+stop(p)
 log.close()
 emit("WATCHTOWER_PROBE", fit(results, 6000))
 emit("WATCHTOWER_LOG", fit(open(log.name, "rb").read().decode(errors="replace")[-2500:], 6000))
@@ -138,8 +130,8 @@ def _probe_paths(routes: list[dict]) -> list[str]:
 
 def route_probe(run: Callable[[list[str]], SandboxResult], entry: str, routes: list[dict]) -> WorkPackage:
     """Floor 3, full app: every GET route of the architect's contract must answer (no 404, no 5xx, no
-    silence). Only exactly one result line from a probe that exited 0 counts (8a: the app runs as the probe's uid;
-    it can write a line, then kill the probe)."""
+    silence). Only exactly one result line from a probe that exited 0 counts (8a; since review r3 the app runs under
+    its own uid, and these rules remain a second line)."""
     paths = _probe_paths(routes)
     if not paths:
         return WorkPackage("f3", "Full app: no other GET routes to probe (MVP: GET / answered)", [entry], [],

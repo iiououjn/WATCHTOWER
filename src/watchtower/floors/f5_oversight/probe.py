@@ -17,8 +17,7 @@ port = os.environ.get("WT_PORT", "8000")
 base = "http://127.0.0.1:" + port
 plan = json.loads(sys.argv[2])
 log = open("/tmp/xss.log", "wb")
-p = subprocess.Popen([sys.executable, sys.argv[1]], env={**os.environ, "PORT": port},
-                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+p = start(sys.argv[1], port, log)
 for _ in range(40):
     if p.poll() is not None:
         break
@@ -65,10 +64,7 @@ for path in plan["gets"]:
 hits = [{"post": post["path"], "field": field, "page": page.rsplit(" ", 1)[0] if page.startswith("POST") else page}
         for post in plan["posts"] for field, marker in post["markers"].items()
         for page, body in pages.items() if marker.lower() in body]
-try:
-    os.killpg(p.pid, 9)
-except Exception:
-    p.kill()
+stop(p)
 log.close()
 emit("WATCHTOWER_XSS", fit({"answered": answered, "hits": hits, "slow": sorted(set(slow))[:5],
                            "partial": time.time() > deadline}, 9000, "hits"))
