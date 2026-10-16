@@ -121,3 +121,21 @@ def test_a_garbled_reply_after_hr_keeps_the_verdict_and_the_objection(tmp_path):
     assert ("Tests: PASS" in pkg.summary) == pkg.checks_run[-1]["pass"] is True  # the files did not change
     assert any("add a delete route" in q for q in pkg.open_questions)
     assert not any(q.startswith("tests still failing") for q in pkg.open_questions)
+
+
+def test_an_invalid_entry_renamed_to_app_py_leaves_no_second_server(tmp_path):  # C-M7
+    s = Script({"f2.architect": [{"files": [{"path": "my-app.py", "purpose": "server"},
+                                            {"path": "test_x.py", "purpose": "tests"}], "entry": "my-app.py"}],
+                CODER.id: [{}]})
+    plan = dev(tmp_path, s, lambda cmd: verdict()).plan(SPEC, "", [])
+    assert plan["entry"] == "app.py" and [f["path"] for f in plan["files"]] == ["test_x.py", "app.py"]
+
+
+def test_a_case_only_name_is_written_under_the_planned_name(tmp_path):  # C-M3: endless "create app.py"
+    ws = Workspace(tmp_path)
+    ws.write("App.py", "x = 0\n")
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: verdict())
+    floor._write([{"path": "app.py", "content": "x = 1\n"}], "app.py")
+    assert ws.files() == ["app.py"] and ws.read("app.py") == "x = 1\n"
+    floor._write([{"path": "APP.py", "content": "x = 2\n"}], "app.py")
+    assert ws.files() == ["app.py"] and ws.read("app.py") == "x = 2\n"

@@ -191,6 +191,8 @@ class DevFloor:
             fixed = re.sub(r"(^|/)(?=\d)", r"\1app_", entry)  # '2048.py' → 'app_2048.py': tests can import it
             if _SAFE_ENTRY.fullmatch(fixed):
                 files = [{**f, "path": fixed} if f["path"] == entry else f for f in files]
+            if not _SAFE_ENTRY.fullmatch(fixed):  # 8c (C-M7): the old name must not stay planned as a second server
+                files = [f for f in files if f["path"] != entry]
             entry = fixed if _SAFE_ENTRY.fullmatch(fixed) else "app.py"
         files = files[:15]
         files = [f for f in files if f["path"] == entry or f["path"].lower() != entry.lower()]
@@ -442,6 +444,8 @@ class DevFloor:
                     notes.append(f"File rejected: {str(f.get('path'))[:100]!r} has no content")
                 else:
                     path, content = str(f.get("path", "")), str(f.get("content", ""))
+                    path = entry if entry and str(PurePosixPath(path.strip())).lower() == entry.lower() else path
+                    old = next((p for p in self._ws.files() if p != path and p.lower() == path.lower()), None)
                     lines: list[int] = []
                     added: list[str] = []
                     started = None
@@ -452,9 +456,11 @@ class DevFloor:
                         if str(PurePosixPath(path.strip())) == entry:  # run 10: run() defined, never called, the app exited at once
                             content, started = repair_main(content)
                     try:
-                        before = self._ws.read(path)
+                        before = self._ws.read(old or path)
                     except (WorkspaceError, OSError):
                         before = None
+                    if old:  # 8c (C-M3): a case-preserving disk kept 'App.py' for every later write of app.py
+                        self._ws.delete(old)
                     self._ws.write(path, content)
                     if before == content.replace("\r\n", "\n").replace("\r", "\n"):  # read() gives \n only
                         same.append(path)
