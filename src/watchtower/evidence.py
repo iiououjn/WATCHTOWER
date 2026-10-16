@@ -46,6 +46,8 @@ def _evidence(checks: list[dict], fail_on=("HIGH", "MEDIUM")) -> str:
         scan = f"{'pass' if sec.get('pass') else 'FAIL'} ({serious} serious, {len(findings) - serious} minor)"
     qa_line = (f"{sum(r.get('pass') is True for r in results)}/{len(results)} checks passed" if results
                else "no QA checks ran")
+    if not qa.get("decide") and qa.get("advisory_failed"):  # 7b: page text unverified for these
+        qa_line += f"; {qa['advisory_failed']} judged by status only (page text did not match the model's check)"
     if qa.get("decide") and len(results) > qa["decide"]:  # 6u: the tower's checks decide, the rest are advisory
         d, a = results[:qa["decide"]], results[qa["decide"]:]
         qa_line = (f"{'pass' if qa.get('pass') else 'FAIL'} (tower checks {sum(r.get('pass') is True for r in d)}/"

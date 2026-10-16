@@ -8,7 +8,8 @@ ADD = [{"name": "add milk", "method": "POST", "path": "/add", "form": {"item": "
 
 def _list(tmp_path, want, app=ECHO_APP):
     checks = parse_checks({"checks": ADD + [{"name": "list", "path": "/", "expect_text": want}]})
-    return _live(tmp_path, app, checks).checks_run[-1]
+    qa = _live(tmp_path, app, checks).checks_run[-1]
+    return {**qa, "pass": qa["pass"] and qa["results"][-1]["pass"] is True}  # 7b: the list check itself decides
 
 
 def test_pieces_glued_with_markup_pass_when_each_is_on_the_page(tmp_path):  # run 18: whole-page HTML

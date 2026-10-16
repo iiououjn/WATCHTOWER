@@ -211,3 +211,35 @@ def test_missing_store_problem_names_store_py(tmp_path):
     problems = floor._problems()
     assert problems and all("not in the Python standard library" not in p for p in problems)
     assert any("write store.py" in p for p in problems)
+
+
+ESCAPING = ("import html\nE = []\n\ndef add(entry):\n    E.append({k: html.escape(v) for k, v in entry.items()})\n\n"
+            "def items():\n    return list(E)\n")  # run 33: the coder escaped on save; the server escaped again
+
+
+def test_a_store_that_escapes_on_save_still_shows_text_once(tmp_path):  # 7b
+    book = [{"method": "GET", "path": "/", "fields": [], "shows": "All messages"},
+            {"method": "POST", "path": "/add", "fields": ["name", "message"], "shows": "Saved."}]
+    pkg = _qa(tmp_path, book, ESCAPING)
+    assert pkg.checks_run[-1]["results"] and pkg.checks_run[-1]["pass"] is True, pkg.summary
+
+
+def test_a_store_that_escapes_twice_still_shows_text_once(tmp_path):  # 7b
+    twice = ESCAPING.replace("html.escape(v)", "html.escape(html.escape(v))")
+    assert _qa(tmp_path, TODO, twice).checks_run[-1]["pass"] is True
+
+
+def test_store_contract_says_never_escape():  # 7b: the server escapes; store.py keeps text as given
+    from watchtower.floors.f2_dev.skeleton import _store_purpose
+    text = _store_purpose(["name", "message"])
+    assert "no html.escape" in text and len(text) <= 200
+
+
+def test_release_note_says_who_wrote_what_and_data_is_in_memory(app_tower):  # 7b (run 34)
+    from conftest import APP_REPLIES, STORE_CODER
+    arch = dict(APP_REPLIES["f2.architect"][0])
+    arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
+    runner, model, sandbox, job = app_tower({"f2.architect": [arch], "f2.coder": STORE_CODER})
+    answer = runner.start(job.id, extra={"auto_approve": True}).answer
+    assert "the tower wrote the web server" in answer and "in memory" in answer
+    runner.close()

@@ -310,7 +310,8 @@ def qa_headline(results: list[dict], passed: bool | None = None, decide: int = 0
     """The board's F4 line: which checks failed and why, in one line (runs 17-19 showed only 'QA checks FAILED:').
     `passed` is the run's own verdict (a timed-out run fails even when every reported check passed); with
     `decide`, only the first `decide` checks (the tower's, 6u) count and the rest are named as advisory."""
-    deciding, advisory = (results[:decide], results[decide:]) if decide else (results, [])
+    deciding, advisory = (results[:decide], results[decide:]) if decide else (  # 7b: status-only checks
+        [r for r in results if not r.get("advisory")], [r for r in results if r.get("advisory")])
     bad = [r for r in deciding if r.get("pass") is not True]
     soft = "; ".join(str(r.get("name"))[:40] for r in advisory if r.get("pass") is not True)
     tail = f"; advisory failing: {soft}" if soft else ""
@@ -347,9 +348,22 @@ def run_qa(run: Callable[[list[str]], SandboxResult], entry: str, checks: list[d
     except ValueError:
         app_log = output
     complete = len(results) == len(checks)  # else results is the one 'runner result missing' row: it decides
-    deciding = results[:decide] if decide and complete else results
-    passed = not result.timed_out and all(r.get("pass") is True for r in deciding)
+    # 7b (run 35): with no tower checks, a model check that got its status but not its text is advisory when
+    # that text is computed (exact prose, wrong maths): the coder cannot fix the check. Echo checks (text some
+    # check posted) still gate: those the model cannot get wrong
+    posted = {str(v).strip() for c in checks for v in c.get("form", {}).values()
+              if len(str(v).strip()) >= 3 and re.search(r"[A-Za-z]", str(v))}
+    soft = set() if decide or not complete else {
+        i for i, (r, c) in enumerate(zip(results, checks)) if r.get("pass") is not True
+        and type(r.get("status")) is int and r["status"] == c["expect_status"]
+        and not c.get("expect_escaped") and not c.get("expect_form")
+        and not any(v in str(c.get("expect_text", "")) for v in posted)}
+    results = [{**r, "advisory": True} if i in soft else r for i, r in enumerate(results)]
+    deciding = results[:decide] if decide and complete else [r for i, r in enumerate(results) if i not in soft]
+    passed = (not result.timed_out and all(r.get("pass") is True for r in deciding)
+              and (not soft or any(r.get("pass") is True for r in results)))  # one check must fully pass
     advisory = {i for i, r in enumerate(results) if decide and complete and i >= decide and r.get("pass") is not True}
+    advisory |= soft
     hints = _same_request_hints(checks, results)
     lines = [f"- {r.get('name')}: {'PASS' if r.get('pass') is True else 'FAIL'}"
              f"{' (advisory)' if i in advisory else ''}{hints.get(i, '')} "

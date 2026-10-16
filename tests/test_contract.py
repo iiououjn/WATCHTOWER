@@ -265,3 +265,63 @@ def test_coder_is_told_how_escaped_checks_read():  # 6z: untrusted() shows '<' a
     assert "&lt;&>" in block and "html.escape" in block.split("</untrusted>")[1]
     assert "html.escape" not in _qa_block("QA:\n", [{"name": "x", "path": "/", "expect_text": "a"}])
     assert _qa_block("QA:\n", []) == ""
+
+
+def test_the_coder_of_a_skeleton_app_is_told_to_keep_text_as_given():  # 7b (run 33)
+    from watchtower.floors.f2_dev.devfloor import _qa_block
+    block = _qa_block("QA:\n", contract_checks(TODO, "482913")[0], store_only=True)
+    note = block.split("</untrusted>")[1]
+    assert "exactly as given" in note and "when you build the HTML" not in note
+
+
+def _status_only(results, checks, decide=0):
+    from watchtower.floors.f4_qa_deploy.qafloor import run_qa
+    return run_qa(_qa(results), "app.py", checks, decide=decide).checks_run[-1]
+
+
+CALC = [{"name": "tip", "method": "POST", "path": "/calc", "form": {"bill": "10"}, "expect_status": 200,
+         "expect_text": "Total: $11.56"}]
+
+
+def test_without_tower_checks_a_wrong_text_with_the_right_status_is_advisory():  # 7b (run 35)
+    qa = _status_only([{"name": "home", "pass": True, "status": 200},
+                       {"name": "tip", "pass": False, "status": 200, "detail": "expected ... got 200"}], MODEL + CALC)
+    assert qa["pass"] is True and qa["advisory_failed"] == 1 and qa["results"][1]["pass"] is False
+
+
+def test_status_only_never_passes_a_wrong_status_or_an_escape_or_form_check():  # 7b
+    home = {"name": "home", "pass": True, "status": 200}
+    assert _status_only([home, {"name": "tip", "pass": False, "status": 500}], MODEL + CALC)["pass"] is False
+    assert _status_only([home, {"name": "tip", "pass": False, "status": "200"}], MODEL + CALC)["pass"] is False
+    for key, val in (("expect_escaped", True), ("expect_form", {"action": "/calc", "fields": ["bill"]})):
+        checks = MODEL + [{**CALC[0], key: val}]
+        assert _status_only([home, {"name": "tip", "pass": False, "status": 200}], checks)["pass"] is False
+
+
+def test_status_only_is_off_when_tower_checks_decide():  # 7b: 6u already marks those advisory
+    qa = _status_only([{"name": "[tower] add", "pass": False, "status": 200}, {"name": "home", "pass": True}],
+                      TOWER + MODEL, decide=1)
+    assert qa["pass"] is False
+
+
+def test_evidence_names_checks_judged_by_status_only():  # 7b
+    from watchtower.tower import _evidence
+    qa = {"check": "qa", "pass": True, "decide": 0, "advisory_failed": 1, "results": [{"pass": True}] * 2}
+    assert "1 judged by status only" in _evidence([qa])
+
+
+def test_status_only_needs_one_check_that_fully_passed():  # 7b: a blank 200 page is not a pass
+    assert _status_only([{"name": "tip", "pass": False, "status": 200}], CALC)["pass"] is False
+
+
+def test_the_board_line_names_status_only_checks_as_advisory():  # 7b
+    from watchtower.floors.f4_qa_deploy.qafloor import qa_headline
+    line = qa_headline([{"name": "a", "pass": True}, {"name": "tip", "pass": False, "advisory": True}], True)
+    assert line.startswith("QA checks passed (1/1)") and "advisory failing: tip" in line
+
+
+def test_an_echo_check_keeps_gating():  # 7b: text the check posted itself is not a model guess
+    checks = MODEL + [{**CALC[0], "form": {"item": "milk"}, "expect_text": "<li>milk</li>"}]
+    qa = _status_only([{"name": "home", "pass": True, "status": 200}, {"name": "tip", "pass": False, "status": 200}],
+                      checks)
+    assert qa["pass"] is False

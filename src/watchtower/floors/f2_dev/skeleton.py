@@ -41,6 +41,17 @@ def form_html():
             + '<button type="submit">Add</button></form>')
 
 
+def show(text):
+    """User text escaped exactly once, however often store.py escaped it (7b, run 33)."""
+    text = str(text)
+    for _ in range(5):
+        plain = html.unescape(text)
+        if plain == text:
+            break
+        text = plain
+    return html.escape(text)
+
+
 def items_html():
     rows = []
     with LOCK:
@@ -48,9 +59,9 @@ def items_html():
         saved = list(saved.values() if isinstance(saved, dict) else saved)
     for item in saved:
         if isinstance(item, dict):
-            text = " - ".join(html.escape(str(item.get(f, ""))) for f in FIELDS)
+            text = " - ".join(show(item.get(f, "")) for f in FIELDS)
         else:
-            text = html.escape(str(item))
+            text = show(item)
         rows.append("<li>" + text + "</li>")
     return "<ul>" + "".join(rows) + "</ul>"
 
@@ -114,7 +125,7 @@ if __name__ == "__main__":
 
 def _store_purpose(fields: list[str]) -> str:
     keys = ", ".join(fields)[:60]
-    return (f"no web code: add(entry) keeps a dict ({keys}) as given (the server escapes it) in memory, a "
+    return (f"no web code: add(entry) keeps a dict ({keys}) as given (no html.escape: the server escapes it) in memory, a "
             "module-level list, never files; items() returns them oldest first")[:200]
 
 

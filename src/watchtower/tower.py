@@ -50,6 +50,9 @@ MEMO_PROMPT = (
 )
 BOARD_HEADER = "\n\nTower board (what the other floors know and what comes next):\n"
 DEV_ROUTES = ("research", "design", "code")
+OWNED_NOTE = ("Note: the tower wrote the web server; a local AI wrote store.py and its tests, tested only "
+              "inside the sandbox. Read store.py before running it. Data is kept in memory: it is lost "
+              "when the app stops.\n")  # 7b (run 34): the spec may promise more
 CONTEXT_CHARS = 1500
 QUESTIONS_PROMPT = (
     "Owner's goal:\n{goal}\n\nReference data:\n{context}\n\nAsk at most 3 short clarifying questions whose answers would most change "
@@ -218,8 +221,9 @@ class TowerPipeline:
                         "evidence": evidence, "ceo": {"approve": ceo_ok, "note": ceo_note},
                         "objection": objection_note(objection) if objection else "",  # owner signs off
                         "answer": (f"App ready in {ws.root}\nFiles: {', '.join(ws.files())}\n"
-                                   "Note: written by a local AI and tested only inside the sandbox — untested on "
-                                   "your Mac. Read the code before running it.\n"
+                                   + (OWNED_NOTE if dev.owned else
+                                      "Note: written by a local AI and tested only inside the sandbox — untested on "
+                                      "your Mac. Read the code before running it.\n")
                                    + ("" if tests_ok else "Note: the coder's own unit tests fail (advisory); "
                                       "the tower's start, QA and security checks passed.\n")
                                    + f"Run it: cd {shlex.quote(str(ws.root))} && python {shlex.quote(plan['entry'])}"
