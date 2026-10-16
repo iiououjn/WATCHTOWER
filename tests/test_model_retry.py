@@ -1,5 +1,7 @@
 """8b: transient model failures (connection reset, timeout, 5xx) are retried with backoff at the socket's own
 call boundary, so the retry outlives the library behind it (litellm today, httpx later)."""
+import sqlite3
+
 import pytest
 
 from conftest import fake_response
@@ -186,3 +188,33 @@ def test_a_retry_reads_ram_again_before_reloading(conn, settings):
     with pytest.raises(LowMemory):
         sock.ask("small", [{"role": "user", "content": "x"}], "j")
     assert len(calls) == 1
+
+
+class LockedBudget(Budget):
+    """The shared DB is busy whenever a failed call is charged (a seconds-only record)."""
+
+    def record(self, job_id, tokens=0, seconds=0.0, usd=0.0):
+        if not tokens:
+            raise sqlite3.OperationalError("database is locked")
+        return super().record(job_id, tokens=tokens, seconds=seconds, usd=usd)
+
+
+def test_a_locked_db_while_charging_a_failed_call_still_retries(conn, settings):
+    sleeps = []
+    sock, calls = socket(conn, settings, [ConnectionError("reset"), "ok"], sleeps, budget=LockedBudget(conn))
+    assert sock.ask("small", [{"role": "user", "content": "x"}], "j").text == "ok"
+    assert len(calls) == 2 and sleeps == [2.0]
+
+
+def test_a_locked_db_while_recording_a_failed_call_keeps_its_error(conn, settings):
+    sock, calls = socket(conn, settings, [ValueError("bad request")], [], budget=LockedBudget(conn))
+    real = sock._audit.append
+
+    def append(actor, action, *a, **kw):
+        if action == "model_error":
+            raise sqlite3.OperationalError("database is locked")
+        return real(actor, action, *a, **kw)
+    sock._audit.append = append
+    with pytest.raises(ModelUnavailable, match="ollama pull") as info:
+        sock.ask("small", [{"role": "user", "content": "x"}], "j")
+    assert isinstance(info.value.__cause__, ValueError)

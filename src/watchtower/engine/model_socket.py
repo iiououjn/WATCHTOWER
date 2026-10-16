@@ -228,13 +228,16 @@ class ModelSocket:
                 resp = self._complete(**kwargs)
                 break
             except Exception as e:
-                self._budget.record(job_id, seconds=self._clock() - start)  # a failed call costs its time too
                 retry = transient(e) and attempt < len(RETRY_DELAYS)
-                self._audit.append(
-                    "model_socket", "model_error",
-                    {"model": model, "error": f"{type(e).__name__}: {str(e)[:200]}", "try": attempt + 1,
-                     "retry": retry}, job_id,
-                )
+                try:  # best effort: a locked DB here must not replace the model error in flight
+                    self._budget.record(job_id, seconds=self._clock() - start)  # a failed call costs its time too
+                    self._audit.append(
+                        "model_socket", "model_error",
+                        {"model": model, "error": f"{type(e).__name__}: {str(e)[:200]}", "try": attempt + 1,
+                         "retry": retry}, job_id,
+                    )
+                except Exception:  # noqa: BLE001 — the next budget check reads the DB again
+                    pass
                 if not retry:
                     hint = f" Is Ollama running? Try: ollama pull {model.removeprefix(LOCAL_PREFIX)}" if local else ""
                     raise ModelUnavailable(f"{model} unavailable ({type(e).__name__}).{hint}") from e

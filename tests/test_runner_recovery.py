@@ -54,6 +54,39 @@ def test_sighup_during_a_run_pauses_the_job(env):
     assert runner.start(job.id, "small").status == "paused"
 
 
+
+def test_an_ignored_sighup_stays_ignored(env):
+    # `nohup watchtower run ...`: the owner chose to outlive the terminal
+    runner, jobs, bus, model, unloaded, job = env
+    model.on_plan = lambda: os.kill(os.getpid(), signal.SIGHUP)
+    before = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        assert runner.start(job.id, "small").status == "done"
+        assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGHUP, before)
+
+
+def test_a_locked_audit_during_unload_never_hides_the_outcome(env):
+    import sqlite3
+    runner, jobs, bus, model, unloaded, job = env
+    socket = runner._socket
+
+    def unload(m):
+        raise ConnectionError("ollama gone")
+
+    def append(*a, **kw):
+        raise sqlite3.OperationalError("database is locked")
+    socket._unload = unload
+    real_end = runner._end
+
+    def end(*a, **kw):  # the run itself is fine; only the cleanup's audit row hits a busy DB
+        socket._audit.append = append
+        return real_end(*a, **kw)
+    runner._end = end
+    assert runner.start(job.id, "small").status == "done"
+    assert jobs.get(job.id).status == "done"
+
 def test_a_failing_start_event_never_leaves_the_job_running(env):
     runner, jobs, bus, model, unloaded, job = env
     real = bus.publish

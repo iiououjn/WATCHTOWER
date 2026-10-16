@@ -116,3 +116,12 @@ Every new guard was mutation-checked: removing it makes its test fail.
   conflicts), the fix is a retry-once in the start/resume probe. (2) `dev` clears its progress row before
   LangGraph writes the node checkpoint; a crash in that window re-runs dev from scratch. Move the clear to
   the next node or to `_invoke` after a done result.
+
+## Review r2
+
+- Fixed: the socket charges and audits a failed call best effort, after deciding `retry` from the model error,
+  so a locked DB no longer turns a retryable `ConnectionError` into "unexpected error: OperationalError"
+  (Review Focus 4). `_stop_signals_pause` leaves a signal alone when its handler is `SIG_IGN`, so a `nohup`
+  run outlives the terminal again. `_end` treats `unload_all` as best effort (`Exception` as well as
+  `KeyboardInterrupt`), so a locked audit during cleanup cannot replace the recorded outcome.
+- Each fix has a test that failed first; the socket's audit guard was also mutation-checked on its own.

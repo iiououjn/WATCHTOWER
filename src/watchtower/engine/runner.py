@@ -73,7 +73,8 @@ def _stop_signals_pause() -> Iterator[None]:
 
     def stop(signum, frame):
         raise Terminated(f"terminated by {signal.Signals(signum).name}")
-    previous = {s: signal.signal(s, stop) for s in STOP_SIGNALS}
+    # a signal the parent ignores (`nohup`) stays ignored: the owner chose to outlive the terminal
+    previous = {s: signal.signal(s, stop) for s in STOP_SIGNALS if signal.getsignal(s) is not signal.SIG_IGN}
     try:
         yield
     finally:
@@ -208,7 +209,7 @@ class JobRunner:
             pass
         try:
             self._socket.unload_all(job_id)
-        except KeyboardInterrupt:
+        except (Exception, KeyboardInterrupt):  # noqa: BLE001 — best effort: the outcome is already recorded
             pass
         return RunOutcome(job_id, status, answer, reason)
 
