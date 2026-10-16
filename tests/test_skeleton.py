@@ -269,3 +269,156 @@ def test_a_store_returning_a_lone_surrogate_still_answers(tmp_path):  # 7b revie
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_a_skeleton_coder_writes_only_the_store_and_its_tests(tmp_path):  # 7c (run 36: a stray XSS app.py shipped)
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    _, floor.owned = apply(_plan(TODO), "Todo", Workspace(tmp_path))
+    for path in ("server.py", "test_server.py", "tests/test_store.py", "data.json", "store/__init__.py", "README.md"):
+        notes = floor._write([{"path": path, "content": "x = 1\n"}])
+        assert path not in Workspace(tmp_path).files() and any("store.py" in n for n in notes), path
+    notes = floor._write([{"path": "store.py", "content": STORE}, {"path": "test_store.py", "content": "import store\n"},
+                          {"path": "Store.py", "content": "x = 1\n"}])  # 7c r1 M4: exact names only
+    assert set(Workspace(tmp_path).files()) == {"app.py", "store.py", "test_store.py"}
+    assert any("'Store.py'" in n for n in notes)
+
+
+def test_a_skeleton_coder_may_still_delete_a_stray_file(tmp_path):  # 7c
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    _, floor.owned = apply(_plan(TODO), "Todo", Workspace(tmp_path))
+    Workspace(tmp_path).write("server.py", "x = 1\n")
+    floor._write([{"path": "server.py", "delete": True}])
+    assert "server.py" not in Workspace(tmp_path).files()
+
+
+def test_without_the_skeleton_any_file_may_be_written(tmp_path):  # 7c: the coder path is unchanged
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    floor._write([{"path": "server.py", "content": "x = 1\n"}])
+    assert "server.py" in Workspace(tmp_path).files()
+
+
+def test_a_server_inside_the_store_is_a_problem(tmp_path):  # 7c review r1 I1: the allowlist moves it into store.py
+    from devfloor_kit import dev
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    apply(_plan(TODO), "Todo", ws)
+    for code in ("import http.server\n", "from socketserver import TCPServer\n", "import subprocess as s\n",
+                 "import importlib\nimportlib.import_module('socket')\n", "x = __import__('wsgiref.simple_server')\n"):
+        ws.write("store.py", code)
+        assert any("store.py" in p for p in store_problems(ws)), code
+    ws.write("store.py", STORE)
+    ws.write("test_store.py", "import unittest\nimport store\nstore.add({'item': 'http'})\nprint('socket')\n")
+    assert store_problems(ws) == []  # a string that names a module is not an import
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    floor.owned = {"app.py"}
+    ws.write("test_store.py", "import socket\n")
+    assert any("test_store.py" in p for p in floor._problems())
+
+
+def test_the_skeleton_removes_an_earlier_plan_s_files(tmp_path):  # 7c review r1 I2
+    ws = Workspace(tmp_path)
+    ws.write("server.py", "import http.server\n")
+    ws.write("lib/handlers.py", "x = 1\n")
+    ws.write("store.py", STORE)
+    apply(_plan(TODO), "Todo", ws)
+    assert set(ws.files()) == {"app.py", "store.py"}
+
+
+def test_a_skeleton_coder_hears_the_file_rule_up_front():  # 7c review r1 I3
+    from watchtower.floors.f2_dev.devfloor import _qa_block
+    assert "Write only store.py and test_store.py" in _qa_block("QA:\n", [], store_only=True)
+    assert "Write only" not in _qa_block("QA:\n", contract_checks(TODO, "1")[0])
+
+
+def test_a_rejected_file_is_a_change(tmp_path):  # 7c review r1 M5: no 'nothing could get better'
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    _, floor.owned = apply(_plan(TODO), "Todo", Workspace(tmp_path))
+    floor._write([{"path": "store.py", "content": STORE}])
+    notes = floor._write([{"path": "store.py", "content": STORE}, {"path": "app2.py", "content": "x"}])
+    assert not any("unchanged" in n.lower() or "nothing could get better" in n.lower() for n in notes)
+
+
+EVASIONS = ("from xmlrpc.server import SimpleXMLRPCServer\n", "import _socket\n", "import urllib.request\n",
+            "import os\nos.system('x')\n", "exec('import socket')\n", "eval('1')\n", "f = open('d.json', 'w')\n",
+            "x = __import__('so' + 'cket')\n", "import importlib\nim = importlib.import_module\n",
+            "import __main__\n", "def add(e):\n    e.__class__.__init__.__globals__\n", "import ctypes\n",
+            "from . import x\n")
+
+
+def test_the_store_may_import_only_safe_modules(tmp_path):  # 7c review r2 I1: an allowlist, not a denylist
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    for code in EVASIONS:
+        ws.write("store.py", code)
+        assert any("store.py" in p for p in store_problems(ws)), code
+
+
+def test_a_plain_store_and_its_tests_pass(tmp_path):  # 7c review r2 M5: no false positives
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    ws.write("store.py", "from __future__ import annotations\nimport json, threading, copy, html\n"
+                         "from datetime import datetime\nfrom collections import OrderedDict\n" + STORE
+             + "if __name__ == '__main__':\n    print(items())\n")
+    ws.write("test_store.py", "import importlib\nimport unittest\nimport store\n\nclass T(unittest.TestCase):\n"
+                              "    def setUp(self):\n        importlib.reload(store)\n\n"
+                              "    def test_add(self):\n        store.add({'item': 'http'})\n"
+                              "        self.assertEqual(store.items(), [{'item': 'http'}])\n\n"
+                              "if __name__ == '__main__':\n    unittest.main()\n")
+    assert store_problems(ws) == []
+
+
+def test_store_problems_come_first(tmp_path):  # 7c review r2 M4: the coder sees only the first 3
+    from devfloor_kit import dev
+    floor = dev(tmp_path, lambda role, prompt: {}, lambda cmd: None)
+    _, floor.owned = apply(_plan(TODO), "Todo", Workspace(tmp_path))
+    Workspace(tmp_path).write("store.py", "import requests\nimport yaml\nimport flask\nimport socket\n")
+    problems = floor._problems()
+    assert len(problems) > 1 and "only keeps data" in problems[0]
+
+
+def test_the_only_note_survives_checks_without_escapes():  # 7c review r2 M3 (operator precedence)
+    from watchtower.floors.f2_dev.devfloor import _qa_block
+    checks = [{"name": "x", "path": "/", "expect_text": "a"}]
+    assert "Write only store.py" in _qa_block("QA:\n", checks, store_only=True)
+
+
+def test_a_file_the_workspace_cannot_delete_does_not_stop_the_plan(tmp_path):  # 7c review r2 M2
+    from watchtower.engine.workspace import WorkspaceError
+    ws = Workspace(tmp_path)
+    (tmp_path / "todo.db").write_bytes(b"x")
+    try:
+        ws.delete("todo.db")
+        undeletable = False
+    except WorkspaceError:
+        undeletable = True
+    plan, owned = apply(_plan(TODO), "Todo", ws)
+    assert owned and (not undeletable or (tmp_path / "todo.db").exists())
+
+
+ALIASES = ("from uuid import os\n", "import uuid\nuuid.os.system('x')\n", "import threading\nthreading._os\n",
+           "import typing\ntyping.sys.modules\n", "import dataclasses\ndataclasses.inspect\n", "e = exec\n",
+           "x = [eval][0]\n", "g = globals()\n", "getattr(object, '__subcl' + 'asses__')\n", "from json import *\n",
+           "v = vars\n", "from collections import _sys\n")
+
+
+def test_allowed_modules_cannot_reach_dangerous_ones(tmp_path):  # 7c review r3 C1, C2
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    for code in ALIASES:
+        ws.write("store.py", code)
+        assert any("store.py" in p for p in store_problems(ws)), code
+
+
+def test_store_tests_may_use_sys_os_and_file(tmp_path):  # 7c review r3 I4: tests run in Docker only
+    from watchtower.floors.f2_dev.skeleton import store_problems
+    ws = Workspace(tmp_path)
+    ws.write("store.py", STORE)
+    ws.write("test_store.py", "import os\nimport sys\nfrom unittest import mock\nimport unittest\n"
+                              "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\nimport store\n")
+    assert store_problems(ws) == []
+    ws.write("test_store.py", "import socket\n")
+    assert store_problems(ws)
