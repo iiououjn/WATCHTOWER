@@ -101,3 +101,23 @@ def test_every_store_problem_says_what_to_do(tmp_path):  # C-M1: "only keeps dat
         ws.write("store.py", STORE + code)
         [p] = store_problems(ws)
         assert fix in p and len(p) <= 200, p
+
+
+def test_a_garbled_reply_after_hr_keeps_the_verdict_and_the_objection(tmp_path):  # C-M6: PASS vs pass False
+    from devfloor_kit import APP, ARCH, HR, OK, PLAN3, TEST, Runner
+    from watchtower.engine.model_socket import BadModelOutput
+    from watchtower.floors.f2_dev.devfloor import DevFloor
+    replies = [{"files": [APP, TEST]}, "garbled"]
+
+    def ask(role, prompt):
+        if role.id == HR.id:
+            return {"pass": False, "reason": "add a delete route"}
+        r = replies.pop(0)
+        if r == "garbled":
+            raise BadModelOutput("x")
+        return r
+    pkg = DevFloor(ARCH, CODER, ask=ask, workspace=Workspace(tmp_path), run=Runner([OK]), max_rounds=2,
+                   hr=HR).build(SPEC, PLAN3, [])
+    assert ("Tests: PASS" in pkg.summary) == pkg.checks_run[-1]["pass"] is True  # the files did not change
+    assert any("add a delete route" in q for q in pkg.open_questions)
+    assert not any(q.startswith("tests still failing") for q in pkg.open_questions)

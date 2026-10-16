@@ -248,7 +248,7 @@ class DevFloor:
         qa = _qa_block("Floor 4 QA will run these HTTP checks against your running app; make them pass:\n", qa_checks,
                        bool(self.owned))
         qa_short = _qa_block("", qa_checks, bool(self.owned), shown=False)
-        checks, output, passed, hr_asks, hr_question = [], "", False, 0, None
+        checks, output, passed, hr_asks, hr_question, hr_pending = [], "", False, 0, None, ""
         last_failing, diagnoses, diagnosis, diagnosed_for, carry = None, 0, "", None, []  # stuck = same set twice
         for round_no in range(self._max_rounds):
             parts = dict(spec=_spec_text(spec), plan=plan_text(plan), qa=qa, files="",
@@ -267,9 +267,12 @@ class DevFloor:
                     reply = self._ask(self._coder, CODE_PROMPT.format(
                         files=untrusted_code("workspace", self._ws.snapshot(room)), **parts))
                 except BadModelOutput:  # a garbled reply costs this round, not the whole job
-                    checks.append({"check": "tests", "round": round_no, "pass": False,  # files on disk still judged
+                    problems = self._problems()  # files on disk still judged; unchanged, so the last test result
+                    clean = bool(checks and checks[-1].get("clean"))  # holds (8c, C-M6: PASS beside pass False)
+                    passed = clean and not problems
+                    checks.append({"check": "tests", "round": round_no, "pass": passed, "clean": clean,
                                    "output": "coder reply had no usable files",
-                                   "problems": [str(p)[:200] for p in self._problems()]})
+                                   "problems": [str(p)[:200] for p in problems]})
                     notes = ["Your last reply had no usable files. Reply with one block per file: ### FILE: path, "
                              "then the complete file in a ``` fence."] + carry  # keep what HR said
                     continue
@@ -293,11 +296,13 @@ class DevFloor:
                 last_failing, carry, diagnosis, diagnosed_for = None, [], "", None  # a pass ends any stuck set
                 verdict = self._hr_review(spec, plan) if self._hr is not None and hr_asks < MAX_HR_ASKS else None
                 if verdict is None or verdict[0]:
+                    hr_pending = ""
                     break
                 hr_asks += 1
                 if hr_asks >= MAX_HR_ASKS or round_no == self._max_rounds - 1:
                     hr_question = f"F2 HR not satisfied: {verdict[1][:200]}"
                     break
+                hr_pending = verdict[1]  # still open if the rounds run out first (8c, C-M6)
                 carry = ["Floor 2 HR reviewed your code and asked for changes:\n" + _capped("f2.hr", verdict[1], 800)]
                 notes += carry  # kept through a garbled reply
                 continue
@@ -333,6 +338,7 @@ class DevFloor:
         summary = (f"Entry: {plan['entry']}\nFiles: {', '.join(self._ws.files()) or '(none)'}\n"
                    f"Tests: {'PASS' if passed else 'FAIL'}\n{output[-800:]}")
         questions = [] if passed else [f"tests still failing after {len(checks)} round(s)"]
+        hr_question = hr_question or (f"F2 HR not satisfied: {hr_pending[:200]}" if hr_pending else None)
         questions += [hr_question] if hr_question else []
         return WorkPackage("f2", summary, self._ws.files(), [], checks, questions)
 
