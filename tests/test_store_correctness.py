@@ -4,6 +4,7 @@ from devfloor_kit import CODER, SPEC, Script, dev, verdict
 from watchtower.engine.workspace import Workspace
 from watchtower.floors.f2_dev.devfloor import units
 from watchtower.floors.f2_dev.skeleton import apply
+from conftest import start_signed
 from runner_kit import app_tower  # noqa: F401 — pipeline fixture
 
 ROUTES = [{"method": "GET", "path": "/", "fields": [], "shows": "All todo items and an add form"},
@@ -174,7 +175,7 @@ def test_under_the_skeleton_no_coder_message_asks_for_a_web_app(app_tower):  # 8
     arch = dict(APP_REPLIES["f2.architect"][0])
     arch["routes"] = arch["routes"] + [{"method": "POST", "path": "/add", "fields": ["item"], "shows": "added"}]
     runner, model, _, job = app_tower({"f2.architect": [arch], "f2.coder": ["I will write it now."] + STORE_CODER})
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     convos = [m for c, m in zip(model.calls, model.messages) if c == "f2.coder"]
     retries = [m[-1]["content"].split("no usable files", 1)[1] for m in convos if "no usable files" in m[-1]["content"]]
     assert convos and retries
@@ -189,7 +190,7 @@ def test_under_the_skeleton_no_coder_message_asks_for_a_web_app(app_tower):  # 8
 
 def test_the_coder_keeps_its_web_app_prompt_without_the_skeleton(app_tower):  # 8c review r3: only owned mode
     runner, model, _, job = app_tower()
-    assert runner.start(job.id, extra={"auto_approve": True}).status == "done"
+    assert start_signed(runner, job.id).status == "done"
     systems = {m[0]["content"] for c, m in zip(model.calls, model.messages) if c == "f2.coder"}
     assert systems and all("PORT" in s and "### FILE: app.py" in s for s in systems)
     runner.close()
