@@ -23,7 +23,7 @@ from watchtower.engine.jobs import JobStore
 from watchtower.engine.knowledge import Knowledge
 from watchtower.engine.memory import ContextStore
 from watchtower.engine.model_socket import ModelSocket
-from watchtower.engine.runner import JobRunner, RunOutcome
+from watchtower.engine.runner import JobRunner, RunOutcome, owner_alive
 from watchtower.engine.sandbox import Sandbox
 from watchtower.engine.scheduler import Scheduler
 from watchtower.engine.system import free_ram_pct
@@ -124,7 +124,7 @@ def ask(
 
 @app.command()
 def pause(job_id: str):
-    """Ask a running job to pause after its current step."""
+    """Ask a running job to pause after its current step or dev attempt."""
     _, conn = _open()
     jobs = JobStore(conn)
     job = jobs.get(job_id)
@@ -134,13 +134,13 @@ def pause(job_id: str):
         raise typer.Exit(2)
     jobs.request_pause(job_id)
     AuditLog(conn).append("owner", "pause_requested", {}, job_id)
-    typer.echo(f"Pause requested; job {job_id} will pause after its current step.")
+    typer.echo(f"Pause requested; job {job_id} will pause after its current step or dev attempt.")
 
 
 @app.command()
 def resume(
     job_id: str,
-    force: bool = typer.Option(False, "--force", help="Also resume a job stuck 'running' after power loss"),
+    force: bool = typer.Option(False, "--force", help="Kept for old scripts; a dead job's free lock is enough"),
 ):
     """Resume a paused job from its last finished step."""
     settings, conn = _open()
@@ -161,13 +161,15 @@ def resume(
 @app.command()
 def status(limit: int = 20):
     """List recent jobs."""
-    _, conn = _open()
+    settings, conn = _open()
     rows = JobStore(conn).list(limit)
     if not rows:
         typer.echo("No jobs yet.")
         return
     for j in rows:
         line = f"{j.id}  {j.status:<8} {j.created_at[:19]}  {j.prompt[:60]}"
+        if j.status == "running" and not owner_alive(settings.home, j.id):  # 8b: its process died
+            line += "  (process gone; resume it)"
         typer.echo(_clean(line + (f"  — {j.error}" if j.error else "")))  # gate reasons, app logs (8a)
 
 

@@ -70,7 +70,7 @@ def test_run_rejects_non_positive_max_tokens(monkeypatch, bad):
     assert "No jobs" in runner.invoke(cli.app, ["status"]).output
 
 
-@pytest.mark.parametrize("exc,code,status", [(KeyboardInterrupt, 3, "paused"), (RuntimeError, 1, "failed")])
+@pytest.mark.parametrize("exc,code,status", [(KeyboardInterrupt, 3, "paused"), (RuntimeError, 3, "paused")])
 def test_unexpected_error_never_leaves_job_running(monkeypatch, exc, code, status):
     class Exploding:
         def ask(self, *a, **kw):
@@ -135,8 +135,7 @@ def test_force_resume_stuck_running_job(monkeypatch):
     from watchtower.engine.jobs import JobStore
     JobStore(connect(load_settings().db_path)).set_status(job_id, "running")
     state["down"] = False
-    assert runner.invoke(cli.app, ["resume", job_id]).exit_code == 2
-    result = runner.invoke(cli.app, ["resume", job_id, "--force"])
+    result = runner.invoke(cli.app, ["resume", job_id])  # 8b: the free job lock proves its process died
     assert result.exit_code == 0 and "recovered" in result.output
 
 
@@ -158,7 +157,7 @@ def test_pause_flags_running_job():
     store.set_status(job.id, "running")
     result = runner.invoke(cli.app, ["pause", job.id])
     assert result.exit_code == 0
-    assert "after its current step" in result.output
+    assert "after its current step or dev attempt" in result.output
     assert store.pause_requested(job.id) is True
 
 

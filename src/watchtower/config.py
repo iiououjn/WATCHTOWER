@@ -30,8 +30,10 @@ class Settings:
     sandbox_free_ram_pct: int = 35  # below this, the model is unloaded before each sandbox run
     agent_slots: int = 1
     sandbox_image: str = SANDBOX_IMAGE
+    slot_wait_s: int = 600  # a second job waits this long for a slot, then pauses (calls took up to 327 s)
     num_ctx: int = 6144  # set explicitly so Ollama never silently truncates the system prompt
     max_output_tokens: int = 2048
+    call_timeout_s: int = 600  # one model call; real replies took up to 327 s on 8 GB (runs 36-39)
     online: bool = False  # the Beacon may search the web
 
     @property

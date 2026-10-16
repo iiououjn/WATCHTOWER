@@ -131,3 +131,10 @@ def start_signed(runner, job_id, extra=None):
         approvals.decide(pending.id, True)
         out = runner.resume(job_id)
     return out
+
+
+@pytest.fixture(autouse=True)
+def no_retry_waits(monkeypatch):
+    """8b: model retries keep their tries but not their seconds of backoff in tests (test_model_retry checks them)."""
+    from watchtower.engine import model_socket
+    monkeypatch.setattr(model_socket, "RETRY_DELAYS", (0.0, 0.0))

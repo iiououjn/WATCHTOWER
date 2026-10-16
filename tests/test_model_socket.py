@@ -88,13 +88,14 @@ def test_ollama_down_gives_actionable_error_and_audit(parts):
     sock, _ = make(parts, completion=broken)
     with pytest.raises(ModelUnavailable, match="ollama pull llama3.2:3b"):
         sock.ask("small", [{"role": "user", "content": "x"}], "j")
-    assert [e.action for e in audit.entries(job_id="j")] == ["model_call", "model_error"]
+    assert [e.action for e in audit.entries(job_id="j")] == ["model_call"] + ["model_error"] * 3  # 8b: retried
 
 
 def test_budget_exceeded_stops(parts):
     settings, budget, audit = parts
     budget.open("tiny", max_tokens=5, max_seconds=600, max_usd=0.0)
     sock, _ = make(parts)
+    sock.ask("small", [{"role": "user", "content": "x"}], "tiny")  # 8b: an overshooting reply is kept
     with pytest.raises(BudgetExceeded):
         sock.ask("small", [{"role": "user", "content": "x"}], "tiny")
 

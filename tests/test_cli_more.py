@@ -213,3 +213,19 @@ def test_research_does_not_need_docker(monkeypatch):
     use_completion(monkeypatch, lambda **kw: fake_response('{"title": "t", "goal": "g", "acceptance": ["a"]}', 1, 1))
     result = runner.invoke(cli.app, ["research", "lighthouses", "--yes", "--offline"])
     assert not isinstance(result.exception, AssertionError) and "Docker" not in result.output
+
+
+def test_status_marks_a_running_job_whose_process_is_gone(monkeypatch):
+    import fcntl
+    use_completion(monkeypatch, lambda **kw: fake_response("ok", 1, 1))
+    runner.invoke(cli.app, ["ask", "hello"])
+    job_id = latest_job_id()
+    from watchtower.config import load_settings
+    from watchtower.engine.db import connect
+    from watchtower.engine.jobs import JobStore
+    settings = load_settings()
+    JobStore(connect(settings.db_path)).set_status(job_id, "running")
+    assert "process gone; resume it" in runner.invoke(cli.app, ["status"]).output
+    with open(settings.home / "jobs" / f"{job_id}.lock", "w") as live:
+        fcntl.flock(live, fcntl.LOCK_EX)
+        assert "process gone" not in runner.invoke(cli.app, ["status"]).output

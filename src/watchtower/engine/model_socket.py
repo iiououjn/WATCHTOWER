@@ -14,6 +14,11 @@ from watchtower.engine.system import free_ram_pct
 LOCAL_PREFIX = "ollama/"
 RAM_SETTLE_POLLS = 10  # Ollama frees an unloaded model's RAM asynchronously
 RAM_SETTLE_SECONDS = 0.5
+RETRY_DELAYS = (2.0, 4.0)  # backoff before the 2nd and 3rd try of a transient failure (spec §10)
+_TRANSIENT_NAMES = {  # litellm's and httpx's names for a dropped connection, a timeout or a server error
+    "APIConnectionError", "Timeout", "InternalServerError", "ServiceUnavailableError", "BadGatewayError",
+    "TransportError", "NetworkError", "ConnectError", "ReadError", "WriteError", "RemoteProtocolError",
+    "TimeoutException", "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout"}
 
 
 class ModelUnavailable(Exception):
@@ -30,6 +35,21 @@ class LowMemory(Exception):
 
 class BadModelOutput(Exception):
     pass
+
+
+def transient(error: BaseException) -> bool:
+    """Worth another try: the connection dropped, the call timed out, or the server failed (5xx). Read from
+    builtins, a status code and class names (MRO), never library types, so it outlives a swap of the client."""
+    if isinstance(error, (ConnectionError, TimeoutError)):
+        return True
+    if any(cls.__name__ in _TRANSIENT_NAMES for cls in type(error).__mro__):  # before the code: a Timeout is 408
+        return True
+    status = getattr(error, "status_code", None)
+    if status is None:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+    if isinstance(status, int) and not isinstance(status, bool):
+        return 500 <= status <= 599
+    return False
 
 
 def parse_json(text: str) -> dict:
@@ -186,32 +206,47 @@ class ModelSocket:
         if not local and not self._s.cloud_enabled:
             raise CloudDisabled(f"cloud model {model} is disabled; enable cloud models explicitly")
         self._budget.check(job_id)
-        usage = self._budget.usage(job_id)
         if local:
             self._swap_to(model, job_id)
 
         self._audit.append("model_socket", "model_call", {"tier": tier, "model": model}, job_id)
-        kwargs = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max(1, min(self._s.max_output_tokens, usage["max_tokens"] - usage["used_tokens"])),
-            "timeout": max(1.0, usage["max_seconds"] - usage["used_seconds"]),
-        }
+        kwargs = {"model": model, "messages": messages}
         if local:
             kwargs["api_base"] = self._s.ollama_url
             kwargs["num_ctx"] = self._s.num_ctx
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
-        start = self._clock()
-        try:
-            resp = self._complete(**kwargs)
-        except Exception as e:
-            self._audit.append(
-                "model_socket", "model_error",
-                {"model": model, "error": f"{type(e).__name__}: {str(e)[:200]}"}, job_id,
-            )
-            hint = f" Is Ollama running? Try: ollama pull {model.removeprefix(LOCAL_PREFIX)}" if local else ""
-            raise ModelUnavailable(f"{model} unavailable ({type(e).__name__}).{hint}") from e
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            if attempt:  # a transient failure: back off, then only if the budget still has room
+                self._sleep(RETRY_DELAYS[attempt - 1])
+                self._budget.check(job_id)
+                if local:  # Ollama may have crashed and restarted: read the resident list and RAM again
+                    self._swap_to(model, job_id)
+            kwargs.update(self._limits(job_id))
+            start = self._clock()
+            try:
+                resp = self._complete(**kwargs)
+                break
+            except Exception as e:
+                retry = transient(e) and attempt < len(RETRY_DELAYS)
+                try:  # best effort: a locked DB here must not replace the model error in flight
+                    self._budget.record(job_id, seconds=self._clock() - start)  # a failed call costs its time too
+                    self._audit.append(
+                        "model_socket", "model_error",
+                        {"model": model, "error": f"{type(e).__name__}: {str(e)[:200]}", "try": attempt + 1,
+                         "retry": retry}, job_id,
+                    )
+                except Exception:  # noqa: BLE001 — the next budget check reads the DB again
+                    pass
+                if not retry:
+                    hint = f" Is Ollama running? Try: ollama pull {model.removeprefix(LOCAL_PREFIX)}" if local else ""
+                    raise ModelUnavailable(f"{model} unavailable ({type(e).__name__}).{hint}") from e
+            except BaseException:  # review r3: Ctrl-C or a stop signal mid-call: the call's time is still spent
+                try:
+                    self._budget.record(job_id, seconds=self._clock() - start)
+                except Exception:  # noqa: BLE001 — never replaces the interrupt
+                    pass
+                raise
         seconds = self._clock() - start
 
         try:
@@ -219,15 +254,26 @@ class ModelSocket:
             pt = int(resp.usage.prompt_tokens or 0)
             ct = int(resp.usage.completion_tokens or 0)
         except (AttributeError, IndexError, TypeError) as e:
-            self._audit.append("model_socket", "model_error", {"model": model, "error": "malformed response"}, job_id)
+            try:  # review r3: a malformed reply took its time too: charged, so a resume loop meets the cap
+                self._budget.record(job_id, seconds=seconds)
+                self._audit.append("model_socket", "model_error", {"model": model, "error": "malformed response"},
+                                   job_id)
+            except Exception:  # noqa: BLE001 — the malformed-reply error is what the owner needs
+                pass
             raise ModelUnavailable(f"{model} returned a malformed response") from e
         usd = 0.0 if local else _litellm_cost(resp)
-        self._budget.charge(job_id, tokens=pt + ct, seconds=seconds, usd=usd)
+        self._budget.record(job_id, tokens=pt + ct, seconds=seconds, usd=usd)  # over the cap: kept; next check stops
         self._audit.append(
             "model_socket", "model_reply",
             {"model": model, "tokens": pt + ct, "seconds": round(seconds, 3), "usd": usd}, job_id,
         )
         return Reply(text, model, pt, ct, seconds, usd)
+
+    def _limits(self, job_id: str) -> dict:
+        """This call's hard limits: what is left of the job's budget, and never more than one call's timeout."""
+        usage = self._budget.usage(job_id)
+        return {"max_tokens": max(1, min(self._s.max_output_tokens, usage["max_tokens"] - usage["used_tokens"])),
+                "timeout": max(1.0, min(self._s.call_timeout_s, usage["max_seconds"] - usage["used_seconds"]))}
 
     def ask_files(self, tier: str, messages: list[dict], job_id: str, retries: int = 1) -> dict:
         """Ask for files as fenced blocks (plain text, no JSON escaping). A JSON {"files": [...]} reply is still

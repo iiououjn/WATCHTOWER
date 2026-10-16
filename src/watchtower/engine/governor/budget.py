@@ -26,6 +26,12 @@ class Budget:
         return {k: row[k] for k in row.keys() if k != "job_id"}
 
     def charge(self, job_id: str, tokens: int = 0, seconds: float = 0.0, usd: float = 0.0) -> None:
+        self.record(job_id, tokens, seconds, usd)
+        self._enforce(job_id, before_call=False)
+
+    def record(self, job_id: str, tokens: int = 0, seconds: float = 0.0, usd: float = 0.0) -> None:
+        """Count what was spent without enforcing: the next check() stops the job (8b: never hides a reply
+        or an error that is already in hand)."""
         cur = self._conn.execute(
             "UPDATE budgets SET used_tokens=used_tokens+?, used_seconds=used_seconds+?, used_usd=used_usd+? "
             "WHERE job_id=?",
@@ -33,7 +39,6 @@ class Budget:
         )
         if cur.rowcount == 0:
             raise KeyError(job_id)
-        self._enforce(job_id, before_call=False)
 
     def check(self, job_id: str) -> None:
         """Before a call: no room left (tokens/seconds at cap) means stop. USD cap 0 still allows free calls."""

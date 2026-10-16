@@ -96,6 +96,12 @@ class QARound:
         good = has_page_text(checks, self._spec["title"])  # a suite that tests no real text is not a suite
         self.checks, self._fallback = ([dict(c) for c in checks], False) if good else ([], True)
 
+    def state(self) -> dict:  # 8b: kept in the dev floor's per-attempt checkpoint
+        return {"checks": [dict(c) for c in self.checks], "fallback": self._fallback}
+
+    def restore(self, state: dict) -> None:
+        self.checks, self._fallback = [dict(c) for c in state["checks"]], bool(state["fallback"])
+
     @property
     def coder_checks(self) -> list[dict]:
         return [] if self._fallback else self.checks  # fallback checks are rewritten next attempt: never stale

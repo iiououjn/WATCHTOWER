@@ -1,3 +1,5 @@
+import sqlite3
+
 from conftest import start_signed
 from runner_kit import *  # noqa: F403 — helpers and fixtures
 
@@ -20,7 +22,7 @@ def test_ollama_down_pauses_then_resume_skips_plan(env):
     assert jobs.get(job.id).status == "paused"
     model.fail_on = None
     assert runner.resume(job.id).answer == "answer-text"
-    assert model.calls == {"plan": 1, "answer": 2}
+    assert model.calls == {"plan": 1, "answer": 4}  # 8b: three tries before the pause, one after
     assert topics(bus, job.id) == ["job.started", "job.paused", "job.resumed", "job.done"]
 
 
@@ -69,9 +71,7 @@ def test_force_resume_recovers_job_stuck_running(env):
     runner, jobs, bus, model, unloaded, job = env
     model.fail_on, model.fail_exc = "answer", ConnectionError
     runner.start(job.id, "small")
-    jobs.set_status(job.id, "running")  # simulate power loss mid-job
-    with pytest.raises(ValueError, match="--force"):
-        runner.resume(job.id)
+    jobs.set_status(job.id, "running")  # simulate power loss mid-job (8b: plain resume works too)
     model.fail_on = None
     assert runner.resume(job.id, force=True).status == "done"
     assert model.calls["plan"] == 1
@@ -451,3 +451,18 @@ def test_sign_off_names_only_commands_that_work_before_approval(app_tower, conn)
     assert f"After you approve: watchtower deploy {job.id}" in summary
     assert "Deploy it isolated" not in summary and "python app.py" not in summary
     runner.close()
+
+
+def test_a_failed_outcome_publish_never_hides_the_outcome(env, monkeypatch):
+    runner, jobs, bus, model, unloaded, job = env
+    model.fail_on, model.fail_exc = "answer", ConnectionError
+    real = bus.publish
+
+    def locked(topic, *a, **kw):
+        if topic == "job.paused":
+            raise sqlite3.OperationalError("database is locked")
+        return real(topic, *a, **kw)
+    monkeypatch.setattr(bus, "publish", locked)
+    out = runner.start(job.id, "small")
+    assert out.status == "paused" and "ollama pull" in out.reason  # the pause reason, not the publish error
+    assert jobs.get(job.id).status == "paused"

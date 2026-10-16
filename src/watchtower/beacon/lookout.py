@@ -62,6 +62,12 @@ class Lookout:
     def __init__(self, beacon_factory: Callable | None, knowledge: Knowledge):
         self._factory, self._knowledge, self._used = beacon_factory, knowledge, Counter()
 
+    def state(self) -> dict[str, int]:  # 8b review r3: kept in the dev floor's checkpoint, so the cap survives a resume
+        return dict(self._used)
+
+    def restore(self, used: dict[str, int]) -> None:
+        self._used = Counter({str(f): int(n) for f, n in used.items()})
+
     def ask(self, floor: str, query: str, job_id: str | None, ask_glass: Callable[[str], dict],
             max_hits: int = 2, max_chars: int = ANSWER_CHARS + 200) -> str:
         q = scrub_query(query)
