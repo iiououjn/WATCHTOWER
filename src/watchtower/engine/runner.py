@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import fcntl
+import signal
 import sqlite3
+import threading
 from contextlib import contextmanager
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -34,6 +37,47 @@ ANSWER_PROMPT = "Request: {prompt}\n\nPlan:\n{plan}\n\nFollow the plan and answe
 PAUSE_ERRORS = (ModelUnavailable, LowMemory, SchedulerBusy, SandboxUnavailable, BadModelOutput, NeedsOwner,
                 SearchUnavailable)
 FAIL_ERRORS = (BudgetExceeded, CloudDisabled, SpecRejected)
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)  # kill, launchd stop, closing the terminal
+
+
+class Terminated(BaseException):  # a BaseException, like KeyboardInterrupt: no floor's `except Exception` eats it
+    pass
+
+
+def _lock_path(home: Path, job_id: str) -> Path:
+    return home / "jobs" / f"{job_id}.lock"
+
+
+def owner_alive(home: Path, job_id: str) -> bool:
+    """Is a process holding this job's lock? The kernel drops a flock when its process dies (even SIGKILL),
+    so a 'running' job whose lock is free has no owner: it crashed and can be resumed."""
+    path = _lock_path(home, job_id)
+    if not path.exists():
+        return False
+    with open(path, "a") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(handle, fcntl.LOCK_UN)
+    return False
+
+
+@contextmanager
+def _stop_signals_pause() -> Iterator[None]:
+    """SIGTERM/SIGHUP during a run raise Terminated, which pauses the job (signal handlers: main thread only)."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def stop(signum, frame):
+        raise Terminated(f"terminated by {signal.Signals(signum).name}")
+    previous = {s: signal.signal(s, stop) for s in STOP_SIGNALS}
+    try:
+        yield
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
 
 
 @dataclass(frozen=True)
@@ -53,6 +97,7 @@ class JobRunner:
         self._socket = socket
         self._scheduler = scheduler
         self._bus = bus
+        self._home = settings.home
         self._lock_dir = settings.home / "jobs"
         self._lock_dir.mkdir(parents=True, exist_ok=True)
         if beacon_factory is None and settings.online:
@@ -78,25 +123,30 @@ class JobRunner:
         data = {"job_id": job_id, "prompt": job.prompt, "tier": tier, **(extra or {})}
         wf = self._wfs[job.pipeline]
         with self._job_lock(job_id):
-            self._jobs.set_status(job_id, "running")
-            self._bus.publish("job.started", {"tier": tier, "pipeline": job.pipeline}, job_id)
-            return self._drive(job_id, lambda: wf.run(job_id, data))
+            def go() -> WorkflowResult:
+                self._jobs.set_status(job_id, "running")
+                self._bus.publish("job.started", {"tier": tier, "pipeline": job.pipeline}, job_id)
+                return wf.run(job_id, data)
+            return self._drive(job_id, go)
 
     def resume(self, job_id: str, force: bool = False) -> RunOutcome:
-        """Resume from the last finished step. force=True also accepts a job stuck in
-        'running' after power loss or kill -9 (the owner asserts its process is gone)."""
-        job = self._jobs.get(job_id)
-        if job is None:
+        """Resume from the last finished step. A 'running' job is accepted only once its lock is ours: the
+        kernel freed it, so its process died (kill -9, power loss, OOM). force is kept for old scripts."""
+        if self._jobs.get(job_id) is None:
             raise KeyError(job_id)
-        allowed = {"paused", "running"} if force else {"paused"}
-        if job.status not in allowed:
-            hint = " (use --force if its process died)" if job.status == "running" else ""
-            raise ValueError(f"job {job_id} is {job.status}; only paused jobs can be resumed{hint}")
-        with self._job_lock(job_id):
-            self._jobs.clear_pause(job_id)
-            self._jobs.set_status(job_id, "running")
-            self._bus.publish("job.resumed", {}, job_id)
-            return self._drive(job_id, lambda: self._wfs[job.pipeline].resume(job_id))
+        with self._job_lock(job_id):  # lock first: a held lock means a live owner, never a crash
+            job = self._jobs.get(job_id)
+            if job.status not in {"paused", "running"}:
+                raise ValueError(f"job {job_id} is {job.status}; only paused jobs can be resumed")
+
+            def go() -> WorkflowResult:
+                self._jobs.clear_pause(job_id)
+                if job.status == "running":
+                    self._bus.publish("job.recovered", {"reason": "its process died (job lock was free)"}, job_id)
+                self._jobs.set_status(job_id, "running")
+                self._bus.publish("job.resumed", {}, job_id)
+                return self._wfs[job.pipeline].resume(job_id)
+            return self._drive(job_id, go)
 
     def close(self) -> None:
         for wf in self._wfs.values():
@@ -106,7 +156,7 @@ class JobRunner:
     def _job_lock(self, job_id: str) -> Iterator[None]:
         """One process per job. The kernel drops the lock if the process dies, so a free
         lock on a 'running' job means its process is gone."""
-        handle = open(self._lock_dir / f"{job_id}.lock", "w")
+        handle = open(_lock_path(self._home, job_id), "w")
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -120,11 +170,14 @@ class JobRunner:
 
     def _drive(self, job_id: str, go) -> RunOutcome:
         try:
-            result: WorkflowResult = go()
+            with _stop_signals_pause():
+                result: WorkflowResult = go()
         except PAUSE_ERRORS as e:
             return self._end(job_id, "paused", str(e))
         except KeyboardInterrupt:
             return self._end(job_id, "paused", "interrupted by owner")
+        except Terminated as e:
+            return self._end(job_id, "paused", f"{e}; resume it")
         except FAIL_ERRORS as e:
             return self._end(job_id, "failed", str(e))
         except Exception as e:

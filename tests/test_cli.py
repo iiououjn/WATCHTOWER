@@ -135,8 +135,7 @@ def test_force_resume_stuck_running_job(monkeypatch):
     from watchtower.engine.jobs import JobStore
     JobStore(connect(load_settings().db_path)).set_status(job_id, "running")
     state["down"] = False
-    assert runner.invoke(cli.app, ["resume", job_id]).exit_code == 2
-    result = runner.invoke(cli.app, ["resume", job_id, "--force"])
+    result = runner.invoke(cli.app, ["resume", job_id])  # 8b: the free job lock proves its process died
     assert result.exit_code == 0 and "recovered" in result.output
 
 

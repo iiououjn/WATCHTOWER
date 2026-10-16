@@ -68,9 +68,7 @@ def test_force_resume_recovers_job_stuck_running(env):
     runner, jobs, bus, model, unloaded, job = env
     model.fail_on, model.fail_exc = "answer", ConnectionError
     runner.start(job.id, "small")
-    jobs.set_status(job.id, "running")  # simulate power loss mid-job
-    with pytest.raises(ValueError, match="--force"):
-        runner.resume(job.id)
+    jobs.set_status(job.id, "running")  # simulate power loss mid-job (8b: plain resume works too)
     model.fail_on = None
     assert runner.resume(job.id, force=True).status == "done"
     assert model.calls["plan"] == 1
