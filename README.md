@@ -193,7 +193,7 @@ Each dev attempt runs F2 → F3 → F4 → F5 checks, then one **Floor 5 gate** 
 ## The 3D dashboard
 
 `watchtower dashboard` opens a live, read-only 3D view of the tower in your browser: **http://127.0.0.1:8765** (loopback only).
-**Try it without installing anything:** the [hosted demo](https://rishiupadhyaygithub.github.io/watchtower/) plays a made-up run (no tower, no data behind it).
+**Try it without installing anything:** the hosted demo ([Vercel](https://watchtower-demo-nu.vercel.app), [GitHub Pages](https://rishiupadhyaygithub.github.io/watchtower/)) plays a made-up run (no tower, no data behind it).
 
 ```bash
 uv run watchtower dashboard            # default port 8765; --port N to change
