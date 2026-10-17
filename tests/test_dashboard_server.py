@@ -241,3 +241,42 @@ def test_rejecting_a_connection_never_waits_on_the_client(served):
     t0 = time.time()
     served.process_request(r, ("127.0.0.1", 1))
     assert time.time() - t0 < 0.1 and r.timeouts and all(t == 0 for t in r.timeouts)
+
+
+def test_the_full_chain_check_runs_at_most_every_30_seconds(served, monkeypatch):
+    from watchtower.dashboard import server as srv
+    monkeypatch.setattr(srv, "CACHE_SECONDS", 0)  # no state cache, so every request recomputes
+    seen = []
+    real = srv.state
+    monkeypatch.setattr(srv, "state", lambda db, check_chain=True: seen.append(check_chain) or real(db, check_chain=check_chain))
+    for _ in range(4):
+        assert json.loads(_get(served, "/api/state")[1])["chain_ok"] is True
+    assert seen == [True, False, False, False]
+
+
+def test_only_one_state_computation_runs_at_a_time(served, monkeypatch):
+    import time
+    from watchtower.dashboard import server as srv
+    calls = []
+    real = srv.state
+
+    def slow(db, check_chain=True):
+        calls.append(1)
+        time.sleep(0.3)
+        return real(db, check_chain=check_chain)
+
+    monkeypatch.setattr(srv, "state", slow)
+    threads = [threading.Thread(target=_get, args=(served, "/api/state")) for _ in range(6)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert len(calls) == 1
+
+
+def test_a_busy_port_is_never_shared(served):
+    from watchtower.dashboard.server import _Server
+    assert _Server.allow_reuse_address is False
+
+
+def test_a_client_that_vanishes_leaves_no_traceback_on_the_owners_terminal(served, capsys):
+    served.handle_error(None, ("127.0.0.1", 1))
+    assert capsys.readouterr().err == ""

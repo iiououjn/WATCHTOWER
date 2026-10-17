@@ -55,7 +55,7 @@ function render(s) {
   fill($('approvals'), table(['id', 'job', 'kind', 'summary'], s.approvals.map((a) => [a.id, a.job_id, a.kind, a.summary.slice(0, 160)]),
     'Nothing waiting for you.'));
   fill($('jobs'), table(['job', 'status', 'floor', 'prompt'], s.jobs.map((j) =>
-    [j.id, cellWith(el('span', j.status, 's-' + j.status)), j.floor || 'planning', j.prompt.slice(0, 120) + (j.error ? ' | ' + j.error.slice(0, 120) : '')]), 'No jobs yet.'));
+    [j.id, cellWith(el('span', j.status, 's-' + j.status)), j.floor || (j.status === 'done' || j.status === 'failed' ? '-' : 'planning'), j.prompt.slice(0, 120) + (j.error ? ' | ' + j.error.slice(0, 120) : '')]), 'No jobs yet.'));
   fill($('budgets'), table(['job', 'tokens', 'time'], s.budgets.map((b) => {
     const m = el('div', null, 'meter'), i = el('i'); i.style.width = Math.min(100, 100 * b.used_tokens / Math.max(1, b.max_tokens)) + '%'; m.append(i);
     return [b.job_id, cellWith((() => { const d = el('div'); d.append(el('span', b.used_tokens + ' / ' + b.max_tokens, 'mono'), m); return d; })()), b.used_seconds + ' / ' + b.max_seconds + ' s'];

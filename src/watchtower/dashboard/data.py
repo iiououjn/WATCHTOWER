@@ -8,11 +8,13 @@ from pathlib import Path
 
 from watchtower.engine.db import now
 from watchtower.engine.governor.audit import AuditLog
+from watchtower.evidence import no_host_run
 from watchtower.interface.shell import clean
 
 CAP = 2000
 JOBS = 20
 AUDIT = 50
+WINDOW = 3000
 
 
 def open_readonly(db_path: Path) -> sqlite3.Connection:
@@ -44,29 +46,24 @@ def _tidy(value: object) -> str:
     return text if len(text) <= CAP else text[:CAP] + "..."
 
 
-def _floor_of(conn: sqlite3.Connection, job_id: str) -> str | None:
-    row = conn.execute("SELECT detail FROM audit_log WHERE job_id=? AND detail LIKE '%\"floor\"%' ORDER BY seq DESC LIMIT 1",
-                       (job_id,)).fetchone()
-    if row is None:
-        return None
-    try:
-        floor = json.loads(row["detail"]).get("floor")
-    except (ValueError, AttributeError, RecursionError):
-        return None
-    return _tidy(floor) if floor else None
-
-
-def _awake(conn: sqlite3.Connection, job_id: str) -> list[str]:
-    awake: dict[str, bool] = {}
-    rows = conn.execute("SELECT action, detail FROM audit_log WHERE job_id=? AND action IN ('agent.wake','agent.idle')"
-                        " ORDER BY seq DESC LIMIT 200", (job_id,)).fetchall()
-    for r in reversed(rows):
+def _activity(conn: sqlite3.Connection) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """Each job's latest floor and awake agents, from ONE scan of the newest WINDOW audit rows (the table has no
+    per-job index, so per-job scans would walk the whole log on every refresh). A job quiet for longer shows no floor."""
+    floors: dict[str, str] = {}
+    awake: dict[str, dict[str, bool]] = {}
+    rows = conn.execute("SELECT job_id, action, detail FROM audit_log WHERE job_id IS NOT NULL AND seq > "
+                        "COALESCE((SELECT MAX(seq) FROM audit_log), 0) - ? AND (detail LIKE '%\"floor\"%' OR "
+                        "action IN ('agent.wake','agent.idle')) ORDER BY seq", (WINDOW,)).fetchall()
+    for r in rows:
         try:
-            name = _tidy(json.loads(r["detail"]).get("agent"))
+            detail = json.loads(r["detail"])
+            if detail.get("floor"):
+                floors[r["job_id"]] = _tidy(detail["floor"])
+            if r["action"] in ("agent.wake", "agent.idle"):
+                awake.setdefault(r["job_id"], {})[_tidy(detail.get("agent"))] = r["action"] == "agent.wake"
         except (ValueError, AttributeError, RecursionError):
             continue
-        awake[name] = r["action"] == "agent.wake"
-    return sorted(n for n, on in awake.items() if on)
+    return floors, {j: sorted(n for n, on in agents.items() if on) for j, agents in awake.items()}
 
 
 def _chain_ok(conn: sqlite3.Connection) -> bool:
@@ -79,15 +76,16 @@ def _chain_ok(conn: sqlite3.Connection) -> bool:
 def state(db_path: Path, check_chain: bool = True) -> dict:
     conn = open_readonly(db_path)
     try:
+        floors, awake = _activity(conn)
         jobs = []
         for r in conn.execute("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?", (JOBS,)).fetchall():
             running = r["status"] == "running"
             jobs.append({"id": _tidy(r["id"]), "status": _tidy(r["status"]), "prompt": _tidy(r["prompt"]),
                          "error": _tidy(r["error"]) or None, "updated_at": _tidy(r["updated_at"]),
-                         "floor": _floor_of(conn, r["id"]), "awake": _awake(conn, r["id"]) if running else []})
+                         "floor": floors.get(r["id"]), "awake": awake.get(r["id"], []) if running else []})
         approvals = [{"id": r["id"], "job_id": _tidy(r["job_id"]), "kind": _tidy(r["kind"]),
-                      "summary": _tidy(r["summary"]), "created_at": _tidy(r["created_at"])}
-                     for r in conn.execute("SELECT * FROM approvals WHERE status='pending' ORDER BY id").fetchall()]
+                      "summary": _tidy(no_host_run(r["summary"])), "created_at": _tidy(r["created_at"])}
+                     for r in conn.execute("SELECT * FROM approvals WHERE status='pending' ORDER BY id LIMIT 50").fetchall()]
         audit = [{"seq": r["seq"], "ts": _tidy(r["ts"]), "job_id": _tidy(r["job_id"]) or None, "actor": _tidy(r["actor"]),
                   "action": _tidy(r["action"]), "detail": _tidy(r["detail"])}
                  for r in conn.execute("SELECT seq, ts, job_id, actor, action, detail FROM (SELECT * FROM audit_log"

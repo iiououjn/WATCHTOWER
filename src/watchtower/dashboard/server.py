@@ -54,6 +54,9 @@ class _Server(ThreadingHTTPServer):
             self._cached = (now, body)
             return body
 
+    def handle_error(self, request, client_address) -> None:
+        pass  # a client that vanished mid-answer is not worth a traceback on the owner's terminal
+
     def process_request(self, request, client_address):
         if not self._slots.acquire(blocking=False):
             try:

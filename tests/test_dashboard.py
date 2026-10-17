@@ -123,3 +123,39 @@ def test_a_deeply_nested_audit_detail_cannot_crash_the_page(conn, settings):
     conn.execute("INSERT INTO audit_log(ts,job_id,actor,action,detail,prev_hash,hash) VALUES('t',?,'a','agent.wake',?,'p','h')",
                  (job.id, deep))
     assert state(settings.db_path)["jobs"][0]["floor"] is None
+
+
+def test_a_legacy_run_it_line_in_an_approval_summary_is_dropped_like_in_the_cli(conn, settings):
+    job = _job(conn)
+    Approvals(conn).request(job.id, "signoff", "Files: app.py\nRun it: cd /w && python app.py\nTitle: Todo")
+    summary = state(settings.db_path)["approvals"][0]["summary"]
+    assert "Run it" not in summary and "Title: Todo" in summary
+
+
+def test_floor_and_agent_lookups_only_scan_a_recent_window(conn, settings, monkeypatch):
+    from watchtower.dashboard import data
+    monkeypatch.setattr(data, "WINDOW", 5)
+    old, new = _job(conn, status="running"), _job(conn, status="running")
+    log = AuditLog(conn)
+    log.append("bus", "board.note", {"floor": "f1"}, old.id)
+    for i in range(10):
+        log.append("bus", "noise", {"i": i}, None)
+    log.append("bus", "board.note", {"floor": "f3"}, new.id)
+    floors = {j["id"]: j["floor"] for j in state(settings.db_path)["jobs"]}
+    assert floors[new.id] == "f3" and floors[old.id] is None
+
+
+def test_the_pending_approvals_list_is_capped(conn, settings):
+    job = _job(conn)
+    for i in range(70):
+        Approvals(conn).request(job.id, "spec", f"s{i}")
+    assert len(state(settings.db_path)["approvals"]) == 50
+
+
+def test_both_read_only_layers_hold_on_their_own(conn, settings):
+    from watchtower.dashboard.data import open_readonly
+    ro = open_readonly(settings.db_path)
+    assert ro.execute("PRAGMA query_only").fetchone()[0] == 1
+    ro.execute("PRAGMA query_only=OFF")  # even with that layer off, the read-only open itself refuses writes
+    with pytest.raises(sqlite3.OperationalError):
+        ro.execute("DELETE FROM jobs")
