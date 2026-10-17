@@ -72,3 +72,52 @@ def test_the_page_script_is_valid_javascript(tmp_path):
 def test_a_scene_that_cannot_start_does_not_stop_the_ledger():
     html = render_page("n")
     assert "let SCENE = { update() {} };" in html and re.search(r"try \{\s*SCENE = ", html).start() < html.index("tick();")
+
+
+_SMOKE = r"""
+const fs = require('fs');
+const code = fs.readFileSync(process.argv[2], 'utf8'), roster = JSON.parse(process.argv[3]);
+let failure = null; console.error = (...a) => { failure = a.join(' '); };
+const bad = (n) => { throw new Error('bad geometry: ' + n); };
+const ctx = new Proxy({}, { get: (t, k) => {
+  if (k in t) return t[k];
+  if (k === 'measureText') return () => ({ width: 50 });
+  if (k === 'createLinearGradient' || k === 'createRadialGradient') return (...a) => { if (k === 'createRadialGradient' && (a[2] < 0 || a[5] < 0)) bad(k); return { addColorStop() {} }; };
+  if (k === 'arc') return (x, y, r) => { if (!(r >= 0)) bad('arc ' + r); };
+  if (k === 'ellipse') return (x, y, rx, ry) => { if (!(rx >= 0 && ry >= 0)) bad('ellipse'); };
+  return () => {};
+}, set: (t, k, v) => { t[k] = v; return true; } });
+const mk = () => ({ width: 0, height: 0, getContext: () => ctx, addEventListener() {} });
+const sizes = [[320, 568], [1280, 800], [3840, 2160], [300, 150], [1024, 768]];
+for (const [w, h] of sizes) {
+  let frame = null;
+  const doc = { getElementById: () => mk(), createElement: () => mk() };
+  const run = new Function('ROSTER', 'document', 'matchMedia', 'addEventListener', 'requestAnimationFrame', 'innerWidth', 'innerHeight', 'devicePixelRatio',
+    'let SCENE; ' + code + '; return SCENE;');
+  const scene = run(roster, doc, () => ({ matches: false }), () => {}, (cb) => { frame = cb; }, w, h, 2);
+  const job = (floor) => ({ id: 'j1', status: 'running', prompt: 'p', floor, awake: roster.map((r) => r.id), error: null });
+  for (const floor of ['f2', 'f4', 'nope', null]) {
+    scene.update({ jobs: [job(floor)], deployments: [{ name: 'a', port: 8100 }, { name: 'b', port: 0 }], chain_ok: false });
+    for (let i = 0; i < 40; i++) { const cb = frame; frame = null; cb(i * 16); if (!frame) throw new Error('loop stopped'); }
+  }
+}
+if (failure) { console.log(failure); process.exit(1); }
+console.log('ok');
+"""
+
+
+def test_the_scene_draws_without_throwing_at_odd_window_sizes(tmp_path):
+    import shutil
+    import subprocess
+
+    import pytest
+
+    from watchtower.dashboard.scene import SCENE_JS
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    (tmp_path / "scene.js").write_text(SCENE_JS)
+    (tmp_path / "smoke.js").write_text(_SMOKE)
+    roster = json.dumps([{"id": r["id"], "title": r["title"], "floor": r["floor"]} for r in _roster(render_page("n"))])
+    done = subprocess.run([node, str(tmp_path / "smoke.js"), str(tmp_path / "scene.js"), roster], capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0 and "ok" in done.stdout, done.stderr

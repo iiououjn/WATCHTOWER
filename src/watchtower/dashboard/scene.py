@@ -10,7 +10,7 @@ SCENE = (() => {
   const ORDER = ['csuite', 'f5', 'f4', 'f3', 'f2', 'f1'];
   const NAMES = { csuite: 'PENTHOUSE  C-suite', f5: 'F5  Oversight', f4: 'F4  QA & Deploy', f3: 'F3  Build', f2: 'F2  Dev', f1: 'F1  Research' };
   const HUE = { csuite: 44, f5: 285, f4: 160, f3: 24, f2: 205, f1: 120 };
-  let W = 0, H = 0, dpr = 1, T = 0, last = 0, drawn = 0, mouse = { x: -1, y: -1 }, mode = 'auto', btn = null, L = {}, cloudTex = null;
+  let W = 0, H = 0, dpr = 1, DT = 0.016, relayout = false, failed = false, T = 0, last = 0, drawn = 0, mouse = { x: -1, y: -1 }, mode = 'auto', btn = null, L = {}, cloudTex = null;
   let state = { jobs: [], deployments: [], chain_ok: true };
   const awake = new Set(), lit = new Set(), prevFloor = new Map(), packets = [], gulls = [];
   const staff = ROSTER.filter((r) => ORDER.includes(r.floor)).map((r, i) => ({ ...r, i, x: 0, tx: 0, home: 0.5, wait: 1 + (i % 7), seed: i * 2.39 }));
@@ -43,12 +43,12 @@ SCENE = (() => {
   }
 
   function layout() {
-    dpr = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight;
+    dpr = Math.min(2, devicePixelRatio || 1); W = Math.max(1, innerWidth); H = Math.max(1, innerHeight);
     cv.width = W * dpr; cv.height = H * dpr; g.setTransform(dpr, 0, 0, dpr, 0, 0); makeClouds();
     const hy = H * 0.77, base = H * 0.835, Ht = H * 0.66, top = base - Ht, bw = Ht * 0.105, tw = bw * 0.6, plinth = base - Ht * 0.13, gal = top + Ht * 0.115;
     L = { hy, base, Ht, top, bw, tw, plinth, gal, cx: W * 0.5, bodyTop: gal + Ht * 0.03, fh: (plinth - gal - Ht * 0.03) / ORDER.length, rooms: {} };
     L.half = (y) => { const t = Math.min(1, Math.max(0, (y - gal) / (base - gal))); return tw + (bw - tw) * t + (y > plinth ? bw * 0.1 : 0); };
-    L.cw = Math.max(150, Math.min(310, (W - 2 * (bw + 60)) / 2 - 24)); L.ch = Math.min(112, L.fh * 2 - 26);
+    L.cw = Math.max(110, Math.min(310, (W - 2 * (bw + 60)) / 2 - 24)); L.ch = Math.max(40, Math.min(112, L.fh * 2 - 26));
     ORDER.forEach((f, k) => { const wy = L.bodyTop + L.fh * (k + 0.5), left = k % 2 === 0, hw = L.half(wy);
       L.rooms[f] = { wy, left, x: left ? L.cx - hw - 46 - L.cw : L.cx + hw + 46, y: wy - L.ch / 2, w: L.cw, h: L.ch }; });
     staff.forEach((s) => { s.home = (byFloor[s.floor].indexOf(s) + 0.5) / byFloor[s.floor].length; s.x = s.tx = s.home; });
@@ -81,7 +81,7 @@ SCENE = (() => {
     if (k > 0.3 && k < 0.7) { g.fillStyle = `rgba(255,150,90,${0.18 * (1 - Math.abs(k - 0.5) * 5)})`; g.fillRect(0, 0, W, L.hy); }
     if (REDUCED) return;
     if (gulls.length < 5 && Math.random() < 0.005) gulls.push({ x: -20, y: L.hy * (0.3 + Math.random() * 0.4), v: 30 + Math.random() * 30, p: Math.random() * 6 });
-    for (let i = gulls.length - 1; i >= 0; i--) { const q = gulls[i]; q.x += q.v / 60; const f = Math.sin(T * 9 + q.p) * 5; g.strokeStyle = k > 0.4 ? 'rgba(255,255,255,.9)' : 'rgba(180,190,220,.6)'; g.lineWidth = 1.6; g.beginPath(); g.moveTo(q.x - 9, q.y - f); g.quadraticCurveTo(q.x - 4, q.y - 4, q.x, q.y); g.quadraticCurveTo(q.x + 4, q.y - 4, q.x + 9, q.y - f); g.stroke(); if (q.x > W + 20) gulls.splice(i, 1); }
+    for (let i = gulls.length - 1; i >= 0; i--) { const q = gulls[i]; q.x += q.v * DT; const f = Math.sin(T * 9 + q.p) * 5; g.strokeStyle = k > 0.4 ? 'rgba(255,255,255,.9)' : 'rgba(180,190,220,.6)'; g.lineWidth = 1.6; g.beginPath(); g.moveTo(q.x - 9, q.y - f); g.quadraticCurveTo(q.x - 4, q.y - 4, q.x, q.y); g.quadraticCurveTo(q.x + 4, q.y - 4, q.x + 9, q.y - f); g.stroke(); if (q.x > W + 20) gulls.splice(i, 1); }
   }
 
   function sea(k) {
@@ -161,8 +161,8 @@ SCENE = (() => {
 
   function lift() {   // job packets climb the tower's axis between floor windows
     for (let i = packets.length - 1; i >= 0; i--) {
-      const p = packets[i]; p.t += REDUCED ? 1 : 0.012;
-      const a = L.rooms[p.from].wy, b = L.rooms[p.to].wy, e = p.t < 0.5 ? 2 * p.t * p.t : 1 - Math.pow(-2 * p.t + 2, 2) / 2, y = a + (b - a) * Math.min(1, e), x = L.cx - L.half(y) * 0.12;
+      const p = packets[i]; p.t += REDUCED ? 1 : 0.012; const tt = Math.min(1, p.t);
+      const a = L.rooms[p.from].wy, b = L.rooms[p.to].wy, e = tt < 0.5 ? 2 * tt * tt : 1 - Math.pow(-2 * tt + 2, 2) / 2, y = a + (b - a) * e, x = L.cx - L.half(y) * 0.12;
       const gl = g.createRadialGradient(x, y, 1, x, y, 26); gl.addColorStop(0, 'rgba(255,240,170,.95)'); gl.addColorStop(1, 'rgba(255,240,170,0)'); g.fillStyle = gl; g.fillRect(x - 26, y - 26, 52, 52);
       g.fillStyle = '#fffbe0'; g.fillRect(x - 5, y - 4, 10, 8); g.fillStyle = '#7a6a2a'; g.fillRect(x - 3, y - 2, 6, 1);
       if (p.t >= 1.15) packets.splice(i, 1);
@@ -185,7 +185,7 @@ SCENE = (() => {
   }
 
   function person(s, r) {
-    const working = awake.has(s.id), sc = r.h / 100, px = r.x + 22 + s.x * (r.w - 58), py = r.y + r.h - 6, h = HUE[s.floor];
+    const working = awake.has(s.id), sc = Math.max(0.3, r.h / 100), px = r.x + 22 + s.x * (r.w - 58), py = r.y + r.h - 6, h = HUE[s.floor];
     s.px = px; s.py = py - 30 * sc;
     const step = REDUCED ? 0 : Math.sin(T * 9 + s.seed) * 4 * sc, moving = !working && Math.abs(s.tx - s.x) > 0.004;
     if (working) {
@@ -220,10 +220,10 @@ SCENE = (() => {
 
   function hud() {
     const run = state.jobs.filter((j) => j.status === 'running').length, wait = state.jobs.filter((j) => j.status === 'paused').length;
-    g.fillStyle = 'rgba(8,14,34,.55)'; rr(14, 12, 380, 56, 12); g.fill(); g.textAlign = 'left'; g.font = '800 18px system-ui,sans-serif'; g.fillStyle = '#f2f6ff'; g.fillText('THE WATCHTOWER', 28, 38);
+    g.fillStyle = 'rgba(8,14,34,.55)'; rr(14, 12, Math.min(380, W - 28), 56, 12); g.fill(); g.textAlign = 'left'; g.font = '800 18px system-ui,sans-serif'; g.fillStyle = '#f2f6ff'; g.fillText('THE WATCHTOWER', 28, 38);
     g.font = '500 12px system-ui'; g.fillStyle = '#c3d2ee'; g.fillText(`${run} running | ${wait} waiting for you | ${awake.size} agents awake | ${state.chain_ok === false ? 'AUDIT CHAIN BROKEN' : 'audit chain ok'}`, 28, 57);
     state.jobs.filter((j) => j.status === 'running' || j.status === 'paused').slice(0, 5).forEach((j, i) => {
-      const y = 78 + i * 44; g.fillStyle = 'rgba(8,14,34,.62)'; g.strokeStyle = 'rgba(160,190,255,.35)'; rr(14, y, 290, 36, 8); g.fill(); g.stroke();
+      const y = 78 + i * 44; g.fillStyle = 'rgba(8,14,34,.62)'; g.strokeStyle = 'rgba(160,190,255,.35)'; rr(14, y, Math.min(290, W - 28), 36, 8); g.fill(); g.stroke();
       g.fillStyle = j.status === 'running' ? '#fde68a' : '#fbbf24'; g.font = '700 11px ui-monospace,Menlo,monospace'; g.fillText(j.id.slice(0, 12) + '  ' + j.status + '  ' + (j.floor ? j.floor.toUpperCase() : 'planning'), 24, y + 15);
       g.fillStyle = '#d3def2'; g.font = '500 11px system-ui'; g.fillText(j.prompt.slice(0, 42), 24, y + 29);
     });
@@ -245,13 +245,14 @@ SCENE = (() => {
 
   function frame(ts) {
     requestAnimationFrame(frame);   // re-arm first: one bad frame must not freeze the scene
-    const dt = Math.min(0.1, (ts - last) / 1000 || 0.016); last = ts; T += dt;
+    const dt = Math.min(0.1, (ts - last) / 1000 || 0.016); last = ts; T += dt; DT = dt;
+    if (relayout) { relayout = false; layout(); }   // resize events only flag it; the frame rebuilds once
     if (REDUCED && T - drawn < 0.5) return;   // reduced motion: a calm slow refresh, not 60 fps
     drawn = T;
     try { const k = light(); wander(dt); sky(k); beam(k); sea(k); island(k); boats(k); tower(k); ORDER.forEach((f) => room(f, k)); basement(); hud(); }
-    catch (e) { cv.width = cv.width; g.setTransform(dpr, 0, 0, dpr, 0, 0); }   // a throw can leave a clip or saved state behind: reset the whole context
+    catch (e) { if (!failed) { failed = true; console.error('watchtower scene:', e); } cv.width = cv.width; g.setTransform(dpr, 0, 0, dpr, 0, 0); }   // a throw can leave a clip or saved state behind: reset the whole context
   }
-  addEventListener('resize', layout);
+  addEventListener('resize', () => { relayout = true; });
   cv.addEventListener('mousemove', (e) => { mouse = { x: e.clientX, y: e.clientY }; });
   cv.addEventListener('mouseleave', () => { mouse = { x: -1, y: -1 }; });
   cv.addEventListener('click', (e) => { if (btn && e.clientX >= btn.x && e.clientX <= btn.x + btn.w && e.clientY >= btn.y && e.clientY <= btn.y + btn.h) mode = { auto: 'day', day: 'night', night: 'auto' }[mode]; });
