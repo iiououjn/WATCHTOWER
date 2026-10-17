@@ -16,7 +16,6 @@ class Role:
     title: str
     floor: str
     tier: str
-    tools: tuple[str, ...]
     prompt: str
     reply: str = "json"  # "files": the role answers with ### FILE blocks (code needs no JSON escaping)
 
@@ -43,5 +42,5 @@ def load_roles(directory: Path = ROLES_DIR, tiers: Iterable[str] | None = None) 
         if data["id"] in roles:
             raise ValueError(f"{path.name}: duplicate role id {data['id']!r}")
         roles[data["id"]] = Role(str(data["id"]), str(data["title"]), str(data["floor"]), str(data["tier"]),
-                                 tuple(data.get("tools") or ()), str(data["prompt"]), str(data.get("reply") or "json"))
+                                 str(data["prompt"]), str(data.get("reply") or "json"))
     return roles

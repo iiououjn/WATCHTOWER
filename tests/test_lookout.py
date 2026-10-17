@@ -65,7 +65,7 @@ def test_error_line_finds_the_exception():
 
 
 def test_f4_and_f5_queries_are_built_from_codes_not_app_text():
-    from watchtower.tower import _finding_query, _status_query
+    from watchtower.evidence import _finding_query, _status_query
     qa = {"results": [{"pass": True, "status": 200}, {"pass": False, "status": 405, "detail": "sk-secret body"}]}
     assert _status_query(qa) == "HTTP 405 Method Not Allowed python http.server"
     assert _status_query({"results": [{"pass": False, "status": None}]}) == ""

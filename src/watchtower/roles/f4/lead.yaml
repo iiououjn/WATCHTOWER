@@ -2,7 +2,6 @@ id: f4.lead
 title: QA Lead
 floor: f4
 tier: small
-tools: []
 prompt: |
   You lead Floor 4 (QA). Split a small web app's acceptance criteria into a few test areas that together
   cover them, so your QA engineers can write HTTP checks before the code is written.

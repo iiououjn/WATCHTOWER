@@ -9,16 +9,16 @@ from dataclasses import dataclass
 from typing import Callable
 
 from watchtower.config import Settings
+from watchtower.engine import ollama_client
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.governor.budget import Budget
+from watchtower.engine.ollama_client import LOCAL_PREFIX
 from watchtower.engine.system import free_ram_pct
 
-LOCAL_PREFIX = "ollama/"
 RAM_SETTLE_POLLS = 10  # Ollama frees an unloaded model's RAM asynchronously
 RAM_SETTLE_SECONDS = 0.5
 RETRY_DELAYS = (2.0, 4.0)  # backoff before the 2nd and 3rd try of a transient failure (spec §10)
-_TRANSIENT_NAMES = {  # litellm's and httpx's names for a dropped connection, a timeout or a server error
-    "APIConnectionError", "Timeout", "InternalServerError", "ServiceUnavailableError", "BadGatewayError",
+_TRANSIENT_NAMES = {  # httpx's names for a dropped connection or a timeout (a 5xx is read from its status code)
     "TransportError", "NetworkError", "ConnectError", "ReadError", "WriteError", "RemoteProtocolError",
     "TimeoutException", "ConnectTimeout", "ReadTimeout", "WriteTimeout", "PoolTimeout"}
 
@@ -198,19 +198,6 @@ def parse_files(text: str) -> dict:
     return out
 
 
-def _litellm_completion(**kw):
-    import litellm
-
-    litellm.suppress_debug_info = True  # errors are reported by the CLI, not LiteLLM's banner
-    return litellm.completion(**kw)
-
-
-def _litellm_cost(response) -> float:
-    import litellm
-
-    return float(litellm.completion_cost(completion_response=response))
-
-
 class ModelSocket:
     """One way to call any model. Routes by tier; keeps only one local model in RAM."""
 
@@ -229,7 +216,8 @@ class ModelSocket:
         self._s = settings
         self._budget = budget
         self._audit = audit
-        self._complete = completion_fn or _litellm_completion
+        self._complete = completion_fn or ollama_client.chat
+        self._local_only = completion_fn is None  # 8d: the default client talks to Ollama only
         self._unload = unload_fn or self._unload_ollama
         self._resident = resident_fn or self._resident_ollama
         self._free_ram = free_ram_fn or free_ram_pct
@@ -248,6 +236,8 @@ class ModelSocket:
         local = model.startswith(LOCAL_PREFIX)
         if not local and not self._s.cloud_enabled:
             raise CloudDisabled(f"cloud model {model} is disabled; enable cloud models explicitly")
+        if not local and self._local_only:
+            raise CloudDisabled(f"cloud model {model}: no cloud client is built (the tower talks to Ollama only)")
         self._budget.check(job_id)
         if local:
             self._swap_to(model, job_id)
@@ -259,6 +249,18 @@ class ModelSocket:
             kwargs["num_ctx"] = self._s.num_ctx
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
+        resp, seconds = self._call(kwargs, model, local, job_id)
+        text, pt, ct = self._read(resp, model, seconds, job_id)
+        usd = 0.0  # 8d: no cost is computed; the default client is local Ollama ($0)
+        self._budget.record(job_id, tokens=pt + ct, seconds=seconds, usd=usd)  # over the cap: kept; next check stops
+        self._audit.append(
+            "model_socket", "model_reply",
+            {"model": model, "tokens": pt + ct, "seconds": round(seconds, 3), "usd": usd}, job_id,
+        )
+        return Reply(text, model, pt, ct, seconds, usd)
+
+    def _call(self, kwargs: dict, model: str, local: bool, job_id: str):
+        """One completion, retried on transient errors; every try is charged its time. Returns (resp, seconds)."""
         for attempt in range(len(RETRY_DELAYS) + 1):
             if attempt:  # a transient failure: back off, then only if the budget still has room
                 self._sleep(RETRY_DELAYS[attempt - 1])
@@ -290,8 +292,10 @@ class ModelSocket:
                 except Exception:  # noqa: BLE001 — never replaces the interrupt
                     pass
                 raise
-        seconds = self._clock() - start
+        return resp, self._clock() - start
 
+    def _read(self, resp, model: str, seconds: float, job_id: str) -> tuple[str, int, int]:
+        """The reply text and token counts; a malformed reply is charged its time, then ModelUnavailable."""
         try:
             text = resp.choices[0].message.content or ""
             pt = int(resp.usage.prompt_tokens or 0)
@@ -304,13 +308,7 @@ class ModelSocket:
             except Exception:  # noqa: BLE001 — the malformed-reply error is what the owner needs
                 pass
             raise ModelUnavailable(f"{model} returned a malformed response") from e
-        usd = 0.0 if local else _litellm_cost(resp)
-        self._budget.record(job_id, tokens=pt + ct, seconds=seconds, usd=usd)  # over the cap: kept; next check stops
-        self._audit.append(
-            "model_socket", "model_reply",
-            {"model": model, "tokens": pt + ct, "seconds": round(seconds, 3), "usd": usd}, job_id,
-        )
-        return Reply(text, model, pt, ct, seconds, usd)
+        return text, pt, ct
 
     def _limits(self, job_id: str) -> dict:
         """This call's hard limits: what is left of the job's budget, and never more than one call's timeout."""
@@ -411,17 +409,7 @@ class ModelSocket:
             self._audit.append("model_socket", "unload_failed", {"model": model, "error": str(e)[:200]}, job_id)
 
     def _resident_ollama(self) -> list[str]:
-        import httpx
-
-        resp = httpx.get(f"{self._s.ollama_url}/api/ps", timeout=5)
-        resp.raise_for_status()
-        return [LOCAL_PREFIX + m["name"] for m in resp.json().get("models", [])]
+        return ollama_client.resident(self._s.ollama_url)
 
     def _unload_ollama(self, model: str) -> None:
-        import httpx
-
-        httpx.post(
-            f"{self._s.ollama_url}/api/generate",
-            json={"model": model.removeprefix(LOCAL_PREFIX), "keep_alive": 0},
-            timeout=10,
-        ).raise_for_status()
+        ollama_client.unload(self._s.ollama_url, model)

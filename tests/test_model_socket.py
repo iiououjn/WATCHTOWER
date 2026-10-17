@@ -100,21 +100,10 @@ def test_budget_exceeded_stops(parts):
         sock.ask("small", [{"role": "user", "content": "x"}], "tiny")
 
 
-def test_default_completion_silences_litellm_banner(monkeypatch):
-    import litellm
-
-    from watchtower.engine import model_socket
-
-    monkeypatch.setattr(litellm, "suppress_debug_info", False)
-    monkeypatch.setattr(litellm, "completion", lambda **kw: "ok")
-    assert model_socket._litellm_completion(model="m", messages=[]) == "ok"
-    assert litellm.suppress_debug_info is True
-
-
 def test_passes_remaining_budget_as_hard_limits(conn, settings):
     budget = Budget(conn)
     budget.open("b", max_tokens=100, max_seconds=60, max_usd=0.0)
-    budget.charge("b", tokens=30, seconds=10)
+    budget.record("b", tokens=30, seconds=10)
     calls = []
     sock = ModelSocket(settings, budget, AuditLog(conn),
                        completion_fn=lambda **kw: calls.append(kw) or fake_response("x", 1, 1),

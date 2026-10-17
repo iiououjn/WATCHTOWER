@@ -233,9 +233,9 @@ def test_f2_rounds_record_the_tower_problems(tmp_path):
     from watchtower.roles import Role
     app = {"path": "app.py", "content": "import requests\nprint('app')\n"}
     test = {"path": "test_app.py", "content": "import unittest\nimport app\n"}
-    coder = Role("f2.coder", "Coder", "f2", "work", (), "c")
+    coder = Role("f2.coder", "Coder", "f2", "work", "c")
     ok = SandboxResult(0, 'WATCHTOWER_TESTS {"run": 2, "skipped": 0, "failures": 0, "errors": 0}\n', "", False)
-    floor = DevFloor(Role("f2.architect", "A", "f2", "work", (), "a"), coder, ask=lambda r, p: {"files": [app, test]},
+    floor = DevFloor(Role("f2.architect", "A", "f2", "work", "a"), coder, ask=lambda r, p: {"files": [app, test]},
                      workspace=Workspace(tmp_path), run=lambda cmd: ok, max_rounds=1)
     pkg = floor.build({"title": "T", "goal": "g", "acceptance": [], "out_of_scope": []},
                       {"files": [], "entry": "app.py"}, [])
@@ -256,7 +256,7 @@ def test_a_garbled_last_round_still_records_the_tower_problems(tmp_path):  # 6s 
 
     def ask(role, prompt):
         raise BadModelOutput("garbled")
-    floor = DevFloor(Role("f2.architect", "A", "f2", "work", (), "a"), Role("f2.coder", "C", "f2", "work", (), "c"),
+    floor = DevFloor(Role("f2.architect", "A", "f2", "work", "a"), Role("f2.coder", "C", "f2", "work", "c"),
                      ask=ask, workspace=ws, run=lambda cmd: SandboxResult(0, "", "", False), max_rounds=1)
     pkg = floor.build({"title": "T", "goal": "g", "acceptance": [], "out_of_scope": []},
                       {"files": [], "entry": "app.py"}, [])

@@ -2,7 +2,7 @@ from watchtower.floors.f4_qa_deploy.office import QAOffice, QARound
 from watchtower.roles import Role
 
 SPEC = {"title": "Todo", "goal": "todo app", "acceptance": ["users can add a todo"]}
-ROLE = lambda i: Role(i, i, "f4", "small", (), "x")  # noqa: E731
+ROLE = lambda i: Role(i, i, "f4", "small", "x")  # noqa: E731
 HOME = {"name": "home", "method": "GET", "path": "/", "form": {}, "expect_status": 200, "expect_text": "Todo List"}
 ADD = {"name": "add", "method": "POST", "path": "/add", "form": {"item": "milk"}, "expect_status": 200,
        "expect_text": "milk"}

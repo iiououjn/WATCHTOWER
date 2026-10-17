@@ -227,19 +227,14 @@ class JobRunner:
         return self._tower.questions({"job_id": job_id, "prompt": job.prompt})
 
     def _ask_role(self, role: Role, data: dict, prompt: str) -> dict:
-        with self._scheduler.agent(role.id, data["job_id"]) as session:
+        with self._scheduler.agent(role.id, data["job_id"]):
             messages = [{"role": "system", "content": role.system}, {"role": "user", "content": prompt}]
             ask = self._socket.ask_files if role.reply == "files" else self._socket.ask_json
-            out = ask(role.tier, messages, data["job_id"])
-            session.context["messages"] = messages + [{"role": "assistant", "content": str(out)}]
-            return out
+            return ask(role.tier, messages, data["job_id"])
 
     def _ask(self, agent_id: str, data: dict, content: str) -> str:
-        with self._scheduler.agent(agent_id, data["job_id"]) as session:
-            session.context["messages"] = [{"role": "user", "content": content}]
-            reply = self._socket.ask(data["tier"], session.context["messages"], data["job_id"])
-            session.context["messages"].append({"role": "assistant", "content": reply.text})
-            return reply.text
+        with self._scheduler.agent(agent_id, data["job_id"]):
+            return self._socket.ask(data["tier"], [{"role": "user", "content": content}], data["job_id"]).text
 
     def _plan(self, data: dict) -> dict:
         return {"plan": self._ask("ground.planner", data, PLAN_PROMPT.format(prompt=data["prompt"]))}

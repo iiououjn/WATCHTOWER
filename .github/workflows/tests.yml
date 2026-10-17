@@ -10,10 +10,11 @@ permissions:
 
 jobs:
   pytest:
-    runs-on: macos-latest  # the tower targets macOS (Keychain secrets); Docker and Ollama are faked in tests
+    runs-on: ubuntu-latest  # Docker and Ollama are faked in tests; no test needs macOS
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync --locked  # uv reads .python-version (3.12); --locked fails on lock drift
+      - run: uv run ruff check src tests
       - run: uv run pytest -q

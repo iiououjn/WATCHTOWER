@@ -11,7 +11,6 @@ from watchtower.engine.governor.budget import Budget
 
 from watchtower.engine.jobs import JobStore
 
-from watchtower.engine.memory import ContextStore
 
 from watchtower.engine.model_socket import ModelSocket
 
@@ -43,7 +42,7 @@ def env(conn, settings):
     model, unloaded = Model(), []
     socket = ModelSocket(settings, budget, audit, completion_fn=model, unload_fn=unloaded.append,
                          resident_fn=lambda: ["ollama/llama3.2:3b"], free_ram_fn=lambda: 100)
-    runner = JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus)
+    runner = JobRunner(settings, conn, socket, Scheduler(settings, bus), bus)
     job = jobs.create("what is a lighthouse?")
     budget.open(job.id, 1000, 600, 0.0)
     yield runner, jobs, bus, model, unloaded, job
@@ -67,7 +66,7 @@ def tower(conn, settings):
         model = RoleModel({**TOWER_REPLIES, **(replies or {})})
         socket = ModelSocket(settings, budget, audit, completion_fn=model, unload_fn=lambda m: None,
                              resident_fn=lambda: [], free_ram_fn=lambda: 100)
-        runner = JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus)
+        runner = JobRunner(settings, conn, socket, Scheduler(settings, bus), bus)
         job = jobs.create("compare lighthouse lenses", pipeline="tower")
         budget.open(job.id, 100_000, 3600, 0.0)
         return runner, model, job
@@ -97,7 +96,7 @@ def online_tower(conn, settings):
         model = RoleModel({**TOWER_REPLIES, **(replies or {})})
         socket = ModelSocket(settings, budget, audit, completion_fn=model, unload_fn=lambda m: None,
                              resident_fn=lambda: [], free_ram_fn=lambda: 100)
-        runner = JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus,
+        runner = JobRunner(settings, conn, socket, Scheduler(settings, bus), bus,
                            beacon_factory=lambda ask, floor="f1": beacon)
         job = jobs.create("compare lighthouse lenses", pipeline="tower")
         budget.open(job.id, 100_000, 3600, 0.0)
@@ -117,7 +116,7 @@ def app_tower(conn, settings, tmp_path):
         socket = ModelSocket(settings, budget, audit, completion_fn=model, unload_fn=lambda m: None,
                              resident_fn=lambda: [], free_ram_fn=lambda: 100)
         sandbox = FakeSandbox(tmp_path / "ws", **sandbox_kw)
-        runner = JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus, sandbox=sandbox)
+        runner = JobRunner(settings, conn, socket, Scheduler(settings, bus), bus, sandbox=sandbox)
         job = jobs.create("a todo web app", pipeline="app")
         budget.open(job.id, 200_000, 3600, 0.0)
         return runner, model, sandbox, job
@@ -162,7 +161,7 @@ def lookout_tower(conn, settings, tmp_path):
         socket = ModelSocket(settings, budget, audit, completion_fn=model, unload_fn=lambda m: None,
                              resident_fn=lambda: [], free_ram_fn=lambda: 100)
         sandbox = FakeSandbox(tmp_path / "ws", **sandbox_kw)
-        runner = JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus,
+        runner = JobRunner(settings, conn, socket, Scheduler(settings, bus), bus,
                            beacon_factory=factory, sandbox=sandbox)
         job = jobs.create("a todo web app", pipeline="app")
         budget.open(job.id, 200_000, 3600, 0.0)
@@ -172,4 +171,4 @@ def lookout_tower(conn, settings, tmp_path):
 ONE = {"title": "Todo", "goal": "a todo app", "acceptance": ["users can add a todo"], "out_of_scope": []}
 
 
-__all__ = ['APP_REPLIES', 'Approvals', 'AuditLog', 'Budget', 'Bus', 'ContextStore', 'FakeBeacon', 'FakeSandbox', 'JobRunner', 'JobStore', 'Knowledge', 'LookoutFactory', 'Model', 'ModelSocket', 'ONE', 'RoleModel', 'Scheduler', 'SearchUnavailable', 'TOWER_REPLIES', '_to_signoff', 'app_tower', 'env', 'fake_response', 'lookout_tower', 'online_tower', 'pytest', 'topics', 'tower']
+__all__ = ['APP_REPLIES', 'Approvals', 'AuditLog', 'Budget', 'Bus', 'FakeBeacon', 'FakeSandbox', 'JobRunner', 'JobStore', 'Knowledge', 'LookoutFactory', 'Model', 'ModelSocket', 'ONE', 'RoleModel', 'Scheduler', 'SearchUnavailable', 'TOWER_REPLIES', '_to_signoff', 'app_tower', 'env', 'fake_response', 'lookout_tower', 'online_tower', 'pytest', 'topics', 'tower']

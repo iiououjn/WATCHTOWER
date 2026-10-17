@@ -12,7 +12,6 @@ _PINNED = re.compile(r"[a-z0-9][a-z0-9./_-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{
 DEFAULT_TIERS = {
     "small": "ollama/llama3.2:3b",
     "work": "ollama/qwen2.5-coder:7b",
-    "review": "ollama/llama3.2:3b",
 }
 
 

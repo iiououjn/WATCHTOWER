@@ -6,7 +6,6 @@ from watchtower.engine.bus import Bus
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.governor.budget import Budget
 from watchtower.engine.jobs import JobStore
-from watchtower.engine.memory import ContextStore
 from watchtower.engine.model_socket import ModelSocket
 from watchtower.engine.runner import JobRunner
 from watchtower.engine.scheduler import Scheduler
@@ -23,7 +22,7 @@ def tower(conn, settings, tmp_path):
         model = RoleModel({**TOWER_REPLIES, **APP_REPLIES, **(replies or {})})
         socket = ModelSocket(settings, Budget(conn), audit, completion_fn=model, unload_fn=lambda m: None,
                              resident_fn=lambda: [], free_ram_fn=lambda: 100)
-        runner = JobRunner(settings, conn, socket, Scheduler(settings, ContextStore(conn), bus), bus,
+        runner = JobRunner(settings, conn, socket, Scheduler(settings, bus), bus,
                            sandbox=FakeSandbox(tmp_path / "ws"))
         job = JobStore(conn).create("a todo web app", pipeline="app")
         Budget(conn).open(job.id, 300_000, 3600, 0.0)

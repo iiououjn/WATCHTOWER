@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 
 from conftest import fake_response
 
-from watchtower.interface import cli
+from watchtower.interface import checks, cli, deploy_cmds, knowledge_cmds, shell
 
 from watchtower.engine.model_socket import ModelSocket
 
@@ -15,7 +15,7 @@ runner = CliRunner()
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("WATCHTOWER_HOME", str(tmp_path))
     monkeypatch.setenv("WATCHTOWER_OFFLINE", "1")  # tests never touch the network
-    monkeypatch.setattr(cli, "docker_status", lambda s, a: (True, "ready"))  # nor real Docker (tests override)
+    monkeypatch.setattr(checks, "docker_status", lambda s, a: (True, "ready"))  # nor real Docker (tests override)
     return tmp_path
 
 def use_completion(monkeypatch, fn):
@@ -72,4 +72,4 @@ def done_app_job(monkeypatch, tmp_path):
     return latest_job_id()
 
 
-__all__ = ['CliRunner', 'FakeDeployer', 'ModelSocket', 'RoleModel', 'TOWER_REPLIES', 'cli', 'done_app_job', 'fake_response', 'home', 'latest_job_id', 'pytest', 'runner', 'use_completion', 'use_roles']
+__all__ = ['CliRunner', 'FakeDeployer', 'ModelSocket', 'RoleModel', 'TOWER_REPLIES', 'checks', 'cli', 'deploy_cmds', 'knowledge_cmds', 'shell', 'done_app_job', 'fake_response', 'home', 'latest_job_id', 'pytest', 'runner', 'use_completion', 'use_roles']

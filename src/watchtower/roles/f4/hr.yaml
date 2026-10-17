@@ -2,7 +2,6 @@ id: f4.hr
 title: QA HR
 floor: f4
 tier: small
-tools: []
 prompt: |
   You are HR for Floor 4 (QA). Review proposed HTTP checks: each must test an acceptance criterion through
   the app's routes contract and expect specific text. Name checks that are wrong or trivial. Be strict but

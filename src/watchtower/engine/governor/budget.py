@@ -25,10 +25,6 @@ class Budget:
             raise KeyError(job_id)
         return {k: row[k] for k in row.keys() if k != "job_id"}
 
-    def charge(self, job_id: str, tokens: int = 0, seconds: float = 0.0, usd: float = 0.0) -> None:
-        self.record(job_id, tokens, seconds, usd)
-        self._enforce(job_id, before_call=False)
-
     def record(self, job_id: str, tokens: int = 0, seconds: float = 0.0, usd: float = 0.0) -> None:
         """Count what was spent without enforcing: the next check() stops the job (8b: never hides a reply
         or an error that is already in hand)."""
@@ -42,12 +38,9 @@ class Budget:
 
     def check(self, job_id: str) -> None:
         """Before a call: no room left (tokens/seconds at cap) means stop. USD cap 0 still allows free calls."""
-        self._enforce(job_id, before_call=True)
-
-    def _enforce(self, job_id: str, before_call: bool) -> None:
         u = self.usage(job_id)
         for name in ("tokens", "seconds", "usd"):
             used, cap = u[f"used_{name}"], u[f"max_{name}"]
-            at_cap = before_call and name != "usd" and used >= cap
+            at_cap = name != "usd" and used >= cap
             if used > cap or at_cap:
                 raise BudgetExceeded(f"budget exceeded: {name} used {used} of max {cap}")

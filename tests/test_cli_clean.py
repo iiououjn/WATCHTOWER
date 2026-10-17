@@ -7,6 +7,7 @@ from watchtower.engine.db import connect
 from watchtower.engine.governor.approvals import Approvals
 from watchtower.engine.governor.audit import AuditLog
 from watchtower.engine.jobs import JobStore
+from watchtower.beacon.search import SearchUnavailable
 from watchtower.engine.runner import RunOutcome
 
 HOSTILE = "a\x1b]0;pwned\x07b\x1b[2Jc‮d​e⁦f\x9bg\r"
@@ -18,7 +19,7 @@ def shown(text):
 
 
 def test_clean_strips_control_and_format_characters_but_keeps_text():
-    assert cli._clean(HOSTILE + "\nnext\tcol café 中") == "a]0;pwnedb[2Jcdefg\nnext\tcol café 中"
+    assert shell.clean(HOSTILE + "\nnext\tcol café 中") == "a]0;pwnedb[2Jcdefg\nnext\tcol café 中"
 
 
 def test_status_cleans_prompt_and_error():
@@ -64,8 +65,8 @@ def test_a_cpo_error_is_cleaned(monkeypatch):
 def test_a_beacon_pause_is_cleaned(monkeypatch):  # review r1: the search error text can carry web content
     class Down:
         def research(self, query, job_id):
-            raise cli.SearchUnavailable("down " + HOSTILE)
-    monkeypatch.setattr(cli, "make_beacon", lambda settings, conn: Down())
+            raise SearchUnavailable("down " + HOSTILE)
+    monkeypatch.setattr(knowledge_cmds, "make_beacon", lambda settings, conn: Down())
     out = runner.invoke(cli.app, ["beacon", "lenses"]).output
     assert "Beacon paused: down" in out and shown(out)
 

@@ -4,9 +4,9 @@ from watchtower.floors.f4_qa_deploy.office import QAOffice
 from watchtower.floors.f4_qa_deploy.qafloor import parse_routes
 from watchtower.roles import Role
 
-LEAD = Role("f4.lead", "QA Lead", "f4", "small", (), "l")
-WORKER = Role("f4.qa", "QA", "f4", "small", (), "q")
-HR = Role("f4.hr", "QA HR", "f4", "small", (), "h")
+LEAD = Role("f4.lead", "QA Lead", "f4", "small", "l")
+WORKER = Role("f4.qa", "QA", "f4", "small", "q")
+HR = Role("f4.hr", "QA HR", "f4", "small", "h")
 SPEC = {"title": "Todo", "goal": "todo app", "acceptance": ["add a todo", "list todos"], "out_of_scope": []}
 ROUTES = parse_routes([{"method": "GET", "path": "/", "shows": "the todo list"},
                        {"method": "POST", "path": "/add", "fields": ["item"], "shows": "redirects to /"}])
@@ -74,8 +74,8 @@ def test_no_contract_means_no_test_first_checks():
 
 def test_f3_office_expectation_and_diagnosis_degrade_gracefully():
     from watchtower.floors.f3_build.office import F3Office
-    lead = Role("f3.lead", "Build Lead", "f3", "small", (), "l")
-    hr = Role("f3.hr", "Build HR", "f3", "small", (), "h")
+    lead = Role("f3.lead", "Build Lead", "f3", "small", "l")
+    hr = Role("f3.hr", "Build HR", "f3", "small", "h")
     s = Script({"f3.lead": [{"expect_text": "Todo list"}], "f3.hr": [{"diagnosis": "import json in app.py"}]})
     f3 = F3Office(lead, hr, s)
     assert f3.expect(SPEC, ROUTES) == "Todo list" and f3.diagnose("NameError: json") == "import json in app.py"
@@ -107,8 +107,8 @@ def test_qa_office_on_low_memory_degrades_instead_of_pausing():
 def oversight(replies):
     from watchtower.floors.f5_oversight.office import OversightOffice
     s = Script({"f5.lead": [{"focus": ["adding works"]}], "f5.auditor": [{"findings": []}], **replies})
-    return OversightOffice(Role("f5.lead", "OL", "f5", "small", (), "l"),
-                           Role("f5.auditor", "A", "f5", "small", (), "a"), s), s
+    return OversightOffice(Role("f5.lead", "OL", "f5", "small", "l"),
+                           Role("f5.auditor", "A", "f5", "small", "a"), s), s
 
 
 def test_oversight_focus_audit_and_retro():

@@ -18,7 +18,7 @@ def ask_with(reply, prompts):
 
 def test_cto_approves_or_lists_changes():
     prompts = []
-    cto = CTO(Role("cto", "CTO", "csuite", "small", (), "c"),
+    cto = CTO(Role("cto", "CTO", "csuite", "small", "c"),
               ask_with({"approve": False, "changes": ["add a test file", "x" * 300]}, prompts))
     approved, changes = cto.review(SPEC, PLAN, ("Use only the standard library.",))
     assert approved is False and changes[0] == "add a test file" and len(changes[1]) <= 200
@@ -26,27 +26,27 @@ def test_cto_approves_or_lists_changes():
 
 
 def test_cto_garbage_or_no_verdict_approves():
-    role = Role("cto", "CTO", "csuite", "small", (), "c")
+    role = Role("cto", "CTO", "csuite", "small", "c")
     assert CTO(role, ask_with("bad", [])).review(SPEC, PLAN, ()) == (True, [])
     assert CTO(role, ask_with({"changes": ["x"]}, [])).review(SPEC, PLAN, ()) == (True, [])
 
 
 def test_ceo_recommends_with_a_note():
     prompts = []
-    ceo = CEO(Role("ceo", "CEO", "csuite", "small", (), "e"), ask_with({"approve": False, "note": "no delete"}, prompts))
+    ceo = CEO(Role("ceo", "CEO", "csuite", "small", "e"), ask_with({"approve": False, "note": "no delete"}, prompts))
     assert ceo.recommend(SPEC, "- unit tests: pass", "- add: OK") == (False, "no delete")
     assert '<untrusted source="evidence">' in prompts[0]
-    assert CEO(Role("ceo", "CEO", "csuite", "small", (), "e"), ask_with("bad", [])).recommend(SPEC, "", "") == (None, "")
+    assert CEO(Role("ceo", "CEO", "csuite", "small", "e"), ask_with("bad", [])).recommend(SPEC, "", "") == (None, "")
 
 
 def test_ceo_string_verdicts_are_understood():
-    role = Role("ceo", "CEO", "csuite", "small", (), "e")
+    role = Role("ceo", "CEO", "csuite", "small", "e")
     for word, expected in [("false", False), ("No", False), ("reject", False), ("true", True), ("yes", True),
                            ("maybe", None)]:
         assert CEO(role, ask_with({"approve": word}, [])).recommend(SPEC, "", "")[0] is expected
 
 
 def test_cto_word_false_is_a_request_for_changes():
-    role = Role("cto", "CTO", "csuite", "small", (), "c")
+    role = Role("cto", "CTO", "csuite", "small", "c")
     assert CTO(role, ask_with({"approve": "false", "changes": ["use http.server"]}, [])).review(SPEC, PLAN, ()) \
         == (False, ["use http.server"])

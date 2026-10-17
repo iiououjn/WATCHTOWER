@@ -4,7 +4,8 @@ from watchtower.engine.db import connect
 
 def test_connect_creates_tables(conn):
     names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert {"jobs", "agent_context", "audit_log", "budgets"} <= names
+    assert {"jobs", "audit_log", "budgets"} <= names
+    assert "agent_context" not in names  # 8d (A-F19): the write-only agent memory is gone; old DBs keep theirs
 
 
 def test_connect_uses_wal(conn):

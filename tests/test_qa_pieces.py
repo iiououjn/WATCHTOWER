@@ -1,6 +1,6 @@
 """Phase 6t: QA text glued from several page pieces (runs 18-19) and a board line that names the failures."""
 from watchtower.floors.f4_qa_deploy.qafloor import parse_checks
-from test_qafloor import ECHO_APP, _live
+from test_qafloor_live import ECHO_APP, _live
 
 ADD = [{"name": "add milk", "method": "POST", "path": "/add", "form": {"item": "milk"}, "expect_text": ""},
        {"name": "add eggs", "method": "POST", "path": "/add", "form": {"item": "eggs"}, "expect_text": ""}]

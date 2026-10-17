@@ -136,7 +136,7 @@ def test_f4_runs_a_fresh_token_the_coder_never_saw(app_tower):  # 6u review r1 I
 
 
 def test_evidence_tells_deciding_from_advisory():  # 6u review r1 I4
-    from watchtower.tower import _evidence
+    from watchtower.evidence import _evidence
     qa = {"check": "qa", "pass": True, "decide": 2, "advisory_failed": 3,
           "results": [{"pass": True}, {"pass": True}] + [{"pass": False}] * 3 + [{"pass": True}]}
     assert "- QA: pass (tower checks 2/2; advisory 1/4 passed)" in _evidence([qa])
@@ -306,7 +306,7 @@ def test_status_only_is_off_when_tower_checks_decide():  # 7b: 6u already marks 
 
 
 def test_evidence_names_checks_judged_by_status_only():  # 7b
-    from watchtower.tower import _evidence
+    from watchtower.evidence import _evidence
     qa = {"check": "qa", "pass": True, "decide": 0, "advisory_failed": 1, "results": [{"pass": True}] * 2}
     assert "1 judged by status only" in _evidence([qa])
 

@@ -42,7 +42,7 @@ def test_beacon_command_reports_accepted_and_rejected(monkeypatch):
         def research(self, task, job_id):
             return [7]
 
-    monkeypatch.setattr(cli, "make_beacon", lambda settings, conn: Fake())
+    monkeypatch.setattr(knowledge_cmds, "make_beacon", lambda settings, conn: Fake())
     result = runner.invoke(cli.app, ["beacon", "fresnel lens"])
     assert result.exit_code == 0, result.output
     assert "1 page(s) added" in result.output
@@ -55,7 +55,7 @@ def test_beacon_command_search_down(monkeypatch):
         def research(self, task, job_id):
             raise SearchUnavailable("web search failed; check your internet connection, then resume")
 
-    monkeypatch.setattr(cli, "make_beacon", lambda settings, conn: Down())
+    monkeypatch.setattr(knowledge_cmds, "make_beacon", lambda settings, conn: Down())
     result = runner.invoke(cli.app, ["beacon", "x"])
     assert result.exit_code == 3 and "internet" in result.output
 
@@ -96,7 +96,7 @@ def test_build_app_end_to_end_with_fakes(monkeypatch, tmp_path):
 def test_deploy_done_app_prints_local_url(monkeypatch, tmp_path):
     job = done_app_job(monkeypatch, tmp_path)
     fake = FakeDeployer()
-    monkeypatch.setattr(cli, "make_deployer", lambda settings, conn: fake)
+    monkeypatch.setattr(deploy_cmds, "make_deployer", lambda settings, conn: fake)
     result = runner.invoke(cli.app, ["deploy", job, "--name", "todo"])
     assert result.exit_code == 0, result.output
     assert fake.calls == [("deploy", job, "todo")] and "http://127.0.0.1:8100" in result.output
@@ -105,7 +105,7 @@ def test_deploy_done_app_prints_local_url(monkeypatch, tmp_path):
 
 def test_deploy_refuses_unknown_or_non_app_jobs(monkeypatch):
     fake = FakeDeployer()
-    monkeypatch.setattr(cli, "make_deployer", lambda settings, conn: fake)
+    monkeypatch.setattr(deploy_cmds, "make_deployer", lambda settings, conn: fake)
     assert runner.invoke(cli.app, ["deploy", "nope"]).exit_code == 2
     use_completion(monkeypatch, lambda **kw: fake_response("hi", 1, 1))
     runner.invoke(cli.app, ["ask", "hello"])
@@ -115,14 +115,14 @@ def test_deploy_refuses_unknown_or_non_app_jobs(monkeypatch):
 
 def test_deploy_error_is_cleaned_and_exits_1(monkeypatch, tmp_path):
     job = done_app_job(monkeypatch, tmp_path)
-    monkeypatch.setattr(cli, "make_deployer", lambda settings, conn: FakeDeployer(fail="boom\x1b[31m red"))
+    monkeypatch.setattr(deploy_cmds, "make_deployer", lambda settings, conn: FakeDeployer(fail="boom\x1b[31m red"))
     result = runner.invoke(cli.app, ["deploy", job])
     assert result.exit_code == 1 and "boom" in result.output and "\x1b" not in result.output
 
 
 def test_rollback_undeploy_and_deployments(monkeypatch):
     fake = FakeDeployer()
-    monkeypatch.setattr(cli, "make_deployer", lambda settings, conn: fake)
+    monkeypatch.setattr(deploy_cmds, "make_deployer", lambda settings, conn: fake)
     assert runner.invoke(cli.app, ["rollback", "app"]).exit_code == 0
     assert runner.invoke(cli.app, ["undeploy", "app"]).exit_code == 0
     listing = runner.invoke(cli.app, ["deployments"])
@@ -153,16 +153,16 @@ def test_sign_off_is_shown_and_rejectable_from_the_cli(monkeypatch, tmp_path):
 
 
 def test_doctor_checks_bandit(monkeypatch):
-    monkeypatch.setattr(cli, "ollama_status", lambda s: (True, "ok"))
-    monkeypatch.setattr(cli, "docker_status", lambda s, a: (True, "ready"))
-    monkeypatch.setattr(cli, "free_ram_pct", lambda: 55)
+    monkeypatch.setattr(checks, "ollama_status", lambda s: (True, "ok"))
+    monkeypatch.setattr(checks, "docker_status", lambda s, a: (True, "ready"))
+    monkeypatch.setattr(checks, "free_ram_pct", lambda: 55)
     assert "Bandit" in runner.invoke(cli.app, ["doctor"]).output
 
 
 def test_doctor_reports_bad_guardrails(monkeypatch, home):
-    monkeypatch.setattr(cli, "ollama_status", lambda s: (True, "ok"))
-    monkeypatch.setattr(cli, "docker_status", lambda s, a: (True, "ready"))
-    monkeypatch.setattr(cli, "free_ram_pct", lambda: 55)
+    monkeypatch.setattr(checks, "ollama_status", lambda s: (True, "ok"))
+    monkeypatch.setattr(checks, "docker_status", lambda s, a: (True, "ready"))
+    monkeypatch.setattr(checks, "free_ram_pct", lambda: 55)
     assert "✓ Guardrails" in runner.invoke(cli.app, ["doctor"]).output
     (home / "guardrails.yaml").write_text("max_send_backs: 99\n")
     result = runner.invoke(cli.app, ["doctor"])
@@ -187,9 +187,9 @@ def test_bad_work_model_is_a_clear_error_not_a_traceback(monkeypatch, tmp_path):
 def test_doctor_checks_every_glass_file(monkeypatch, tmp_path):
     import shutil
     from watchtower.beacon import glass as glass_mod
-    monkeypatch.setattr(cli, "ollama_status", lambda s: (True, "ok"))
-    monkeypatch.setattr(cli, "docker_status", lambda s, a: (True, "ready"))
-    monkeypatch.setattr(cli, "free_ram_pct", lambda: 55)
+    monkeypatch.setattr(checks, "ollama_status", lambda s: (True, "ok"))
+    monkeypatch.setattr(checks, "docker_status", lambda s, a: (True, "ready"))
+    monkeypatch.setattr(checks, "free_ram_pct", lambda: 55)
     assert "✓ Glass" in runner.invoke(cli.app, ["doctor"]).output
     for f in glass_mod.GLASS_DIR.glob("*.yaml"):
         shutil.copy(f, tmp_path / f.name)
@@ -202,14 +202,14 @@ def test_doctor_checks_every_glass_file(monkeypatch, tmp_path):
 def test_run_checks_docker_before_any_model_work(monkeypatch):
     calls = []
     use_completion(monkeypatch, lambda **kw: calls.append(kw) or fake_response("{}", 1, 1))
-    monkeypatch.setattr(cli, "docker_status", lambda s, a: (False, "Docker is not running; start Docker Desktop"))
+    monkeypatch.setattr(checks, "docker_status", lambda s, a: (False, "Docker is not running; start Docker Desktop"))
     result = runner.invoke(cli.app, ["run", "a todo app", "--yes"])
     assert result.exit_code == 2 and "start Docker Desktop" in result.output and calls == []
     assert "todo app" not in runner.invoke(cli.app, ["status"]).output  # no orphan job
 
 
 def test_research_does_not_need_docker(monkeypatch):
-    monkeypatch.setattr(cli, "docker_status", lambda s, a: (_ for _ in ()).throw(AssertionError("not asked")))
+    monkeypatch.setattr(checks, "docker_status", lambda s, a: (_ for _ in ()).throw(AssertionError("not asked")))
     use_completion(monkeypatch, lambda **kw: fake_response('{"title": "t", "goal": "g", "acceptance": ["a"]}', 1, 1))
     result = runner.invoke(cli.app, ["research", "lighthouses", "--yes", "--offline"])
     assert not isinstance(result.exception, AssertionError) and "Docker" not in result.output

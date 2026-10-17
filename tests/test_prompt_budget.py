@@ -2,7 +2,7 @@
 from devfloor_kit import HR, Runner, Script, dev, hr_dev, verdict
 
 from watchtower.engine.workspace import Workspace
-from watchtower.floors.f2_dev.devfloor import PROMPT_CHARS
+from watchtower.floors.f2_dev.prompt_fit import PROMPT_CHARS
 
 HINDI = "प्रविष्टि जोड़ें और सूची दिखाएँ " * 3  # 80+ chars: json.dumps made each one \\uXXXX (6x)
 SPEC = {"title": "अतिथि पुस्तिका", "goal": HINDI * 4, "acceptance": [HINDI] * 4, "out_of_scope": [HINDI]}
