@@ -51,7 +51,7 @@ def _floor_of(conn: sqlite3.Connection, job_id: str) -> str | None:
         return None
     try:
         floor = json.loads(row["detail"]).get("floor")
-    except (ValueError, AttributeError):
+    except (ValueError, AttributeError, RecursionError):
         return None
     return _tidy(floor) if floor else None
 
@@ -63,7 +63,7 @@ def _awake(conn: sqlite3.Connection, job_id: str) -> list[str]:
     for r in reversed(rows):
         try:
             name = _tidy(json.loads(r["detail"]).get("agent"))
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError, RecursionError):
             continue
         awake[name] = r["action"] == "agent.wake"
     return sorted(n for n, on in awake.items() if on)

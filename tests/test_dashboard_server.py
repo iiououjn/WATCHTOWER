@@ -203,3 +203,41 @@ def test_a_trickling_client_is_cut_off_by_a_total_deadline(served):
     finally:
         s.close()
         served.RequestHandlerClass.deadline = 15
+
+
+def test_a_failed_thread_start_does_not_leak_a_connection_slot(served, monkeypatch):
+    import socketserver
+    before = served._slots._value
+
+    def boom(self, request, client_address):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(socketserver.ThreadingMixIn, "process_request", boom)
+
+    class Req:
+        def settimeout(self, t): pass
+        def recv(self, n): return b""
+        def sendall(self, b): pass
+
+    with pytest.raises(RuntimeError):
+        served.process_request(Req(), ("127.0.0.1", 1))
+    assert served._slots._value == before
+
+
+def test_rejecting_a_connection_never_waits_on_the_client(served):
+    import time
+
+    class Req:
+        def __init__(self): self.timeouts = []
+        def settimeout(self, t): self.timeouts.append(t)
+        def recv(self, n): raise BlockingIOError
+        def sendall(self, b): pass
+        def shutdown(self, how): pass
+        def close(self): pass
+
+    while served._slots.acquire(blocking=False):
+        pass
+    r = Req()
+    t0 = time.time()
+    served.process_request(r, ("127.0.0.1", 1))
+    assert time.time() - t0 < 0.1 and r.timeouts and all(t == 0 for t in r.timeouts)

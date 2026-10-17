@@ -57,9 +57,9 @@ class _Server(ThreadingHTTPServer):
     def process_request(self, request, client_address):
         if not self._slots.acquire(blocking=False):
             try:
-                request.settimeout(0.2)
+                request.settimeout(0)  # never wait on a full server's client
                 try:
-                    request.recv(4096)  # drain what the client sent so closing does not reset the answer away
+                    request.recv(4096)  # take what has already arrived so closing does not reset the answer away
                 except OSError:
                     pass
                 request.sendall(BUSY)
@@ -67,7 +67,11 @@ class _Server(ThreadingHTTPServer):
                 pass
             self.shutdown_request(request)
             return
-        super().process_request(request, client_address)
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()  # the thread never started, so its finally will never run
+            raise
 
     def process_request_thread(self, request, client_address):
         try:
@@ -138,7 +142,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._text(403, "forbidden")
             try:
                 body = self.server.state_json()
-            except (OSError, sqlite3.Error, ValueError, TypeError, AttributeError, KeyError):
+            except (OSError, sqlite3.Error, ValueError, TypeError, AttributeError, KeyError, RecursionError):
                 return self._text(503, "database unavailable")  # no paths or error text leave the server
             return self._send(200, body, "application/json", {"Content-Security-Policy": "default-src 'none'"})
         self._text(404, "not found")

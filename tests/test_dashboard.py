@@ -115,3 +115,11 @@ def test_strange_numbers_in_budget_rows_are_made_safe(conn, settings):
 def test_the_chain_check_can_be_skipped_to_save_work(conn, settings):
     AuditLog(conn).append("bus", "a", {}, None)
     assert state(settings.db_path, check_chain=False)["chain_ok"] is None
+
+
+def test_a_deeply_nested_audit_detail_cannot_crash_the_page(conn, settings):
+    job = _job(conn, status="running")
+    deep = "[" * 200_000 + '"floor"' 
+    conn.execute("INSERT INTO audit_log(ts,job_id,actor,action,detail,prev_hash,hash) VALUES('t',?,'a','agent.wake',?,'p','h')",
+                 (job.id, deep))
+    assert state(settings.db_path)["jobs"][0]["floor"] is None
