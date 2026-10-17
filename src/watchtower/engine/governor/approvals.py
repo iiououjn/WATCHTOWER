@@ -47,9 +47,10 @@ class Approvals:
         return Approval(**dict(row)) if row else None
 
     def signed_off(self, job_id: str) -> bool:
-        """8a: the owner approved this job's finished app (not only its spec). Only `approve` sets this."""
-        return self._conn.execute("SELECT 1 FROM approvals WHERE job_id=? AND kind='signoff' AND status='approved'",
-                                  (job_id,)).fetchone() is not None
+        """8a: the owner approved this job's finished app (not only its spec). Only `approve` sets this.
+        8e: the newest sign-off row decides, so a later rejection or a fresh pending request withdraws an old approval."""
+        latest = self.latest(job_id, "signoff")
+        return latest is not None and latest.status == "approved"
 
     def pending(self) -> list[Approval]:
         rows = self._conn.execute("SELECT * FROM approvals WHERE status='pending' ORDER BY id").fetchall()
