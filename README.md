@@ -76,8 +76,8 @@ Every agent runs through local [Ollama](https://ollama.com) models (no API keys,
 
 | Tier | Model | Used for |
 |---|---|---|
-| `small` | `llama3.2:3b` | Quick tasks and reviews — CPO questions, Glass relevance checks, the dev gate, audit, CEO/CTO |
-| `work` | `qwen2.5-coder:7b` | Heavy lifting — architecture, coding, QA check generation (set `WATCHTOWER_WORK_MODEL=qwen2.5-coder:3b` for a cooler, weaker coder) |
+| `small` | `llama3.2:3b` | Quick tasks and reviews — CPO questions, Glass relevance checks, QA check generation, the dev gate, audit, CEO/CTO |
+| `work` | `qwen2.5-coder:7b` | Heavy lifting — architecture, coding and the spec gate (set `WATCHTOWER_WORK_MODEL=qwen2.5-coder:3b` for a cooler, weaker coder) |
 
 > All models run locally via Ollama. Override the work model with `WATCHTOWER_WORK_MODEL=<model>`. The model client refuses any Ollama address that is not loopback, and no cloud client is built, so prompts never leave your machine.
 
@@ -178,7 +178,7 @@ Watchtower is structured as a **five-floor tower** with a C-suite and a cross-fl
 └─────────────────────────────────────────────────┘
 ```
 
-Each dev attempt passes one **Floor 5 gate** (deterministic rules + one model review on the `small` tier) before QA; the other floor handoffs pass on each floor's own checks. If the gate or a later floor rejects, work is sent back with feedback. The `guardrails.yaml` config controls gate rules, send-back limits, security severity thresholds, and more.
+Each dev attempt runs F2 → F3 → F4 → F5 checks, then one **Floor 5 gate** (deterministic rules + one model review on the `small` tier); floor handoffs pass on each floor's own checks. A failure anywhere is sent back with feedback. The `guardrails.yaml` config controls gate rules, send-back limits, security severity thresholds, and more.
 
 ### Key safety layers
 

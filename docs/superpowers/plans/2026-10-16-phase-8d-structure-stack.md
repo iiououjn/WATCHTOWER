@@ -13,8 +13,9 @@ writes, the unused `review` tier; the spec says they are deferred, not built.
 
 ## Diagnosis
 
-- `model_socket.py` calls `litellm.completion` for one Ollama `/api/chat` request; `litellm.completion_cost`
-  runs only for cloud models, which are off. litellm is 109 MB of the venv, 4.4 s of import, +180 MB RSS, and
+- `model_socket.py` calls `litellm.completion` with the `ollama/` prefix, which litellm 1.105 sends to
+  `/api/generate` as one prompt flattened by its `ollama_pt` (`### System:` / `### User:` blocks), not to
+  `/api/chat` (corrected in review r2); `litellm.completion_cost` runs only for cloud models, which are off. litellm is 109 MB of the venv, 4.4 s of import, +180 MB RSS, and
   fetches a price file from GitHub on import (D-M3), even with `--offline`.
 - `engine/tools/hub.py` (ToolHub, the only mcp user) and `engine/governor/secrets.py` (SecretStore, the only
   keyring user) have no production caller; every role has `tools: []` and `Role.tools` is never read.
@@ -87,6 +88,12 @@ writes, the unused `review` tier; the spec says they are deferred, not built.
   wrong: a test bug B would catch.
 - *Project and home CLAUDE.md (E-D3).* The owner's own files, outside the repo. Ruling: not touched; noted.
 - Reviews: 2 rounds (not a security change; the URL guard is defence in depth).
+- *Prompt format (review r2).* The client sends real `system` and `user` roles to `/api/chat`, so Ollama now
+  applies each model's own chat template; litellm sent a flattened `ollama_pt` prompt to `/api/generate`. The
+  role prompts were tuned in runs 26-39 under the old format. Ruling: keep `/api/chat` as an intentional
+  behaviour change for the owner to accept; before merge, one real golden job on Ollama is run and its result
+  recorded here. Cost if wrong: weaker model output; the fallback is to send the old flattened prompt to
+  `/api/generate` from the same client (about 30 lines).
 - Deferred minors (review r1): a one-blank-line check between methods in class bodies, and ruff E501 at 120
   for every file instead of the hand-made `SPLIT` subset. Both widen a style rule beyond this batch's splits.
 
@@ -128,8 +135,8 @@ writes, the unused `review` tier; the spec says they are deferred, not built.
   `test_charge_within_limits` became `test_record_within_limits`; the cap tests now `record` then `check`.
 - Added: `test_ollama_client.py`, `test_structure.py` (file length and blank lines per src file, removed modules
   and deps, ruff in CI and clean, docs claims).
-- Count: 1259 passed on main before 8d; 1336 passed after (`uv run pytest -q`). The rise is the per-file
-  structure checks; 28 tests of removed code are gone.
+- Count: 1259 passed on main before 8d; 1408 passed after review r2 (`uv run pytest -q`). The rise is the
+  per-file structure checks (src and tests) and the client tests; 28 tests of removed code are gone.
 
 ## Review r1
 
@@ -143,3 +150,15 @@ writes, the unused `review` tier; the spec says they are deferred, not built.
 - Minor, fixed: test files are held under 500 lines too; `test_qafloor.py` (511) split, its live-app escaping
   tests now in `test_qafloor_live.py` (49 tests before and after).
 - Minor, fixed: `click>=8` declared (E-D1), lock updated.
+
+## Review r2
+
+- Important, recorded (no code change): the diagnosis said litellm already called `/api/chat`; it called
+  `/api/generate` with a flattened prompt. Premise corrected; the switch to real chat roles is a behaviour
+  change ruled above. Owner action before merge: run the golden job on Ollama and record the result.
+- Important, fixed: README said the dev gate runs before QA and a later floor may reject; the gate runs last
+  (`DevRun.attempt`: floors, then `gate.check`). Reworded; `test_readme_matches_gate_order_and_tiers` failed
+  first on that sentence.
+- Minor, fixed: the default-models table gave QA check generation to the `work` tier; QA roles are `small`
+  (the same test covers it). The `work` line now names the spec gate, the one other `work` role.
+- Minor, fixed: the before/after test count above.

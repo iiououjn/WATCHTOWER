@@ -103,3 +103,12 @@ def test_docs_do_not_describe_removed_components_as_built():  # E-D1, E-D2, E-A3
     assert "### Built and deferred" in spec and "LiteLLM" not in spec
     for part in ("Tool Hub", "Governor secrets", "Memory", "tier-review"):
         assert f"- **{part}**" in spec.split("### Built and deferred")[1].split("## 1.")[0], part
+
+
+def test_readme_matches_gate_order_and_tiers():  # 8d review r2: the dev gate runs after F5, QA is small tier
+    readme = (ROOT / "README.md").read_text()
+    assert "before QA" not in readme and "a later floor rejects" not in readme
+    assert "F2 → F3 → F4 → F5 checks, then one **Floor 5 gate**" in readme
+    work = next(line for line in readme.splitlines() if line.startswith("| `work` |"))
+    assert "QA" not in work
+    assert "QA check generation" in next(line for line in readme.splitlines() if line.startswith("| `small` |"))
