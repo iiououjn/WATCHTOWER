@@ -30,3 +30,5 @@ Thumbs.db
 .superpowers/
 .serena/
 .pytest_cache/
+.claude/
+site/

@@ -42,6 +42,7 @@ Every agent runs through local [Ollama](https://ollama.com) models (no API keys,
 |---|---|
 | **[Typer](https://typer.tiangolo.com)** | CLI framework — all `watchtower` commands with auto-generated help |
 | **[Click](https://click.palletsprojects.com)** | Installed with Typer; imported directly to catch Ctrl-C during CPO questions |
+| **[three.js](https://threejs.org)** | The 3D dashboard (vendored, hash-pinned, MIT); plain JavaScript modules, no build step |
 
 ### Web research (Beacon subsystem)
 
@@ -189,6 +190,40 @@ Each dev attempt runs F2 → F3 → F4 → F5 checks, then one **Floor 5 gate** 
 - **Budget** — Per-job token, time, and cost limits.
 - **Owner approval** — Spec approval and app sign-off are explicit human-in-the-loop checkpoints.
 
+## The 3D dashboard
+
+`watchtower dashboard` opens a live, read-only 3D view of the tower in your browser: **http://127.0.0.1:8765** (loopback only).
+**Try it without installing anything:** the [hosted demo](https://rishiupadhyaygithub.github.io/watchtower/) plays a made-up run (no tower, no data behind it).
+
+```bash
+uv run watchtower dashboard            # default port 8765; --port N to change
+```
+
+**What you see.** A lighthouse on a sea rock, cut open towards you so each floor is a furnished office: penthouse C-suite,
+F5 Oversight, F4 QA & Deploy, F3 Build, F2 Dev, F1 Research. Every agent from the org chart is a person in its floor's office.
+When the tower wakes an agent it walks to its desk and types (name tag above its head); idle agents wander and sit. The floor with
+live work lights up, a glowing packet rides the lift when a job moves between floors, the beam sweeps, deployed apps are boats
+labelled `127.0.0.1:<port>`, and the "ground engine" cottage smokes when anything is working. The **Ledger** (top right) holds the
+plain tables: approvals waiting for you, jobs, deployed apps, budgets and the audit log.
+
+**Controls.** Drag to orbit, scroll to zoom, right-drag to pan, click a floor (or the floor buttons) to fly to it, hover a person for
+their role. Bottom bar: pick a place (Scotland, Wales, Mumbai, Japan, Korea, USA, Dubai, open ocean), set the time of day or follow
+your clock, toggle auto-orbit, glow and weather.
+
+**Real photo backdrops.** The places are built in 3D (landmarks, physical sky, water, shadows), not photographs. For a true photo,
+drop equirectangular panoramas (`.jpg`, `.png` or `.webp`, up to 30 MB and 8192 px wide, names like `tokyo-dawn.jpg`) into
+`<home>/backdrops/` (default `~/.watchtower/backdrops/`); they appear as extra places and light the scene.
+
+**How it works.** The server (`src/watchtower/dashboard/`, Python stdlib) is read-only: it opens the tower's SQLite file with
+`mode=ro` + `query_only`, answers `GET`/`HEAD` only, checks the `Host` header against DNS rebinding, and sends a strict CSP. The page
+polls `/api/state` every 3 s (cached 2 s server side) and the scene reacts: `web/app/` is plain JavaScript modules on a vendored,
+hash-pinned [three.js](https://threejs.org) (MIT, `web/vendor/three/`), with no build step, no CDN and no runtime network. Text from the
+tower (prompts, audit detail) only ever reaches the screen through `textContent` or canvas `fillText`.
+
+**Not for the internet.** There is no login, and the page shows job prompts and audit entries. Keep it on loopback. To look at it from
+another device, use a private tunnel you control (for example Tailscale) rather than a public URL. The public demo is safe only because
+it contains no real data (`scripts/build_demo.py` builds it; `.github/workflows/pages.yml` publishes it).
+
 ## CLI reference
 
 | Command | Description |
@@ -196,6 +231,7 @@ Each dev attempt runs F2 → F3 → F4 → F5 checks, then one **Floor 5 gate** 
 | `watchtower run "<idea>"` | Full pipeline: spec → all 5 floors → CEO → sign-off |
 | `watchtower research "<topic>"` | Floor 1 only: spec → research brief with sources |
 | `watchtower ask "<prompt>"` | Quick one-model Q&A (no floors) |
+| `watchtower dashboard` | Live, read-only 3D view of the tower at http://127.0.0.1:8765 (`--port N`) |
 | `watchtower approve <job-id>` | Approve a pending spec or sign off a finished app |
 | `watchtower approve <job-id> --reject` | Reject a pending spec or app |
 | `watchtower status` | List recent jobs |

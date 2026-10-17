@@ -64,7 +64,8 @@ function render(s) {
 }
 async function tick() {
   try {
-    const r = await fetch('/api/state', { cache: 'no-store', headers: { 'X-Watchtower': '1' } });
+    if (window.WT_DEMO_STATE) { render(window.WT_DEMO_STATE(Date.now() / 1000)); return; }   // the hosted demo plays a made-up run; it never talks to a tower
+    const r = await fetch('api/state', { cache: 'no-store', headers: { 'X-Watchtower': '1' } });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     render(await r.json());
   } catch (e) { $('status').textContent = 'cannot reach the tower database (' + e.message + ')'; }
@@ -81,18 +82,28 @@ BODY = """<div id="stage"></div><div id="hud"></div>
 <div class="panel"><h2>Audit log</h2><div id="audit"></div></div></div></details>"""
 
 
-IMPORTMAP = ('{"imports":{"three":"/static/vendor/three/three.module.js","three/addons/":"/static/vendor/three/addons/"}}')
+IMPORTMAP = '{"imports":{"three":"/static/vendor/three/three.module.js","three/addons/":"/static/vendor/three/addons/"}}'
+DEMO_CSP = ("default-src 'none'; script-src 'self' 'nonce-demo'; style-src 'nonce-demo'; img-src 'self'; connect-src 'self'; "
+            "base-uri 'none'; form-action 'none'")
 
 
-def render_page(nonce: str) -> str:
+def render_page(nonce: str, demo: bool = False) -> str:
+    """The live page (strict CSP header, nonce per response) or, with demo=True, the static copy for GitHub Pages: relative
+    URLs so it works under /<repo>/, a made-up run instead of the tower's state, and its CSP in a meta tag."""
     import json
 
     from watchtower.roles import load_roles
 
     roster = [{"id": r.id, "title": r.title, "floor": r.floor.replace("c-suite", "csuite")} for r in load_roles().values()]
     js = JS.replace("%ROSTER%", json.dumps(roster).replace("<", "\\u003c"))
-    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-            f'<title>The Watchtower</title><style nonce="{nonce}">{CSS}</style></head><body>{BODY}'
+    imap, main, pre, meta = IMPORTMAP, "/static/app/main.js", "", ""
+    if demo:
+        nonce = "demo"
+        imap, main = IMPORTMAP.replace('"/static/', '"./static/'), "static/app/main.js"
+        pre = f'<script nonce="{nonce}" src="static/app/demo.js"></script>'
+        meta = f'<meta http-equiv="Content-Security-Policy" content="{DEMO_CSP}">'
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">{meta}'
+            f'<title>The Watchtower</title><style nonce="{nonce}">{CSS}</style></head><body>{BODY}{pre}'
             f'<script nonce="{nonce}">{js}</script>'
-            f'<script type="importmap" nonce="{nonce}">{IMPORTMAP}</script>'
-            f'<script type="module" nonce="{nonce}" src="/static/app/main.js"></script></body></html>')
+            f'<script type="importmap" nonce="{nonce}">{imap}</script>'
+            f'<script type="module" nonce="{nonce}" src="{main}"></script></body></html>')
