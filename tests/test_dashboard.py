@@ -178,16 +178,20 @@ def test_active_deployments_are_listed_without_the_image(conn, settings):
 
 def test_deployment_text_is_tidied_and_the_port_is_a_number(conn, settings):
     home = str(Path.home())
-    _deploy(conn, "a\x1b[31m" + home + "x" * 5000, "j", "8100; <b>")
+    dirty = "\x1b[31m" + home + "a‮b"
+    _deploy(conn, dirty + "x" * 5000, dirty, "8100; <b>", status="active")
+    conn.execute("UPDATE deployments SET created_at=?", (dirty,))
     d = state(settings.db_path)["deployments"][0]
-    assert "\x1b" not in d["name"] and home not in d["name"] and len(d["name"]) <= 2003
+    for key in ("name", "job_id", "created_at"):
+        assert "\x1b" not in d[key] and home not in d[key] and "‮" not in d[key] and len(d[key]) <= 2003
     assert d["port"] == 0
 
 
 def test_the_deployments_list_is_capped(conn, settings):
     for i in range(70):
         _deploy(conn, f"app{i}", "j", 8000 + i)
-    assert len(state(settings.db_path)["deployments"]) == 50
+    deps = state(settings.db_path)["deployments"]
+    assert len(deps) == 50 and deps[0]["name"] == "app69" and deps[-1]["name"] == "app20"
 
 
 def test_the_page_has_a_deployments_panel_with_text_only_127_0_0_1_port():
