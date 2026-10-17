@@ -1,0 +1,42 @@
+"""9c: the watchtower scene. A canvas picture of the tower with its staff; same safety rules as the rest of the page."""
+import json
+import re
+
+from watchtower.dashboard.page import render_page
+from watchtower.roles import load_roles
+
+BANNED = ("innerHTML", "outerHTML", "document.write", "eval(", "insertAdjacentHTML", "new Function", "setAttribute('style'",
+          "<a ", ".href", "<img", "<iframe", "src=")
+
+
+def _roster(html: str) -> list[dict]:
+    return json.loads(re.search(r"const ROSTER = (\[.*?\]);\n", html, re.S).group(1))
+
+
+def test_the_page_has_one_full_window_canvas_for_the_scene():
+    html = render_page("n")
+    assert html.count('<canvas id="scene"') == 1 and 'id="ledger"' in html
+
+
+def test_the_roster_is_every_role_in_the_org_chart_grouped_by_floor():
+    roster = _roster(render_page("n"))
+    roles = load_roles()
+    assert {r["id"] for r in roster} == set(roles)
+    assert all(r["floor"] in ("csuite", "f1", "f2", "f3", "f4", "f5", "glass") for r in roster)
+    assert {r["id"]: r["title"] for r in roster} == {i: r.title for i, r in roles.items()}
+
+
+def test_the_embedded_roster_cannot_close_the_script_tag():
+    assert "</script" not in render_page("n").split("const ROSTER")[1].split(";\n")[0].lower()
+
+
+def test_the_scene_code_never_writes_html_or_loads_anything():
+    html = render_page("n")
+    for banned in BANNED:
+        assert banned not in html
+    assert "fillText" in html and "requestAnimationFrame" in html and "prefers-reduced-motion" in html
+
+
+def test_the_scene_reads_awake_agents_and_floors_from_the_state():
+    html = render_page("n")
+    assert "j.awake" in html and "j.floor" in html and "s.deployments" in html
