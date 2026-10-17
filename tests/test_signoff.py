@@ -83,6 +83,19 @@ def test_signed_off_needs_an_approved_signoff_row(conn):
     assert a.signed_off("j1") and not a.signed_off("j2")
 
 
+def test_a_later_rejection_or_pending_signoff_withdraws_the_approval(conn):
+    """8e (phase-8 minor 1): the newest sign-off row decides, not any older approved one."""
+    a = Approvals(conn)
+    a.decide(a.request("j1", "signoff", "app"), True)
+    assert a.signed_off("j1")
+    a.decide(a.request("j1", "signoff", "changed app"), False)
+    assert not a.signed_off("j1")  # owner rejected the newer app: deploy must not use the old approval
+    a.request("j2", "signoff", "app")
+    a.decide(a.latest("j2", "signoff").id, True)
+    a.request("j2", "signoff", "new request")
+    assert not a.signed_off("j2")  # a fresh pending request withdraws the old approval until decided
+
+
 def test_the_request_step_itself_never_skips_the_owner(app_tower, conn, tmp_path):
     runner, model, sandbox, job = app_tower()
     data = _legacy(job.id, tmp_path)  # --yes, CEO approves, no objection: once the auto sign-off case
