@@ -34,7 +34,7 @@ def capped_run(argv: list[str], *, timeout: float | None = None, limit: int = 4 
                 dropped.append(True)
                 del tail[:-limit]
 
-    pipes = zip((proc.stdout, proc.stderr), tails)
+    pipes = zip((proc.stdout, proc.stderr), tails, strict=True)
     readers = [threading.Thread(target=drain, args=pair, daemon=True) for pair in pipes]
     for reader in readers:
         reader.start()

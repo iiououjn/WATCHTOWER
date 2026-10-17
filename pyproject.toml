@@ -24,8 +24,25 @@ build-backend = "hatchling.build"
 packages = ["src/watchtower"]
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["F", "E9", "B", "C901"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.per-file-ignores]
+# tests: F and E9 only; kits are star-imported (F403/F405) and pytest fixtures shadow imports (F811)
+"tests/**" = ["B", "C901", "F403", "F405", "F811"]

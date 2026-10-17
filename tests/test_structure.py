@@ -2,6 +2,8 @@
 import ast
 import dataclasses
 import importlib.util
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -67,3 +69,16 @@ def test_files_stay_under_500_lines_without_squeezing(path):
             assert k >= 1 and not lines[k].strip() and not lines[k - 1].strip(), f"{_rel(path)}:{node.lineno}"
     if _rel(path).startswith(SPLIT):
         assert not [n for n, line in enumerate(lines, 1) if len(line) > 120]
+
+
+def test_ci_lints_with_ruff_before_the_tests():  # E-S6: CI checked only "pytest passes"
+    workflow = (ROOT / ".github" / "workflows" / "tests.yml").read_text()
+    assert "uv run ruff check" in workflow and workflow.index("uv run ruff check") < workflow.index("uv run pytest")
+    assert "ruff" in tomllib.loads((ROOT / "pyproject.toml").read_text()).get("tool", {})
+
+
+def test_ruff_finds_nothing():
+    pytest.importorskip("ruff")  # a dev dependency; the CI step runs it too
+    out = subprocess.run([sys.executable, "-m", "ruff", "check", "--no-cache", "src", "tests"], cwd=ROOT,
+                         capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stdout[-3000:]

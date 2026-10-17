@@ -123,10 +123,10 @@ def resume(
         outcome = runner.resume(job_id, force=force)
     except KeyError:
         typer.echo(f"Error: no job {job_id}", err=True)
-        raise typer.Exit(2)
+        raise typer.Exit(2) from None
     except ValueError as e:
         typer.echo(clean(f"Error: {e}"), err=True)
-        raise typer.Exit(2)
+        raise typer.Exit(2) from None
     finally:
         runner.close()
     _report(outcome, conn)
@@ -165,7 +165,7 @@ def budget(job_id: str):
         u = Budget(conn).usage(job_id)
     except KeyError:
         typer.echo(f"Error: no budget for job {job_id}", err=True)
-        raise typer.Exit(2)
+        raise typer.Exit(2) from None
     typer.echo(f"tokens: {u['used_tokens']} / {u['max_tokens']}")
     typer.echo(f"seconds: {u['used_seconds']:.1f} / {u['max_seconds']}")
     typer.echo(f"usd: ${u['used_usd']:.4f} / ${u['max_usd']:.4f}")
@@ -239,7 +239,7 @@ def _tower_job(goal: str, app: bool, yes: bool, offline: bool, research: bool, m
                 runner.release(job.id)
                 JobStore(conn).set_status(job.id, "failed", "cancelled by owner during CPO questions")
                 typer.echo(f"\nJob {job.id} cancelled.", err=True)
-                raise typer.Exit(130)
+                raise typer.Exit(130) from None
         outcome = runner.start(job.id, extra={"answers": answers, "auto_approve": yes, "offline": offline,
                                                     "research": research})
     finally:
@@ -275,7 +275,7 @@ def approve(job_id: str,
     except (KeyError, ValueError) as e:
         typer.echo(clean(f"Error: {e}"), err=True)
         typer.echo(f"Approval recorded. Resume with: watchtower resume {job_id}", err=True)
-        raise typer.Exit(2)
+        raise typer.Exit(2) from None
     finally:
         runner.close()
     _report(outcome, conn)

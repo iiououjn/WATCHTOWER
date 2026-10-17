@@ -64,7 +64,7 @@ def _handler_problems(name: str, tree: ast.Module) -> list[str]:
         own = {m: _writes(fn) for m, fn in methods.items()}
         read = {m: _reads(fn) for m, fn in methods.items()}
 
-        def reach(m: str) -> set[str]:  # the method and every method it calls on self, transitively
+        def reach(m: str, calls=calls) -> set[str]:  # the method and every method it calls on self, transitively
             seen, todo = {m}, [m]
             while todo:
                 for c in calls[todo.pop()] - seen:
