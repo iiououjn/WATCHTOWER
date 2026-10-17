@@ -32,7 +32,7 @@ def test_the_build_writes_only_javascript_and_the_licence_and_every_import_resol
     out = tmp_path / "site"
     written = build_demo.build(out)
     on_disk = {p.relative_to(out).as_posix() for p in out.rglob("*") if p.is_file()}
-    assert on_disk == set(written) | {".nojekyll", "static/vendor/three/LICENSE"}
+    assert on_disk == set(written) | {".nojekyll", "vercel.json", "static/vendor/three/LICENSE"}
     assert all(w == "index.html" or w.endswith(".js") for w in written) and not any(".py" in w or ".db" in w for w in on_disk)
     for f in (out / "static" / "app").glob("*.js"):
         for spec in re.findall(r"from\s+'(\./[^']+)'", f.read_text()):
