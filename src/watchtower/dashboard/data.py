@@ -22,9 +22,17 @@ def open_readonly(db_path: Path) -> sqlite3.Connection:
         raise FileNotFoundError(f"no tower database at {db_path}")
     conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True, timeout=5, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.text_factory = lambda raw: raw.decode("utf-8", "replace")  # a bad byte in one row must not take the page down
     conn.execute("PRAGMA query_only=ON")
     conn.execute("PRAGMA busy_timeout=5000")
     return conn
+
+
+def _num(value: object) -> int | float:
+    """A budget figure the page can draw: anything that is not a finite number becomes 0 (text, blobs, inf, nan)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value or value in (float("inf"), float("-inf")):
+        return 0
+    return value
 
 
 def _tidy(value: object) -> str:
@@ -61,7 +69,14 @@ def _awake(conn: sqlite3.Connection, job_id: str) -> list[str]:
     return sorted(n for n, on in awake.items() if on)
 
 
-def state(db_path: Path) -> dict:
+def _chain_ok(conn: sqlite3.Connection) -> bool:
+    try:
+        return AuditLog(conn).verify()
+    except (sqlite3.Error, ValueError, TypeError):
+        return False  # an unreadable row is exactly what a broken chain looks like
+
+
+def state(db_path: Path, check_chain: bool = True) -> dict:
     conn = open_readonly(db_path)
     try:
         jobs = []
@@ -73,14 +88,15 @@ def state(db_path: Path) -> dict:
         approvals = [{"id": r["id"], "job_id": _tidy(r["job_id"]), "kind": _tidy(r["kind"]),
                       "summary": _tidy(r["summary"]), "created_at": _tidy(r["created_at"])}
                      for r in conn.execute("SELECT * FROM approvals WHERE status='pending' ORDER BY id").fetchall()]
-        audit = [{"seq": e.seq, "ts": _tidy(e.ts), "job_id": _tidy(e.job_id) or None, "actor": _tidy(e.actor),
-                  "action": _tidy(e.action), "detail": _tidy(json.dumps(e.detail, ensure_ascii=False, default=str))}
-                 for e in AuditLog(conn).entries(limit=AUDIT)]
-        budgets = [{"job_id": _tidy(r["job_id"]), "used_tokens": r["used_tokens"], "max_tokens": r["max_tokens"],
-                    "used_seconds": round(r["used_seconds"], 1), "max_seconds": r["max_seconds"]}
+        audit = [{"seq": r["seq"], "ts": _tidy(r["ts"]), "job_id": _tidy(r["job_id"]) or None, "actor": _tidy(r["actor"]),
+                  "action": _tidy(r["action"]), "detail": _tidy(r["detail"])}
+                 for r in conn.execute("SELECT seq, ts, job_id, actor, action, detail FROM (SELECT * FROM audit_log"
+                                       " ORDER BY seq DESC LIMIT ?) ORDER BY seq", (AUDIT,)).fetchall()]
+        budgets = [{"job_id": _tidy(r["job_id"]), "used_tokens": _num(r["used_tokens"]), "max_tokens": _num(r["max_tokens"]),
+                    "used_seconds": round(_num(r["used_seconds"]), 1), "max_seconds": _num(r["max_seconds"])}
                    for r in conn.execute("SELECT * FROM budgets WHERE job_id IN (SELECT id FROM jobs ORDER BY created_at"
                                          " DESC LIMIT ?)", (JOBS,)).fetchall()]
         return {"jobs": jobs, "approvals": approvals, "audit": audit, "budgets": budgets,
-                "chain_ok": AuditLog(conn).verify(), "now": now()}
+                "chain_ok": _chain_ok(conn) if check_chain else None, "now": now()}
     finally:
         conn.close()

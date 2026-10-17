@@ -11,7 +11,11 @@ from watchtower.interface.shell import app, clean
 @app.command()
 def dashboard(port: int = typer.Option(8765, "--port", min=0, max=65535, help="Port on 127.0.0.1 only")):
     """Show the tower live in your browser: floors, jobs, approvals, budgets, audit. Read only; approve in the CLI."""
-    settings = load_settings()
+    try:
+        settings = load_settings()
+    except ValueError as e:
+        typer.echo(clean(f"Error: {e}"), err=True)
+        raise typer.Exit(2) from None
     if not settings.db_path.is_file():
         typer.echo(f"Error: no tower database at {settings.db_path}; run a job first", err=True)
         raise typer.Exit(2)

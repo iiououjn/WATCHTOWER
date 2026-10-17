@@ -68,7 +68,7 @@ function render(s) {
 }
 async function tick() {
   try {
-    const r = await fetch('/api/state', { cache: 'no-store' });
+    const r = await fetch('/api/state', { cache: 'no-store', headers: { 'X-Watchtower': '1' } });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     render(await r.json());
   } catch (e) { $('status').textContent = 'cannot reach the tower database (' + e.message + ')'; }

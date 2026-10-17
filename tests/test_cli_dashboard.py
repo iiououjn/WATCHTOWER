@@ -43,3 +43,12 @@ def test_a_busy_port_is_a_clear_exit_2(home, monkeypatch):
 def test_it_never_creates_a_database(home):
     out = runner.invoke(cli.app, ["dashboard"])
     assert out.exit_code == 2 and "no tower database" in out.output and not (home / "watchtower.db").exists()
+
+
+def test_a_bad_config_is_a_clean_exit_2_not_a_traceback(home, monkeypatch):
+    def bad():
+        raise ValueError("bad WATCHTOWER_WORK_MODEL")
+
+    monkeypatch.setattr(dashboard_cmds, "load_settings", bad)
+    out = runner.invoke(cli.app, ["dashboard"])
+    assert out.exit_code == 2 and "bad WATCHTOWER_WORK_MODEL" in out.output

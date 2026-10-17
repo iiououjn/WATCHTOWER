@@ -89,3 +89,29 @@ def test_a_missing_database_is_an_error_not_a_new_empty_one(tmp_path):
 def test_a_huge_audit_detail_is_capped(conn, settings):
     AuditLog(conn).append("bus", "big", {"blob": "y" * 1_000_000}, None)
     assert len(state(settings.db_path)["audit"][-1]["detail"]) <= 2003
+
+
+def test_a_bad_audit_row_cannot_take_the_dashboard_down(conn, settings):
+    AuditLog(conn).append("bus", "good", {"x": 1}, None)
+    conn.execute("INSERT INTO audit_log(ts,job_id,actor,action,detail,prev_hash,hash) VALUES('t',NULL,'a','bad','{oops','p','h')")
+    conn.execute("INSERT INTO audit_log(ts,job_id,actor,action,detail,prev_hash,hash)"
+                 " VALUES('t',NULL,'a','bytes',CAST(x'ff7b' AS TEXT),'p','h')")
+    s = state(settings.db_path)
+    assert [e["action"] for e in s["audit"]][-2:] == ["bad", "bytes"] and s["chain_ok"] is False
+    assert "{oops" in s["audit"][-2]["detail"]
+
+
+def test_strange_numbers_in_budget_rows_are_made_safe(conn, settings):
+    job = _job(conn)
+    conn.execute("INSERT INTO budgets(job_id,max_tokens,max_seconds,max_usd,used_tokens,used_seconds)"
+                 " VALUES(?,?,?,0,CAST(x'00' AS BLOB),'x')", (job.id, 1, 1))
+    b = state(settings.db_path)["budgets"][0]
+    assert b["used_tokens"] == 0 and b["used_seconds"] == 0
+    conn.execute("UPDATE budgets SET used_seconds=9e999")
+    import json
+    json.dumps(state(settings.db_path), allow_nan=False)  # inf must not reach the page as Infinity
+
+
+def test_the_chain_check_can_be_skipped_to_save_work(conn, settings):
+    AuditLog(conn).append("bus", "a", {}, None)
+    assert state(settings.db_path, check_chain=False)["chain_ok"] is None

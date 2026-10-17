@@ -24,11 +24,14 @@ def served(conn, settings):
     server.server_close()
 
 
-def _get(server, path="/", method="GET", host=None, body=None):
+def _get(server, path="/", method="GET", host=None, body=None, headers=None):
     port = server.server_address[1]
     c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     c.putrequest(method, path, skip_host=True)
     c.putheader("Host", host if host is not None else f"127.0.0.1:{port}")
+    for k, v in ({"X-Watchtower": "1", **(headers or {})}).items():
+        if v is not None:
+            c.putheader(k, v)
     c.putheader("Content-Length", str(len(body or b"")))
     c.endheaders(body)
     r = c.getresponse()
@@ -134,3 +137,69 @@ def test_a_slow_client_does_not_hold_a_thread_forever(served):
     s = socket.create_connection(("127.0.0.1", served.server_address[1]))
     s.close()
     assert _get(served, "/api/state")[0].status == 200
+
+
+def test_the_state_endpoint_needs_the_apps_own_header_so_other_sites_cannot_poll_it(served):
+    assert _get(served, "/api/state", headers={"X-Watchtower": None})[0].status == 403
+    assert _get(served, "/api/state")[0].status == 200
+
+
+@pytest.mark.parametrize("path", ["/", "/api/state"])
+def test_cross_site_requests_are_refused(served, path):
+    assert _get(served, path, headers={"Sec-Fetch-Site": "cross-site"})[0].status == 403
+    assert _get(served, path, headers={"Sec-Fetch-Site": "same-origin"})[0].status == 200
+    assert _get(served, path, headers={"Sec-Fetch-Site": "none"})[0].status == 200
+
+
+def test_the_page_sends_the_header_when_it_polls():
+    assert "X-Watchtower" in render_page("n")
+
+
+def test_state_is_cached_briefly_so_polling_cannot_burn_cpu(served, monkeypatch):
+    from watchtower.dashboard import server as srv
+    calls = []
+    real = srv.state
+    monkeypatch.setattr(srv, "state", lambda *a, **k: calls.append(1) or real(*a, **k))
+    for _ in range(5):
+        assert _get(served, "/api/state")[0].status == 200
+    assert len(calls) == 1
+
+
+def test_a_server_error_in_state_is_a_plain_503(served, monkeypatch):
+    from watchtower.dashboard import server as srv
+    monkeypatch.setattr(srv, "state", lambda *a, **k: (_ for _ in ()).throw(ValueError("boom with /secret/path")))
+    r, data = _get(served, "/api/state")
+    assert r.status == 503 and b"secret" not in data
+
+
+def test_connections_are_capped_and_a_full_server_answers_503(served):
+    served.max_connections = 3
+    served._slots = __import__("threading").BoundedSemaphore(3)
+    held = [socket.create_connection(("127.0.0.1", served.server_address[1])) for _ in range(3)]
+    try:
+        import time
+        time.sleep(0.3)
+        r, _ = _get(served, "/api/state")
+        assert r.status == 503
+    finally:
+        for h in held:
+            h.close()
+
+
+def test_a_trickling_client_is_cut_off_by_a_total_deadline(served):
+    import time
+    served.RequestHandlerClass.deadline = 0.6
+    s = socket.create_connection(("127.0.0.1", served.server_address[1]))
+    t0, cut = time.time(), False
+    try:
+        for _ in range(20):  # one byte every 0.3 s would keep a per-read timeout alive for ever
+            try:
+                s.sendall(b"G")
+                time.sleep(0.3)
+            except OSError:
+                cut = True
+                break
+        assert cut and time.time() - t0 < 4
+    finally:
+        s.close()
+        served.RequestHandlerClass.deadline = 15
