@@ -281,4 +281,4 @@ def approve(job_id: str,
     _report(outcome, conn)
 
 
-from watchtower.interface import deploy_cmds, knowledge_cmds  # noqa: E402,F401 — register their commands on app
+from watchtower.interface import dashboard_cmds, deploy_cmds, knowledge_cmds  # noqa: E402,F401 — register commands
