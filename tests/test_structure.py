@@ -32,6 +32,11 @@ def test_removed_dependencies_stay_removed(dep):
     assert f'\nname = "{dep}"\n' not in (ROOT / "uv.lock").read_text()
 
 
+def test_click_is_declared_because_the_cli_imports_it():  # E-D1 (review r1): not only typer's transitive pin
+    deps = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["dependencies"]
+    assert [d for d in deps if d.split(">")[0].strip() == "click"]
+
+
 def test_roles_carry_no_tool_permissions():  # the Tool Hub is deferred: a role has no tools to grant
     assert "tools" not in {f.name for f in dataclasses.fields(Role)}
     assert not [p.name for p in ROLES_DIR.rglob("*.yaml") if "\ntools:" in p.read_text()]
@@ -69,6 +74,11 @@ def test_files_stay_under_500_lines_without_squeezing(path):
             assert k >= 1 and not lines[k].strip() and not lines[k - 1].strip(), f"{_rel(path)}:{node.lineno}"
     if _rel(path).startswith(SPLIT):
         assert not [n for n, line in enumerate(lines, 1) if len(line) > 120]
+
+
+@pytest.mark.parametrize("path", sorted((ROOT / "tests").rglob("*.py")), ids=lambda p: p.name)
+def test_test_files_stay_under_500_lines(path):  # review r1: the limit holds for the tests too
+    assert len(path.read_text().splitlines()) < 500
 
 
 def test_ci_lints_with_ruff_before_the_tests():  # E-S6: CI checked only "pytest passes"

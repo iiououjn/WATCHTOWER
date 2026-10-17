@@ -24,8 +24,13 @@ def _base(api_base: str) -> str:
     return api_base.rstrip("/")
 
 
+def _client(timeout: float, transport: httpx.BaseTransport | None) -> httpx.Client:
+    # review r1: trust_env=False, or HTTP_PROXY/ALL_PROXY (or the macOS system proxy) would carry prompts off the Mac
+    return httpx.Client(transport=transport, timeout=timeout, trust_env=False)
+
+
 def _post(url: str, body: dict, timeout: float, transport: httpx.BaseTransport | None) -> httpx.Response:
-    with httpx.Client(transport=transport, timeout=timeout) as client:
+    with _client(timeout, transport) as client:
         resp = client.post(url, json=body)
     resp.raise_for_status()  # 404: model not pulled (not retried); 5xx: retried by the socket
     return resp
@@ -52,13 +57,17 @@ def chat(*, model: str, messages: list[dict], api_base: str, timeout: float, max
     return SimpleNamespace(choices=choices, usage=usage)
 
 
+def get(api_base: str, path: str, timeout: float = 5, transport: httpx.BaseTransport | None = None) -> dict:
+    """One GET to a loopback Ollama (doctor's /api/version and /api/tags, and /api/ps below)."""
+    with _client(timeout, transport) as client:
+        resp = client.get(_base(api_base) + path)
+    resp.raise_for_status()
+    return resp.json()
+
+
 def resident(api_base: str, transport: httpx.BaseTransport | None = None) -> list[str]:
     """The models Ollama holds in RAM now (as tier names, with the ollama/ prefix)."""
-    url = _base(api_base) + "/api/ps"
-    with httpx.Client(transport=transport, timeout=5) as client:
-        resp = client.get(url)
-    resp.raise_for_status()
-    return [LOCAL_PREFIX + m["name"] for m in resp.json().get("models", [])]
+    return [LOCAL_PREFIX + m["name"] for m in get(api_base, "/api/ps", transport=transport).get("models", [])]
 
 
 def unload(api_base: str, model: str, transport: httpx.BaseTransport | None = None) -> None:

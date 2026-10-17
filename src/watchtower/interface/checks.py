@@ -11,11 +11,11 @@ from watchtower.engine.system import free_ram_pct
 
 
 def ollama_status(settings: Settings) -> tuple[bool, str]:
-    import httpx
+    from watchtower.engine import ollama_client  # review r1: the loopback client, never an environment proxy
 
     try:
-        version = httpx.get(f"{settings.ollama_url}/api/version", timeout=3).json()["version"]
-        names = {m["name"] for m in httpx.get(f"{settings.ollama_url}/api/tags", timeout=3).json()["models"]}
+        version = ollama_client.get(settings.ollama_url, "/api/version", timeout=3)["version"]
+        names = {m["name"] for m in ollama_client.get(settings.ollama_url, "/api/tags", timeout=3)["models"]}
     except Exception:
         return False, "not reachable — open the Ollama app"
     missing = sorted({m.removeprefix("ollama/") for m in settings.tiers.values()} - names)

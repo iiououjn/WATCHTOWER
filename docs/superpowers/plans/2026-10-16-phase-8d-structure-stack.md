@@ -87,6 +87,8 @@ writes, the unused `review` tier; the spec says they are deferred, not built.
   wrong: a test bug B would catch.
 - *Project and home CLAUDE.md (E-D3).* The owner's own files, outside the repo. Ruling: not touched; noted.
 - Reviews: 2 rounds (not a security change; the URL guard is defence in depth).
+- Deferred minors (review r1): a one-blank-line check between methods in class bodies, and ruff E501 at 120
+  for every file instead of the hand-made `SPLIT` subset. Both widen a style rule beyond this batch's splits.
 
 ## Review Focus
 
@@ -128,3 +130,16 @@ writes, the unused `review` tier; the spec says they are deferred, not built.
   and deps, ruff in CI and clean, docs claims).
 - Count: 1259 passed on main before 8d; 1336 passed after (`uv run pytest -q`). The rise is the per-file
   structure checks; 28 tests of removed code are gone.
+
+## Review r1
+
+- Important: the client honoured `HTTP_PROXY`/`ALL_PROXY` and the macOS system proxy (httpx `trust_env=True`),
+  so a prompt for 127.0.0.1 could go to a proxy host. Every Ollama call now builds its client with
+  `trust_env=False`, and doctor's `ollama_status` goes through the same client (and its loopback guard).
+  Tests: a proxy in the environment, and the request must use the direct transport (chat, resident, unload,
+  doctor); mutation (guard removed) fails both.
+- Minor, fixed: a test drives `ModelSocket` with no `completion_fn` into the real client over a mock transport
+  and checks num_ctx, num_predict, JSON format, URL and timeout (mutation: a renamed kwarg fails it).
+- Minor, fixed: test files are held under 500 lines too; `test_qafloor.py` (511) split, its live-app escaping
+  tests now in `test_qafloor_live.py` (49 tests before and after).
+- Minor, fixed: `click>=8` declared (E-D1), lock updated.

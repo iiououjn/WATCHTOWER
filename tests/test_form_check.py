@@ -2,7 +2,7 @@
 and classifies contract fields by their name parts (run 24: 'new_item' got no tower checks)."""
 from watchtower.floors.f4_qa_deploy.contract import contract_checks
 from watchtower.floors.f4_qa_deploy.qafloor import parse_checks
-from test_qafloor import ECHO_APP, _live
+from test_qafloor_live import ECHO_APP, _live
 
 LIST = {"method": "GET", "path": "/", "fields": [], "shows": "all items"}
 FORM = '<form method="post" action="/add"><input name="item"><button>Add</button></form>'

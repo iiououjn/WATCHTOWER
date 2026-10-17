@@ -119,3 +119,64 @@ def test_litellm_is_gone_from_the_code_and_the_dependencies():
     assert not any(d.startswith("litellm") for d in project["project"]["dependencies"])
     assert 'name = "litellm"' not in (ROOT / "uv.lock").read_text()
     assert not [p for p in (ROOT / "src").rglob("*.py") if re.search(r"^\s*(import|from) litellm", p.read_text(), re.M)]
+
+
+PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+
+
+@pytest.fixture
+def proxied(monkeypatch):
+    """A proxy in the environment, and an httpx.Client that answers itself but records which transport (direct or
+    a proxy mount) each request would have used. Nothing is sent anywhere."""
+    for var in PROXY_VARS:
+        monkeypatch.setenv(var, "http://10.9.9.9:3128")
+    for var in ("NO_PROXY", "no_proxy"):
+        monkeypatch.delenv(var, raising=False)
+    routes = []
+
+    class Spy(httpx.Client):
+        def send(self, request, **kw):
+            routes.append(self._transport_for_url(request.url) is self._transport)
+            body = {"version": "0.32", "models": [], **REPLY}
+            return httpx.Response(200, json=body, request=request)
+
+    monkeypatch.setattr(httpx, "Client", Spy)
+    return routes
+
+
+def test_an_environment_proxy_never_carries_a_prompt(proxied):  # review r1: trust_env=True obeyed HTTP_PROXY
+    ollama_client.chat(model="ollama/llama3.2:3b", messages=[{"role": "user", "content": "secret"}],
+                       api_base="http://127.0.0.1:11434", timeout=5)
+    ollama_client.resident("http://127.0.0.1:11434")
+    ollama_client.unload("http://127.0.0.1:11434", "ollama/llama3.2:3b")
+    assert proxied == [True, True, True]
+
+
+def test_doctor_asks_ollama_directly_too(proxied, settings):
+    from watchtower.interface.checks import ollama_status
+    ok, _ = ollama_status(settings)
+    assert ok and proxied == [True, True]
+
+
+def test_the_socket_hands_the_real_client_kwargs_it_accepts(conn, settings, monkeypatch):
+    """Review r1: every socket test injects completion_fn, so a renamed keyword (a TypeError, read as 'Is Ollama
+    running?') would pass the suite. Here the socket drives the real client over a mock transport."""
+    sent = []
+    mock = transport(sent, body={**REPLY, "message": {"content": '{"ok": 1}'}})
+
+    class Mocked(httpx.Client):
+        def __init__(self, **kw):
+            super().__init__(**{**kw, "transport": mock})
+
+    monkeypatch.setattr(httpx, "Client", Mocked)
+    budget = Budget(conn)
+    budget.open("j", max_tokens=1000, max_seconds=60, max_usd=1.0)
+    sock = ModelSocket(settings, budget, AuditLog(conn), resident_fn=lambda: [], free_ram_fn=lambda: 100)
+    assert sock.ask("small", [{"role": "user", "content": "hi"}], "j").text == '{"ok": 1}'
+    assert sock.ask_json("small", [{"role": "user", "content": "hi"}], "j") == {"ok": 1}
+    plain, as_json = (json.loads(r.content) for r in sent)
+    limits = {"num_ctx": settings.num_ctx, "num_predict": min(settings.max_output_tokens, 1000)}
+    assert plain["options"] == limits and "format" not in plain
+    assert as_json["format"] == "json" and as_json["options"]["num_ctx"] == settings.num_ctx
+    assert str(sent[0].url) == settings.ollama_url.rstrip("/") + "/api/chat"
+    assert sent[0].extensions["timeout"]["read"] == min(settings.call_timeout_s, 60)
