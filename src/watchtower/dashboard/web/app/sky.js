@@ -61,7 +61,7 @@ export function createSky(scene, renderer) {
   scene.add(dir, dir.target, moonLight, hemi); dir.target.position.set(0, 12, 0);
   scene.fog = new THREE.FogExp2(0x9fb8d6, 0.00045);
 
-  const tmp = new THREE.Color(), warm = new THREE.Color(1, 0.55, 0.32);
+  const tmp = new THREE.Color(), warm = new THREE.Color(1, 0.55, 0.32), cA = new THREE.Color(), cB = new THREE.Color(), CP = [new THREE.Color(0xffc9a0), new THREE.Color(1, 0.62, 0.45), new THREE.Color(0.55, 0.35, 0.45), new THREE.Color(0xa6bfdc)];
   function update(hour, p, time, camPos) {
     const el = sunElevation(hour), az = sunAzimuth(hour), dl = daylight(hour), low = 1 - smooth(0, 22, Math.abs(el));
     sunDir.setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - el), THREE.MathUtils.degToRad(az));
@@ -69,14 +69,14 @@ export function createSky(scene, renderer) {
     su.sunPosition.value.copy(sunDir); su.turbidity.value = p.turbidity; su.rayleigh.value = p.rayleigh * (0.35 + 0.65 * dl) + 0.05; su.mieCoefficient.value = p.mie; su.mieDirectionalG.value = 0.82;
     dir.position.copy(sunDir).multiplyScalar(120).add(dir.target.position); dir.intensity = 2.4 * smooth(-4, 14, el); dir.color.copy(tmp.set(0xfff4e0).lerp(warm, low * 0.8));
     moonLight.position.copy(moonDir).multiplyScalar(100); moonLight.intensity = 0.3 * (1 - dl); if (!scene.userData.photo) scene.environmentIntensity = lerp(0.1, 0.6, dl);
-    hemi.intensity = lerp(0.2, 0.6, dl); hemi.color.set(0x9ec0ff).lerp(new THREE.Color(0xffc9a0), low * 0.5); hemi.groundColor.set(0x3a342c);
+    hemi.intensity = lerp(0.2, 0.6, dl); hemi.color.set(0x9ec0ff).lerp(CP[0], low * 0.5); hemi.groundColor.set(0x3a342c);
     stars.material.opacity = clamp(1.2 - dl * 1.8, 0, 1); stars.visible = stars.material.opacity > 0.01 && !scene.userData.photo; stars.rotation.y = time * 0.002;
     moon.position.copy(moonDir).multiplyScalar(18000); moon.material.opacity = clamp(1.4 - dl * 2.2, 0, 1); moon.visible = moon.material.opacity > 0.01 && !scene.userData.photo;
     const cu = clouds.material.uniforms; cu.uTime.value = time; cu.uCover.value = p.cover; cu.uSoft.value = p.soft; cu.uSun.value.copy(sunDir); cu.uCam.value.copy(camPos);
-    cu.uLit.value.set(1, 1, 1).lerp(new THREE.Color(1, 0.62, 0.45), low * 0.85).multiplyScalar(lerp(0.07, 1, dl));
-    cu.uShade.value.set(0.52, 0.58, 0.72).lerp(new THREE.Color(0.55, 0.35, 0.45), low * 0.7).multiplyScalar(lerp(0.05, 0.9, dl));
+    cu.uLit.value.set(1, 1, 1).lerp(CP[1], low * 0.85).multiplyScalar(lerp(0.07, 1, dl));
+    cu.uShade.value.set(0.52, 0.58, 0.72).lerp(CP[2], low * 0.7).multiplyScalar(lerp(0.05, 0.9, dl));
     clouds.position.x = camPos.x; clouds.position.z = camPos.z;
-    const fog = scene.fog; fog.color.set(0x07091a).lerp(new THREE.Color(0xa6bfdc), smooth(-6, 14, el)).lerp(warm, low * 0.45 * smooth(-4, 8, el)).lerp(tmp.set(p.fog), 0.45); fog.density = p.fogDensity;
+    const fog = scene.fog; fog.color.set(0x07091a).lerp(CP[3], smooth(-6, 14, el)).lerp(warm, low * 0.45 * smooth(-4, 8, el)).lerp(tmp.set(p.fog), 0.45); fog.density = p.fogDensity;
     refreshEnv(sunDir, p, hour);
     renderer.toneMappingExposure = lerp(0.95, 0.8, dl) * p.exposure;
     return { dl, el, sunDir, fogColor: fog.color };

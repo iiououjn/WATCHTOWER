@@ -24,13 +24,14 @@ export function createHud(root, api) {
   bar.append(places, floors, ctl);
   root.append(top, bar, tip); paint();
 
+  let lastClock = '', lastTip = '';
   return {
     setBackdrops(names) {   // the owner's own photos, as extra places
       for (const [id, b] of [...placeBtns]) if (id.startsWith('photo:')) { b.remove(); placeBtns.delete(id); }
       names.forEach((n) => addPlace('photo:' + n, n.replace(/\.[^.]+$/, '').slice(0, 18)));
     },
     setPlace(id) { placeBtns.forEach((b, k) => b.classList.toggle('on', k === id)); },
-    setHour(hour, live) { slider.value = String(hour); const hh = Math.floor(hour) % 24, mm = Math.floor((hour % 1) * 60); clock.textContent = String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0'); toggles.live.on = live; paint(); },
+    setHour(hour, live) { const key = Math.floor(hour * 60) + (live ? 'L' : 'M'); if (key === lastClock) return; lastClock = key; slider.value = String(hour); const hh = Math.floor(hour) % 24, mm = Math.floor((hour % 1) * 60); clock.textContent = String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0'); toggles.live.on = live; paint(); },
     setFloor(k) { floors.querySelectorAll('.wt-floor').forEach((b, i) => b.classList.toggle('on', i === k + 1)); },
     setState(s, awakeCount) {
       const run = s.jobs.filter((j) => j.status === 'running').length, wait = s.jobs.filter((j) => j.status === 'paused').length;
@@ -42,7 +43,7 @@ export function createHud(root, api) {
     },
     tooltip(x, y, person, working) {
       if (!person) { tip.hidden = true; return; }
-      tip.replaceChildren(h('b', null, person.role.title), h('span', null, `${person.role.id}  |  ${working ? 'working' : 'idle'}`));
+      const tk = person.role.id + working; if (tk !== lastTip) { lastTip = tk; tip.replaceChildren(h('b', null, person.role.title), h('span', null, `${person.role.id}  |  ${working ? 'working' : 'idle'}`)); }
       tip.hidden = false; tip.style.setProperty('--x', Math.min(x + 16, innerWidth - 260) + 'px'); tip.style.setProperty('--y', Math.max(8, y - 10) + 'px');
     },
     note(text) { stats.textContent = text; },
