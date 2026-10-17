@@ -79,7 +79,7 @@ function setPlace(id) {
   scene.background = null; scene.userData.photo = false; sky.restoreEnv(); sky.sky.visible = sky.clouds.visible = true; place = id; hud.setPlace(id);
   if (id.startsWith('photo:')) {
     const mine = photoLoad; photoName = id.slice(6); env = createEnv('ocean', { scene }); scene.add(env.group);
-    new THREE.TextureLoader().load('/backdrops/' + encodeURIComponent(photoName), (t) => {
+    new THREE.TextureLoader().load('backdrops/' + encodeURIComponent(photoName), (t) => {
       if (place !== id || mine !== photoLoad) { t.dispose(); return; }
       if (t.image && t.image.width > 8192) { t.dispose(); hud.note('that photo is wider than 8192 px; please use a smaller one'); return; }
       t.mapping = THREE.EquirectangularReflectionMapping; t.colorSpace = THREE.SRGBColorSpace; scene.background = t; scene.environment = t; scene.userData.photo = true; sky.sky.visible = sky.clouds.visible = sky.stars.visible = sky.moon.visible = false; photoTex = t;
@@ -94,7 +94,7 @@ function focusFloor(k) {
   const from = { t: controls.target.clone(), d: camera.position.distanceTo(controls.target), p: camera.position.clone() }, y = k < 0 ? 15 : floorY(k) + 1.7, dist = k < 0 ? 52 : 15.5;
   focus = { t0: performance.now(), from, to: new THREE.Vector3(0, y, 0), dist };
 }
-fetch('/api/backdrops', { headers: { 'X-Watchtower': '1' }, cache: 'no-store' }).then((r) => r.json()).then((n) => hud.setBackdrops(n)).catch(() => {});
+if (!window.WT_DEMO_STATE) fetch('api/backdrops', { headers: { 'X-Watchtower': '1' }, cache: 'no-store' }).then((r) => r.json()).then((n) => hud.setBackdrops(n)).catch(() => {});
 
 function onState(s) {
   act = activity(s); running = s.jobs.some((j) => j.status === 'running'); hud.setState(s, act.awake.size);
