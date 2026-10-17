@@ -167,3 +167,16 @@ def test_a_job_paused_before_its_first_checkpoint_fails_on_resume(env):
     assert out.status == "failed" and "start a new job" in out.reason
     assert jobs.get(job.id).status == "failed"
     assert model.calls == {"plan": 0, "answer": 0}
+
+
+def test_the_recorded_error_location_ignores_code_that_only_lives_in_a_folder_called_watchtower(env):
+    """A checkout named .../watchtower/ (as on GitHub) must not make test or user files count as the tower's own frames."""
+    runner, jobs, bus, model, unloaded, job = env
+    scope: dict = {}
+    exec(compile("def boom():\n    raise ValueError('x')\n", "/home/runner/work/watchtower/watchtower/tests/fake_test.py", "exec"), scope)
+    try:
+        scope["boom"]()
+    except ValueError as e:
+        runner._record_error(job.id, e)
+    where = bus.events(job_id=job.id, topic="job.error")[-1].detail["where"]
+    assert where == "fake_test.py:2"   # not the tower's own code, so only the file name is shown, never a path made to look like the package's
