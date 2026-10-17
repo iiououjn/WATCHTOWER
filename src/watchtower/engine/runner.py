@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import os
 import signal
 import sqlite3
 import threading
@@ -195,8 +196,15 @@ class JobRunner:
     def _record_error(self, job_id: str, error: Exception) -> None:
         """Where the tower's own code raised (the last frame inside the package), for the owner and the audit."""
         frames = traceback.extract_tb(error.__traceback__)
-        frame = ([f for f in frames if "/watchtower/" in f.filename] or frames or [None])[-1]
-        where = f"{frame.filename.rsplit('/watchtower/', 1)[-1]}:{frame.lineno}" if frame else "?"
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.sep   # the installed package, not any folder that happens to be named watchtower
+        own = [f for f in frames if os.path.abspath(f.filename).startswith(root)]
+        frame = (own or frames or [None])[-1]
+        if frame is None:
+            where = "?"
+        elif own:
+            where = f"{os.path.abspath(frame.filename)[len(root):]}:{frame.lineno}"
+        else:
+            where = f"{os.path.basename(frame.filename)}:{frame.lineno}"
         try:
             self._bus.publish("job.error", {"type": type(error).__name__, "error": str(error)[:300], "where": where},
                               job_id)
