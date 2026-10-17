@@ -44,6 +44,7 @@ const angDiff = (a, b) => { let d = (b - a) % (Math.PI * 2); if (d > Math.PI) d 
 export function updatePerson(P, dt, t, awake, points) {
   const g = P.group, k = 1 - Math.exp(-dt * 9), speed = 1.15;
   let want = null, moving = false;
+  if (P.idleSit) { P.wait -= dt; if (P.wait <= 0 || awake) { P.idleSit = false; P.wait = 2 + P.r() * 4; } }   // an idle sitter gets up again after a while
   const sitHere = P.seat && (awake || P.idleSit);
   if (sitHere) want = P.seat.pos;
   else if (P.target) want = P.target;

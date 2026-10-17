@@ -51,6 +51,7 @@ export function bumpFrom(tex) { const t = tex.clone(); t.colorSpace = THREE.NoCo
 
 const labelCache = new Map();
 export function labelSprite(text, hue = 210, scale = 1) {   // a name tag that always faces the camera
+  if (labelCache.size > 80) labelCache.clear();
   const key = text + '|' + hue; let tex = labelCache.get(key);
   if (!tex) {
     tex = canvasTexture(320, 72, (g, w, h) => {
@@ -73,5 +74,5 @@ export function cyl(rt, rb, h, m, x = 0, y = 0, z = 0, parent, seg = 20) {
   const c = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), m); c.position.set(x, y, z); c.castShadow = c.receiveShadow = true; if (parent) parent.add(c); return c;
 }
 export function disposeTree(o) {
-  o.traverse((n) => { if (n.geometry) n.geometry.dispose(); const ms = n.material ? [].concat(n.material) : []; ms.forEach((m) => { for (const k in m) if (m[k] && m[k].isTexture && !m[k].userData.keep) m[k].dispose(); m.dispose(); }); });
+  o.traverse((n) => { if (n.isInstancedMesh) n.dispose(); if (n.geometry) n.geometry.dispose(); const ms = n.material ? [].concat(n.material) : []; ms.forEach((m) => { for (const k in m) if (m[k] && m[k].isTexture && !m[k].userData.keep) m[k].dispose(); m.dispose(); }); });
 }

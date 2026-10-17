@@ -91,3 +91,28 @@ def test_an_oversized_backdrop_is_refused(served, settings, monkeypatch):
     (settings.home / "backdrops" / "big.png").write_bytes(PNG + b"0" * 200)
     assert json.loads(_get(served, "/api/backdrops")[1]) == []
     assert _get(served, "/backdrops/big.png")[0].status == 404
+
+
+def test_every_listed_backdrop_loads_through_the_url_the_page_builds(served, settings):
+    from urllib.parse import quote
+    d = settings.home / "backdrops"
+    (d / "my sunset.png").write_bytes(PNG)          # a space can never round-trip through an undecoded path, so it is not listed
+    (d / "Tokyo_dawn-2.JPG").write_bytes(JPG)
+    names = json.loads(_get(served, "/api/backdrops")[1])
+    assert names == ["Tokyo_dawn-2.JPG"]
+    for n in names:
+        assert quote(n, safe="") == n and _get(served, "/backdrops/" + quote(n, safe=""))[0].status == 200
+
+
+def test_a_js_symlink_inside_web_that_points_outside_is_refused_and_so_is_an_oversized_module(tmp_path, monkeypatch):
+    from watchtower.dashboard import assets
+    web = tmp_path / "web"
+    (web / "app").mkdir(parents=True)
+    (tmp_path / "secret.js").write_text("export const k = 'secret'")
+    (web / "app" / "link.js").symlink_to(tmp_path / "secret.js")
+    (web / "app" / "ok.js").write_text("export const a = 1")
+    (web / "app" / "big.js").write_text("x" * 50)
+    monkeypatch.setattr(assets, "WEB", web)
+    assert assets.read_static("app/link.js") is None and assets.read_static("app/ok.js") is not None
+    monkeypatch.setattr(assets, "MAX_STATIC", 10)
+    assert assets.read_static("app/big.js") is None

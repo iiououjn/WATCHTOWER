@@ -20,7 +20,7 @@ APP = WEB / "app"
 VENDOR = WEB / "vendor" / "three"
 NODE = shutil.which("node")
 needs_node = pytest.mark.skipif(not NODE, reason="node is not installed")
-BANNED = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "setAttribute('style'", ".href", "http://", "https://", "XMLHttpRequest", "WebSocket", "localStorage", "import(")
+BANNED = ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "setAttribute('style'", ".href", "http://", "https://", "XMLHttpRequest", "DOMParser", "createContextualFragment", "srcdoc", "WebSocket", "localStorage", "import(")
 
 
 @pytest.fixture
@@ -99,6 +99,7 @@ def test_app_code_never_writes_html_loads_remote_files_or_stores_anything():
         for banned in BANNED:
             assert banned not in text, f"{f.name} uses {banned}"
         assert len(text.splitlines()) < 500, f"{f.name} is over 500 lines"
+        assert not re.search(r"\.setAttribute\((?!'(position|normal|uv|color|aria-label)')", text), f"{f.name} sets a DOM attribute"
 
 
 def test_every_place_has_a_builder_a_name_a_view_and_a_light():

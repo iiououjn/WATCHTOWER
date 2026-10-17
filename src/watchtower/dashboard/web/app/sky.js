@@ -70,8 +70,8 @@ export function createSky(scene, renderer) {
     dir.position.copy(sunDir).multiplyScalar(120).add(dir.target.position); dir.intensity = 2.4 * smooth(-4, 14, el); dir.color.copy(tmp.set(0xfff4e0).lerp(warm, low * 0.8));
     moonLight.position.copy(moonDir).multiplyScalar(100); moonLight.intensity = 0.3 * (1 - dl); if (!scene.userData.photo) scene.environmentIntensity = lerp(0.1, 0.6, dl);
     hemi.intensity = lerp(0.2, 0.6, dl); hemi.color.set(0x9ec0ff).lerp(new THREE.Color(0xffc9a0), low * 0.5); hemi.groundColor.set(0x3a342c);
-    stars.material.opacity = clamp(1.2 - dl * 1.8, 0, 1); stars.visible = stars.material.opacity > 0.01; stars.rotation.y = time * 0.002;
-    moon.position.copy(moonDir).multiplyScalar(18000); moon.material.opacity = clamp(1.4 - dl * 2.2, 0, 1); moon.visible = moon.material.opacity > 0.01;
+    stars.material.opacity = clamp(1.2 - dl * 1.8, 0, 1); stars.visible = stars.material.opacity > 0.01 && !scene.userData.photo; stars.rotation.y = time * 0.002;
+    moon.position.copy(moonDir).multiplyScalar(18000); moon.material.opacity = clamp(1.4 - dl * 2.2, 0, 1); moon.visible = moon.material.opacity > 0.01 && !scene.userData.photo;
     const cu = clouds.material.uniforms; cu.uTime.value = time; cu.uCover.value = p.cover; cu.uSoft.value = p.soft; cu.uSun.value.copy(sunDir); cu.uCam.value.copy(camPos);
     cu.uLit.value.set(1, 1, 1).lerp(new THREE.Color(1, 0.62, 0.45), low * 0.85).multiplyScalar(lerp(0.07, 1, dl));
     cu.uShade.value.set(0.52, 0.58, 0.72).lerp(new THREE.Color(0.55, 0.35, 0.45), low * 0.7).multiplyScalar(lerp(0.05, 0.9, dl));

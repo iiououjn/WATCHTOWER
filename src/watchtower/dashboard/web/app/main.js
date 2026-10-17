@@ -74,6 +74,7 @@ const hourNow = () => { if (manual !== null) return manual; const d = new Date()
 
 function setPlace(id) {
   if (env) { scene.remove(env.group); env.dispose && env.dispose(); disposeTree(env.group); env = null; }
+  if (photoTex) { photoTex.dispose(); photoTex = null; }
   scene.background = null; scene.userData.photo = false; sky.restoreEnv(); sky.sky.visible = sky.clouds.visible = true; place = id; hud.setPlace(id);
   if (id.startsWith('photo:')) {
     photoName = id.slice(6); env = createEnv('ocean', { scene }); scene.add(env.group);

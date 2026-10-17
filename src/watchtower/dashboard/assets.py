@@ -10,7 +10,7 @@ WEB = Path(__file__).parent / "web"
 MAX_STATIC = 4 * 1024 * 1024
 MAX_BACKDROP = 30 * 1024 * 1024
 _PART = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")
-_BACKDROP = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._ -]{0,78}\.(jpe?g|png|webp)$", re.I)
+_BACKDROP = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]{0,78}\.(jpe?g|png|webp)$", re.I)
 
 
 def _inside(path: Path, root: Path) -> Path | None:
