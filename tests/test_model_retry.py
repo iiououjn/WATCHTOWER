@@ -88,7 +88,7 @@ def test_the_budget_is_checked_again_before_a_retry(conn, settings):
 
     class SpentError(ConnectionError):
         def __init__(self):
-            budget.charge("j", seconds=600)  # the time cap ran out while the call failed
+            budget.record("j", seconds=600)  # the time cap ran out while the call failed
             super().__init__("reset")
     sock, calls = socket(conn, settings, [], sleeps, budget=budget)
     sock._complete = lambda **kw: (calls.append(kw), (_ for _ in ()).throw(SpentError()))
@@ -154,7 +154,7 @@ def test_charging_a_failed_call_never_hides_its_error(conn, settings):
 def test_a_reply_that_overshoots_the_budget_is_kept(conn, settings):
     budget = Budget(conn)
     budget.open("o", max_tokens=1000, max_seconds=600, max_usd=0.0)
-    budget.charge("o", tokens=990)
+    budget.record("o", tokens=990)
     sock = ModelSocket(settings, budget, AuditLog(conn), completion_fn=lambda **kw: fake_response("good", 4990, 10),
                        unload_fn=lambda m: None, resident_fn=lambda: [], free_ram_fn=lambda: 100)
     assert sock.ask("small", [{"role": "user", "content": "x"}], "o").text == "good"  # paid for: kept

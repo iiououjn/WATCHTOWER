@@ -62,10 +62,6 @@ class WorkPackage:
     def to_dict(self) -> dict:
         return asdict(self)
 
-    @classmethod
-    def from_dict(cls, d: dict) -> "WorkPackage":
-        return cls(**d)
-
     def validate(self) -> list[str]:
         problems = []
         if not self.summary.strip():

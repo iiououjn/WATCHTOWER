@@ -88,11 +88,6 @@ def test_truthy(value, expected):
     assert truthy(value) is expected
 
 
-def test_package_round_trip():
-    pkg = WorkPackage("f1", "s", [], ["u"], [{"pass": True}], [])
-    assert WorkPackage.from_dict(pkg.to_dict()) == pkg
-
-
 def test_lead_sees_reference_data_for_the_goal():
     s = Script({"f1.lead": [{"tasks": ["A"]}], "f1.worker": [{"result": "r", "sources": []}],
                 "f1.hr": [{"pass": True}]})

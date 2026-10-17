@@ -110,3 +110,21 @@ writes, the unused `review` tier; the spec says they are deferred, not built.
 10. Structure test (file length, blank lines, removed modules and deps).
 11. Docs: README, CONTRIBUTING, spec deferred list.
 12. Dead code sweep; record what was removed and the before/after test count here.
+
+## Removed (task 12 log)
+
+- Modules: `engine/tools/` (ToolHub), `engine/governor/secrets.py` (SecretStore), `engine/memory.py`
+  (ContextStore), `tower.py` (now the `tower/` package). Dependencies: litellm, mcp, keyring (and their locked
+  transitive packages). Config: the `review` tier, `Role.tools` and every `tools: []` line.
+- Dead code found by the sweep (no production caller): `Budget.charge` (production records, then `check`s; the
+  `before_call` switch went with it), `WorkPackage.from_dict`, and the `tower` package's unused re-exports
+  (`AppRejected`, `spec_text`).
+- Tests removed with the code they tested (28 functions): `test_tool_hub.py` (10, with the `echo_mcp_server`
+  fixture), `test_secrets.py` (5), `test_memory.py` (5), the scheduler's context save/restore tests (4), the
+  runner's context-restore test (1), the litellm banner and error-classification tests (2), and
+  `test_package_round_trip` (1).
+  `test_charge_within_limits` became `test_record_within_limits`; the cap tests now `record` then `check`.
+- Added: `test_ollama_client.py`, `test_structure.py` (file length and blank lines per src file, removed modules
+  and deps, ruff in CI and clean, docs claims).
+- Count: 1259 passed on main before 8d; 1336 passed after (`uv run pytest -q`). The rise is the per-file
+  structure checks; 28 tests of removed code are gone.
