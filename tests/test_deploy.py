@@ -64,6 +64,19 @@ def test_deploy_refuses_a_release_the_owner_never_signed_off(setup):
     assert "watchtower run" in str(err.value) and "approve" not in str(err.value)
 
 
+def test_deploy_refuses_when_a_newer_signoff_was_rejected_or_is_pending(setup, conn):
+    """8e: an old approval does not stand once the owner rejected a newer sign-off, or one is still waiting."""
+    dep, docker, _ = setup()
+    approvals = Approvals(conn)
+    approvals.decide(approvals.request("job1", "signoff", "changed app"), False)
+    with pytest.raises(DeployError, match="current owner sign-off"):
+        dep.deploy("job1")
+    approvals.request("job1", "signoff", "again")
+    with pytest.raises(DeployError, match="current owner sign-off"):
+        dep.deploy("job1")
+    assert docker.calls == []
+
+
 def test_deploy_builds_offline_and_runs_isolated_on_localhost(setup):
     dep, docker, _ = setup()
     d = dep.deploy("job1")
