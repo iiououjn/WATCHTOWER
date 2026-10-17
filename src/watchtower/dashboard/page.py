@@ -1,14 +1,24 @@
 """9a: the dashboard page. One static template; every value from the tower is put on the page with textContent,
 never as HTML, so model or app text cannot run as markup or script. The nonce lets only this script and style run."""
 
-from watchtower.dashboard.scene import SCENE_JS
-
 CSS = """
 :root{color-scheme:dark;--bg:#0e1420;--panel:#16202f;--line:#26344a;--text:#e6ecf5;--dim:#8da0ba;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--beam:#fde68a}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,sans-serif}
 h1{font-size:18px;margin:0}h2{font-size:13px;margin:0 0 8px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
-html,body{height:100%;overflow:hidden}#scene{position:fixed;inset:0;width:100vw;height:100vh;display:block}
-#ledger{position:fixed;right:14px;top:14px;max-width:min(560px,calc(100vw - 28px));max-height:calc(100vh - 28px);overflow:auto;background:rgba(10,14,30,.88);border:1px solid var(--line);border-radius:10px;padding:8px 12px;backdrop-filter:blur(6px)}
+html,body{height:100%;overflow:hidden}#stage{position:fixed;inset:0}#stage canvas{display:block;width:100vw;height:100vh}
+#hud{position:fixed;inset:0;pointer-events:none;z-index:5;font:13px/1.4 system-ui,sans-serif}#hud>*{pointer-events:auto}
+.wt-top{position:absolute;left:14px;top:12px;max-width:min(420px,calc(100vw - 150px));padding:10px 14px;background:rgba(8,14,34,.55);border:1px solid rgba(160,190,255,.25);border-radius:12px;backdrop-filter:blur(8px)}
+.wt-title{font-weight:800;font-size:17px;letter-spacing:.04em}.wt-stats{color:#c3d2ee;font-size:12px}.wt-stats.bad{color:var(--bad)}
+.wt-jobs{display:flex;flex-direction:column;gap:6px;margin-top:8px}.wt-job{display:flex;flex-direction:column;padding:6px 9px;border-radius:8px;background:rgba(8,14,34,.6);border:1px solid rgba(160,190,255,.25)}
+.wt-job b{font:700 11px ui-monospace,Menlo,monospace;color:#fde68a}.wt-job span{font-size:11px;color:#d3def2}
+.wt-bar{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);display:flex;flex-direction:column;gap:7px;align-items:center;width:min(980px,calc(100vw - 24px))}
+.wt-row{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;align-items:center;padding:6px 8px;background:rgba(8,14,34,.55);border:1px solid rgba(160,190,255,.22);border-radius:14px;backdrop-filter:blur(8px)}
+.wt-chip{font:600 12px system-ui,sans-serif;color:#dbe6fb;background:rgba(30,44,80,.7);border:1px solid rgba(160,190,255,.3);border-radius:99px;padding:5px 11px;cursor:pointer}
+.wt-chip:hover{background:rgba(60,84,150,.8)}.wt-chip.on{background:#3b63d8;border-color:#9db8ff;color:#fff}.wt-floor.on{background:hsl(var(--hue,210),60%,38%)}
+.wt-lbl,.wt-clock{color:#b9c9e6;font-size:12px}.wt-slider{width:min(300px,40vw);accent-color:#fbbf24}
+.wt-tip{position:fixed;left:var(--x,0);top:var(--y,0);padding:7px 11px;border-radius:9px;background:rgba(8,10,24,.94);border:1px solid #8ba7ff;display:flex;flex-direction:column;pointer-events:none;color:#fff;font-size:12px}
+.wt-tip span{color:#aab8d6}
+#ledger{position:fixed;right:14px;top:14px;z-index:9;max-width:min(560px,calc(100vw - 28px));max-height:calc(100vh - 28px);overflow:auto;background:rgba(10,14,30,.88);border:1px solid var(--line);border-radius:10px;padding:8px 12px;backdrop-filter:blur(6px)}
 #ledger summary{cursor:pointer;font-weight:600}.drawer{margin-top:10px}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:16px}
 .chip{display:inline-block;margin:2px 4px 0 0;padding:1px 7px;border-radius:99px;background:#26344a;font-size:12px}
@@ -22,10 +32,7 @@ th{color:var(--dim);font-weight:500;font-size:12px}
 JS = """
 const $ = (id) => document.getElementById(id);
 const ROSTER = %ROSTER%;
-let SCENE = { update() {} };   // the scene is optional: if it cannot start, the ledger still runs
-try {
-%SCENE%
-} catch (e) { /* no canvas, no scene */ }
+window.WT = { roster: ROSTER, state: null, listeners: [] };   // the 3D scene (a module) subscribes here; the ledger works without it
 function el(tag, text, cls) { const e = document.createElement(tag); if (text !== undefined && text !== null) e.textContent = String(text); if (cls) e.className = cls; return e; }
 function fill(node, kids) { node.replaceChildren(...kids); }
 function table(heads, rows, empty) {
@@ -52,7 +59,7 @@ function render(s) {
     [e.seq, e.ts.slice(11, 19), e.actor, e.action, cellWith(el('span', e.detail.slice(0, 200), 'mono'))]), 'No audit entries.'));
   $('chain').textContent = s.chain_ok ? 'audit chain ok' : 'AUDIT CHAIN BROKEN';
   $('chain').className = s.chain_ok ? '' : 'bad';
-  try { SCENE.update(s); } catch (e) { /* the scene must never take the ledger down */ }
+  WT.state = s; WT.listeners.forEach((f) => { try { f(s); } catch (e) { /* the scene must never take the ledger down */ } });
   $('status').textContent = 'updated ' + s.now.slice(11, 19);
 }
 async function tick() {
@@ -65,7 +72,7 @@ async function tick() {
 tick(); setInterval(tick, 3000);
 """
 
-BODY = """<canvas id="scene"></canvas>
+BODY = """<div id="stage"></div><div id="hud"></div>
 <details id="ledger"><summary>Ledger <span id="status" class="empty">loading</span> <span id="chain" class="empty"></span></summary>
 <div class="drawer"><div class="panel"><h2>Waiting for you</h2><div id="approvals"></div></div>
 <div class="panel"><h2>Jobs</h2><div id="jobs"></div></div>
@@ -74,13 +81,18 @@ BODY = """<canvas id="scene"></canvas>
 <div class="panel"><h2>Audit log</h2><div id="audit"></div></div></div></details>"""
 
 
+IMPORTMAP = ('{"imports":{"three":"/static/vendor/three/three.module.js","three/addons/":"/static/vendor/three/addons/"}}')
+
+
 def render_page(nonce: str) -> str:
     import json
 
     from watchtower.roles import load_roles
 
     roster = [{"id": r.id, "title": r.title, "floor": r.floor.replace("c-suite", "csuite")} for r in load_roles().values()]
-    js = JS.replace("%ROSTER%", json.dumps(roster).replace("<", "\\u003c")).replace("%SCENE%", SCENE_JS)
+    js = JS.replace("%ROSTER%", json.dumps(roster).replace("<", "\\u003c"))
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>The Watchtower</title><style nonce="{nonce}">{CSS}</style></head><body>{BODY}'
-            f'<script nonce="{nonce}">{js}</script></body></html>')
+            f'<script nonce="{nonce}">{js}</script>'
+            f'<script type="importmap" nonce="{nonce}">{IMPORTMAP}</script>'
+            f'<script type="module" nonce="{nonce}" src="/static/app/main.js"></script></body></html>')

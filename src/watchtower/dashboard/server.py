@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from watchtower.dashboard.assets import list_backdrops, read_backdrop, read_static
 from watchtower.dashboard.data import state
 from watchtower.dashboard.page import render_page
 
@@ -137,7 +138,7 @@ class _Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/":
             nonce = secrets.token_urlsafe(16)
-            csp = (f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; connect-src 'self'; "
+            csp = (f"default-src 'none'; script-src 'nonce-{nonce}' 'self'; style-src 'nonce-{nonce}'; img-src 'self'; connect-src 'self'; "
                    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
             return self._send(200, render_page(nonce).encode(), "text/html; charset=utf-8", {"Content-Security-Policy": csp})
         if path == "/api/state":
@@ -148,7 +149,22 @@ class _Handler(BaseHTTPRequestHandler):
             except (OSError, sqlite3.Error, ValueError, TypeError, AttributeError, KeyError, RecursionError):
                 return self._text(503, "database unavailable")  # no paths or error text leave the server
             return self._send(200, body, "application/json", {"Content-Security-Policy": "default-src 'none'"})
+        if path.startswith("/static/"):
+            hit = read_static(path[len("/static/"):])
+            return self._asset(hit)
+        if path == "/api/backdrops":
+            if self.headers.get("X-Watchtower") != "1":
+                return self._text(403, "forbidden")
+            return self._send(200, json.dumps(list_backdrops(self.server.db_path.parent / "backdrops")).encode(), "application/json",
+                              {"Content-Security-Policy": "default-src 'none'"})
+        if path.startswith("/backdrops/"):
+            return self._asset(read_backdrop(self.server.db_path.parent / "backdrops", path[len("/backdrops/"):]))
         self._text(404, "not found")
+
+    def _asset(self, hit: tuple[bytes, str] | None) -> None:
+        if hit is None:
+            return self._text(404, "not found")
+        self._send(200, hit[0], hit[1], {"Cross-Origin-Resource-Policy": "same-origin", "Content-Security-Policy": "default-src 'none'"})
 
     do_GET = do_HEAD = _serve
 

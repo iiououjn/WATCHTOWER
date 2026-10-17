@@ -1,0 +1,4 @@
+three 0.186.1
+source: npm pack three@0.186.1
+integrity: sha512-blFeqb49wRCSGUGj7gtpfnSGHy2lwDk94RhUmS1c/hTby70kvChbWpkJ4Pm1390LqzzvTmzgXKHPEafJwCb8jA==
+license: MIT (see LICENSE)
