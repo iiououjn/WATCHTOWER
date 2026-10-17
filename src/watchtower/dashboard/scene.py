@@ -17,7 +17,8 @@ const SCENE = (() => {
   const byFloor = Object.fromEntries(ORDER.map((f) => [f, staff.filter((s) => s.floor === f)]));
   const rnd = (a) => { const v = Math.sin(a * 127.1) * 43758.5453; return v - Math.floor(v); };
   const hsl = (h, s, l, a = 1) => `hsla(${h},${s}%,${l}%,${a})`;
-  let L = {};
+  let L = {}, drawn = 0;
+  const rr = (x, y, w, h, r) => { if (g.roundRect) g.roundRect(x, y, w, h, r); else g.rect(x, y, w, h); };   // old browsers get square corners
 
   function layout() {
     dpr = Math.min(2, devicePixelRatio || 1); W = innerWidth; H = innerHeight;
@@ -39,6 +40,7 @@ const SCENE = (() => {
       if (j.floor && was && was !== j.floor && L.rooms && L.rooms[was] && L.rooms[j.floor]) packets.push({ from: was, to: j.floor, t: 0, id: j.id });
       if (j.floor) prevFloor.set(j.id, j.floor);
     });
+    if (prevFloor.size > 200) prevFloor.clear();
   }
 
   function sky() {
@@ -98,7 +100,7 @@ const SCENE = (() => {
       g.fillStyle = '#1a1830'; g.fillRect(x - 28, y - 22, 56, 26); g.beginPath(); g.moveTo(x - 34, y - 22); g.lineTo(x, y - 44); g.lineTo(x + 34, y - 22); g.closePath(); g.fill();
       const w = 0.7 + 0.3 * Math.sin(T * 2 + i); g.fillStyle = `rgba(255,210,110,${w})`; g.fillRect(x - 8, y - 14, 16, 12);
       g.textAlign = 'center'; g.fillStyle = '#ffe3a1'; g.font = '600 11px ui-monospace,Menlo,monospace';
-      g.fillText(d.name.slice(0, 18), x, y + 18); g.fillStyle = '#9fb4d6'; g.fillText('127.0.0.1:' + d.port, x, y + 32);
+      g.fillText(d.name.slice(0, 18), x, y + 18); g.fillStyle = '#9fb4d6'; g.fillText(d.port ? '127.0.0.1:' + d.port : '-', x, y + 32);
     });
   }
 
@@ -170,7 +172,7 @@ const SCENE = (() => {
     const dots = '.'.repeat(1 + (Math.floor(T * 2.5 + s.i) % 3)), txt = s.title.replace(/\(.*\)/, '').trim().slice(0, 26) + dots;
     g.font = '600 10px system-ui,sans-serif'; const w = g.measureText(txt).width + 12;
     g.fillStyle = 'rgba(8,10,24,.88)'; g.strokeStyle = hsl(h, 90, 65, 0.9); g.lineWidth = 1;
-    g.beginPath(); g.roundRect(x - w / 2, y - 16, w, 16, 6); g.fill(); g.stroke();
+    g.beginPath(); rr(x - w / 2, y - 16, w, 16, 6); g.fill(); g.stroke();
     g.beginPath(); g.moveTo(x - 3, y); g.lineTo(x, y + 5); g.lineTo(x + 3, y); g.fillStyle = hsl(h, 90, 65, 0.9); g.fill();
     g.fillStyle = '#eaf2ff'; g.textAlign = 'center'; g.fillText(txt, x, y - 5);
   }
@@ -204,13 +206,13 @@ const SCENE = (() => {
     const run = state.jobs.filter((j) => j.status === 'running').length, wait = state.jobs.filter((j) => j.status === 'paused').length;
     g.font = '500 12px system-ui'; g.fillStyle = '#93a6c6'; g.fillText(`${run} running  |  ${wait} waiting for you  |  ${awake.size} agents awake  |  ${state.chain_ok === false ? 'AUDIT CHAIN BROKEN' : 'audit chain ok'}`, 22, 54);
     state.jobs.filter((j) => j.status === 'running' || j.status === 'paused').slice(0, 5).forEach((j, i) => {
-      const y = 86 + i * 44; g.fillStyle = 'rgba(10,14,34,.7)'; g.strokeStyle = 'rgba(140,170,255,.3)'; g.beginPath(); g.roundRect(22, y, 270, 36, 8); g.fill(); g.stroke();
+      const y = 86 + i * 44; g.fillStyle = 'rgba(10,14,34,.7)'; g.strokeStyle = 'rgba(140,170,255,.3)'; g.beginPath(); rr(22, y, 270, 36, 8); g.fill(); g.stroke();
       g.fillStyle = j.status === 'running' ? '#fde68a' : '#fbbf24'; g.font = '700 11px ui-monospace,Menlo,monospace'; g.fillText(j.id.slice(0, 12) + '  ' + j.status + '  ' + (j.floor ? j.floor.toUpperCase() : 'planning'), 32, y + 15);
       g.fillStyle = '#b7c5e0'; g.font = '500 11px system-ui'; g.fillText(j.prompt.slice(0, 40), 32, y + 29);
     });
     const hit = staff.find((s) => s.px && Math.abs(mouse.x - s.px) < 14 && Math.abs(mouse.y - s.py) < 28);
     if (hit) { const t = `${hit.title}  (${hit.id})  ${awake.has(hit.id) ? 'working' : 'idle'}`; g.font = '600 12px system-ui'; const w = g.measureText(t).width + 16;
-      g.fillStyle = 'rgba(8,10,24,.95)'; g.strokeStyle = '#8ba7ff'; g.beginPath(); g.roundRect(mouse.x + 14, mouse.y - 12, w, 24, 6); g.fill(); g.stroke(); g.fillStyle = '#fff'; g.textAlign = 'left'; g.fillText(t, mouse.x + 22, mouse.y + 4); }
+      g.fillStyle = 'rgba(8,10,24,.95)'; g.strokeStyle = '#8ba7ff'; g.beginPath(); rr(mouse.x + 14, mouse.y - 12, w, 24, 6); g.fill(); g.stroke(); g.fillStyle = '#fff'; g.textAlign = 'left'; g.fillText(t, mouse.x + 22, mouse.y + 4); }
   }
 
   function wander(dt) {
@@ -221,9 +223,11 @@ const SCENE = (() => {
   }
 
   function frame(ts) {
-    const dt = Math.min(0.1, (ts - last) / 1000 || 0.016); last = ts; T += dt; wander(dt);
-    sky(); land(); beam(); huts(); shell(); basement(); hud();
-    requestAnimationFrame(frame);
+    requestAnimationFrame(frame);   // re-arm first: one bad frame must not freeze the scene
+    const dt = Math.min(0.1, (ts - last) / 1000 || 0.016); last = ts; T += dt;
+    if (REDUCED && T - drawn < 0.5) return;   // reduced motion: a calm slow refresh, not 60 fps
+    drawn = T;
+    try { wander(dt); sky(); land(); beam(); huts(); shell(); basement(); hud(); } catch (e) { g.setTransform(dpr, 0, 0, dpr, 0, 0); }
   }
   addEventListener('resize', layout); cv.addEventListener('mousemove', (e) => { mouse = { x: e.clientX, y: e.clientY }; }); cv.addEventListener('mouseleave', () => { mouse = { x: -1, y: -1 }; });
   layout(); requestAnimationFrame(frame);

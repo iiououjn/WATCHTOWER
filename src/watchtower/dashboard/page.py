@@ -35,7 +35,6 @@ function table(heads, rows, empty) {
 }
 function cellWith(node) { const td = el('td'); td.append(node); return td; }
 function render(s) {
-  SCENE.update(s);
   fill($('approvals'), table(['id', 'job', 'kind', 'summary'], s.approvals.map((a) => [a.id, a.job_id, a.kind, a.summary.slice(0, 160)]),
     'Nothing waiting for you.'));
   fill($('jobs'), table(['job', 'status', 'floor', 'prompt'], s.jobs.map((j) =>
@@ -50,6 +49,7 @@ function render(s) {
     [e.seq, e.ts.slice(11, 19), e.actor, e.action, cellWith(el('span', e.detail.slice(0, 200), 'mono'))]), 'No audit entries.'));
   $('chain').textContent = s.chain_ok ? 'audit chain ok' : 'AUDIT CHAIN BROKEN';
   $('chain').className = s.chain_ok ? '' : 'bad';
+  try { SCENE.update(s); } catch (e) { /* the scene must never take the ledger down */ }
   $('status').textContent = 'updated ' + s.now.slice(11, 19);
 }
 async function tick() {
@@ -77,7 +77,7 @@ def render_page(nonce: str) -> str:
     from watchtower.roles import load_roles
 
     roster = [{"id": r.id, "title": r.title, "floor": r.floor.replace("c-suite", "csuite")} for r in load_roles().values()]
-    js = JS.replace("%ROSTER%", json.dumps(roster).replace("</", "<\\/")).replace("%SCENE%", SCENE_JS)
+    js = JS.replace("%ROSTER%", json.dumps(roster).replace("<", "\\u003c")).replace("%SCENE%", SCENE_JS)
     return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
             f'<title>The Watchtower</title><style nonce="{nonce}">{CSS}</style></head><body>{BODY}'
             f'<script nonce="{nonce}">{js}</script></body></html>')
