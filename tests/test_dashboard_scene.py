@@ -43,12 +43,32 @@ def test_the_scene_code_never_writes_html_or_loads_anything():
 
 
 def test_the_scene_reads_awake_agents_and_floors_from_the_state():
-    html = render_page("n")
-    assert "j.awake" in html and "j.floor" in html and "s.deployments" in html
+    from watchtower.dashboard.scene import SCENE_JS
+    assert "j.awake" in SCENE_JS and "j.floor" in SCENE_JS and "state.deployments" in SCENE_JS and "SCENE.update(s)" in render_page("n")
 
 
 def test_a_failing_scene_cannot_stop_the_ledger_or_the_animation_loop():
     html = render_page("n")
     assert "try { SCENE.update(s); }" in html and html.index("fill($('audit')") < html.index("SCENE.update")
     frame = html.split("function frame(ts)")[1]
-    assert frame.index("requestAnimationFrame(frame)") < frame.index("sky()")
+    assert frame.index("requestAnimationFrame(frame)") < frame.index("sky(k)")
+
+
+def test_the_page_script_is_valid_javascript(tmp_path):
+    import shutil
+    import subprocess
+
+    import pytest
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    script = re.search(r"<script nonce=\"n\">(.*)</script>", render_page("n"), re.S).group(1)
+    f = tmp_path / "page.js"
+    f.write_text(script)
+    done = subprocess.run([node, "--check", str(f)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+
+
+def test_a_scene_that_cannot_start_does_not_stop_the_ledger():
+    html = render_page("n")
+    assert "let SCENE = { update() {} };" in html and re.search(r"try \{\s*SCENE = ", html).start() < html.index("tick();")

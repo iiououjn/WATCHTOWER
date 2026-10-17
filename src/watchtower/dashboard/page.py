@@ -22,7 +22,10 @@ th{color:var(--dim);font-weight:500;font-size:12px}
 JS = """
 const $ = (id) => document.getElementById(id);
 const ROSTER = %ROSTER%;
+let SCENE = { update() {} };   // the scene is optional: if it cannot start, the ledger still runs
+try {
 %SCENE%
+} catch (e) { /* no canvas, no scene */ }
 function el(tag, text, cls) { const e = document.createElement(tag); if (text !== undefined && text !== null) e.textContent = String(text); if (cls) e.className = cls; return e; }
 function fill(node, kids) { node.replaceChildren(...kids); }
 function table(heads, rows, empty) {
