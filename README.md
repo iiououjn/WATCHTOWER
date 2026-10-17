@@ -16,7 +16,7 @@
 
 Watchtower is an **offline-capable, multi-agent pipeline** that turns a one-sentence idea into a running Python web app — researched, designed, coded, tested, security-scanned, and deployed — entirely on your local machine.
 
-Every agent runs through local [Ollama](https://ollama.com) models by default (no API keys, no cloud, no data leaves your Mac), inside a sandboxed Docker container with no internet access. You stay in the loop at every critical decision point: approving the spec, signing off the final app, and deploying it.
+Every agent runs through local [Ollama](https://ollama.com) models (no API keys, no cloud, no data leaves your Mac). The agents themselves run in the tower's own process; the code they write runs only inside a sandboxed Docker container with no internet access. You stay in the loop at every critical decision point: approving the spec, signing off the final app, and deploying it.
 
 ## Tech stack
 
@@ -24,7 +24,7 @@ Every agent runs through local [Ollama](https://ollama.com) models by default (n
 
 | Technology | What it does in Watchtower |
 |---|---|
-| **Python 3.12+** | Runtime — the entire system is Python, type-hinted throughout |
+| **Python 3.12+** | Runtime — the entire system is Python (type hints are documentation; no type checker runs) |
 | **[Ollama](https://ollama.com)** | Local LLM inference server — runs all models on-device, no API keys |
 | **[Docker](https://www.docker.com)** | Sandboxed code execution (no network, read-only mounts, tmpfs scratch) and isolated app deployment |
 | **SQLite** | Job persistence, audit log, budget tracking, knowledge store — zero-config, single-file DB |
@@ -33,24 +33,22 @@ Every agent runs through local [Ollama](https://ollama.com) models by default (n
 
 | Package | Role |
 |---|---|
-| **[LiteLLM](https://github.com/BerriAI/litellm)** | Unified LLM interface — wraps Ollama (and optionally cloud providers) with retries, JSON extraction, and token counting |
 | **[LangGraph](https://github.com/langchain-ai/langgraph)** | Stateful agent graphs with checkpointed execution — used for the workflow engine |
 | **[langgraph-checkpoint-sqlite](https://pypi.org/project/langgraph-checkpoint-sqlite/)** | SQLite-backed checkpointing so jobs can pause/resume across restarts |
-| **[MCP](https://pypi.org/project/mcp/)** (Model Context Protocol) | Tool-use protocol — agents call tools through a standardized stdio interface |
 
 ### CLI & interface
 
 | Package | Role |
 |---|---|
 | **[Typer](https://typer.tiangolo.com)** | CLI framework — all `watchtower` commands with auto-generated help |
-| **[Click](https://click.palletsprojects.com)** | Typer's backend — used directly for prompt handling during CPO questions |
+| **[Click](https://click.palletsprojects.com)** | Installed with Typer; imported directly to catch Ctrl-C during CPO questions |
 
 ### Web research (Beacon subsystem)
 
 | Package | Role |
 |---|---|
 | **[ddgs](https://pypi.org/project/ddgs/)** | DuckDuckGo search — privacy-respecting, no API key needed |
-| **[httpx](https://www.python-httpx.org)** | Async-capable HTTP client — fetches web pages, talks to Ollama API |
+| **[httpx](https://www.python-httpx.org)** | HTTP client — fetches web pages, and is the tower's only model client: one `/api/chat` call to Ollama on loopback |
 | **[trafilatura](https://trafilatura.readthedocs.io)** | Web content extraction — strips boilerplate, returns clean text from HTML |
 
 ### Security & safety
@@ -58,14 +56,14 @@ Every agent runs through local [Ollama](https://ollama.com) models by default (n
 | Package | Role |
 |---|---|
 | **[Bandit](https://bandit.readthedocs.io)** | Offline static security analysis — scans agent-generated Python code for vulnerabilities |
-| **[Keyring](https://pypi.org/project/keyring/)** | OS keychain integration for any secret storage (no plaintext `.env` files) |
 | **[PyYAML](https://pyyaml.org)** | Parses `guardrails.yaml`, role definitions, and Glass domain rules |
 
 ### Testing
 
 | Package | Role |
 |---|---|
-| **[pytest](https://docs.pytest.org)** | Test runner — 40+ test files, all mocked to run without Ollama/Docker |
+| **[pytest](https://docs.pytest.org)** | Test runner — all mocked to run without Ollama/Docker |
+| **[Ruff](https://docs.astral.sh/ruff/)** | Lint — CI runs `ruff check` before the tests |
 
 ### Build system
 
@@ -78,11 +76,10 @@ Every agent runs through local [Ollama](https://ollama.com) models by default (n
 
 | Tier | Model | Used for |
 |---|---|---|
-| `small` | `llama3.2:3b` | Quick tasks — CPO questions, Glass relevance checks, gate reviews |
+| `small` | `llama3.2:3b` | Quick tasks and reviews — CPO questions, Glass relevance checks, the dev gate, audit, CEO/CTO |
 | `work` | `qwen2.5-coder:7b` | Heavy lifting — architecture, coding, QA check generation (set `WATCHTOWER_WORK_MODEL=qwen2.5-coder:3b` for a cooler, weaker coder) |
-| `review` | `llama3.2:3b` | Audit, security review, CEO/CTO recommendations |
 
-> All models run locally via Ollama. Override the work model with `WATCHTOWER_WORK_MODEL=<model>`. No data ever leaves your machine unless you explicitly enable cloud providers through LiteLLM.
+> All models run locally via Ollama. Override the work model with `WATCHTOWER_WORK_MODEL=<model>`. The model client refuses any Ollama address that is not loopback, and no cloud client is built, so prompts never leave your machine.
 
 ## Quickstart
 
@@ -181,7 +178,7 @@ Watchtower is structured as a **five-floor tower** with a C-suite and a cross-fl
 └─────────────────────────────────────────────────┘
 ```
 
-Every floor handoff passes through a **Floor 5 gate** (deterministic rules + model review). If a gate rejects, work is sent back with feedback. The `guardrails.yaml` config controls gate rules, send-back limits, security severity thresholds, and more.
+Each dev attempt passes one **Floor 5 gate** (deterministic rules + one model review on the `small` tier) before QA; the other floor handoffs pass on each floor's own checks. If the gate or a later floor rejects, work is sent back with feedback. The `guardrails.yaml` config controls gate rules, send-back limits, security severity thresholds, and more.
 
 ### Key safety layers
 
@@ -222,7 +219,7 @@ Every floor handoff passes through a **Floor 5 gate** (deterministic rules + mod
 | `--yes` | `run`, `research` | Skip CPO questions, auto-approve the spec (you still sign off the app) |
 | `--offline` | `run`, `research` | Don't search the web |
 | `--research` | `run` | Have Floor 1 research the topic before dev |
-| `--tier <t>` | `ask` | Model tier: `small`, `work`, `review` |
+| `--tier <t>` | `ask` | Model tier: `small`, `work` |
 | `--max-tokens <n>` | `run`, `research`, `ask` | Override the default token budget |
 
 ### Environment variables
@@ -239,12 +236,22 @@ Every floor handoff passes through a **Floor 5 gate** (deterministic rules + mod
 
 ```
 src/watchtower/
-├── tower.py              # TowerPipeline — orchestrates all floors
+├── tower/                # The tower: CPO spec → floors 1-5 → CEO → sign-off
+│   ├── pipeline.py       # TowerPipeline — the workflow steps that tie the floors together
+│   ├── spec_steps.py     # CPO questions, spec, approval, Floor 1
+│   ├── dev_run.py        # DevRun — one app job's F2→F5 attempts
+│   ├── memos.py          # The door every agent goes through; memo routing
+│   ├── signoff.py        # Release text and owner sign-off
+│   └── errors.py         # NeedsOwner, SpecRejected, AppRejected
 ├── config.py             # Settings & model tier resolution
 ├── guardrails.py         # Guardrails loader & enforcement
 ├── guardrails.yaml       # Default guardrails (copy to ~/.watchtower/ to customize)
 ├── interface/
-│   └── cli.py            # Typer CLI — all user-facing commands
+│   ├── cli.py            # Typer CLI entry point — job commands
+│   ├── shell.py          # The Typer app, DB opening, output cleaning
+│   ├── checks.py         # doctor checks
+│   ├── deploy_cmds.py    # deploy, rollback, undeploy, deployments
+│   └── knowledge_cmds.py # knowledge add/search, beacon
 ├── beacon/               # Web research subsystem
 │   ├── beacon.py         # Search → fetch → Glass → knowledge pipeline
 │   ├── search.py         # DuckDuckGo search wrapper
@@ -253,22 +260,21 @@ src/watchtower/
 │   ├── netguard.py       # Network-level URL filtering
 │   └── glass_rules/      # Per-floor YAML allow/deny domain lists
 ├── engine/               # Core infrastructure
-│   ├── model_socket.py   # LiteLLM wrapper with retries, JSON extraction
+│   ├── model_socket.py   # One way to call a model: tiers, one model in RAM, retries, budget, JSON parsing
+│   ├── ollama_client.py  # Direct httpx call to Ollama's /api/chat (loopback only)
 │   ├── runner.py         # JobRunner — checkpointed workflow execution
 │   ├── sandbox.py        # Docker sandbox for code execution
 │   ├── workflow.py       # Step-based workflow with checkpointing
 │   ├── jobs.py           # Job persistence (SQLite)
 │   ├── bus.py            # Cross-floor event bus
 │   ├── knowledge.py      # Full-text search knowledge store
-│   ├── memory.py         # Context store for agent memory
-│   ├── scheduler.py      # Concurrency control
+│   ├── scheduler.py      # Agent slots (concurrency control)
 │   ├── workspace.py      # Safe file I/O for agent workspaces
 │   ├── system.py         # System health (RAM)
 │   └── governor/         # Oversight subsystem
 │       ├── audit.py      # Hash-chained audit log
 │       ├── budget.py     # Token / time / cost budgets
-│       ├── approvals.py  # Human-in-the-loop approval flow
-│       └── secrets.py    # Secret detection patterns
+│       └── approvals.py  # Human-in-the-loop approval flow
 ├── floors/               # The five floors
 │   ├── framework.py      # WorkPackage, untrusted text wrapping, helpers
 │   ├── board.py          # Tower notice board (cross-floor awareness)
@@ -279,7 +285,7 @@ src/watchtower/
 │   ├── f4_qa_deploy/     # Floor 4: QA + Docker deploy
 │   └── f5_oversight/     # Floor 5: security, audit, retrospective
 ├── csuite/               # Executive agents
-│   ├── cpo.py            # Chief Product Officer (built into tower.py)
+│   ├── cpo.py            # Chief Product Officer (driven by tower/spec_steps.py)
 │   ├── cto.py            # Chief Technology Officer
 │   └── ceo.py            # Chief Executive Officer
 └── roles/                # Agent role definitions (YAML config)
@@ -316,7 +322,8 @@ rules:
 ## Running tests
 
 ```bash
-uv run pytest               # all 40+ test files
+uv run ruff check src tests # lint, as CI does
+uv run pytest               # the whole suite
 uv run pytest tests/ -x     # stop on first failure
 ```
 

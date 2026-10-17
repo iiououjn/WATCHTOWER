@@ -82,3 +82,14 @@ def test_ruff_finds_nothing():
     out = subprocess.run([sys.executable, "-m", "ruff", "check", "--no-cache", "src", "tests"], cwd=ROOT,
                          capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stdout[-3000:]
+
+
+def test_docs_do_not_describe_removed_components_as_built():  # E-D1, E-D2, E-A3
+    readme = (ROOT / "README.md").read_text()
+    for gone in ("LiteLLM", "MCP", "Keyring", "`review`", "memory.py", "secrets.py", "tower.py "):
+        assert gone not in readme, gone
+    assert "qwen2.5-coder:7b" in (ROOT / "CONTRIBUTING.md").read_text()
+    spec = (ROOT / "docs" / "superpowers" / "specs" / "2026-10-12-watchtower-design.md").read_text()
+    assert "### Built and deferred" in spec and "LiteLLM" not in spec
+    for part in ("Tool Hub", "Governor secrets", "Memory", "tier-review"):
+        assert f"- **{part}**" in spec.split("### Built and deferred")[1].split("## 1.")[0], part

@@ -2,8 +2,23 @@
 
 - **Date:** 2026-10-12
 - **Owner:** Rishi
-- **Status:** Draft, awaiting owner review
+- **Status:** Draft master spec; each built phase follows its own plan. Parts marked *Deferred (not built)* are design intent only (see *Built and deferred* below).
 - **Type:** Architectural (master spec; each build phase gets its own spec → plan → build)
+
+### Built and deferred (as of phase 8d, 2026-10-16 audit)
+
+Built: Model Socket (direct httpx client to a loopback Ollama), Knowledge, Bus, Scheduler (agent slots), Workflow,
+Sandbox, Governor (budgets, approvals, audit log), Beacon + Glass, floors F1-F5, C-suite, CLI.
+
+Deferred, not built (removed in 8d where dead code existed):
+- **Tool Hub** (MCP tools, per-role tool permissions): agents have no tools; roles carry no tool list.
+- **Governor secrets** (macOS Keychain, scoped handles): no secret store exists.
+- **Memory** (agent context save/restore, long-term memory): agents start each call fresh; post-job lessons are
+  retro notes stored in Knowledge.
+- **tier-review**: F5 roles run on tier-small, which is a different family (llama) from tier-work (qwen).
+- **Cloud models** (tier-cloud): no cloud client is built.
+- **API, dashboard and auth** (§8), **launchd health check and auto-restart** (§4), **automatic resume after a
+  model limit** (§10), **golden-job and RAM load tests** (§11).
 
 ---
 
@@ -82,13 +97,13 @@ Code layout mirrors the lighthouse:
 
 ```
 src/watchtower/
-  engine/      Ground Engine (model_socket, memory, knowledge, bus, scheduler, workflow, sandbox,
-               workspace, tools/, governor/, db, jobs, runner)
+  engine/      Ground Engine (model_socket, ollama_client, knowledge, bus, scheduler, workflow, sandbox,
+               workspace, governor/, db, jobs, runner)
   beacon/      Beacon (search, fetcher, netguard) + glass.py with per-floor rules in glass_rules/
   floors/      framework (work package, untrusted wrappers), gate, board,
                f1_research/ f2_dev/ f3_build/ f4_qa_deploy/ f5_oversight/  (each floor's office + tools)
   roles/       role YAML per floor: f1/ f2/ f3/ f4/ f5/ csuite/ glass/
-  tower.py     wires the floors, gates, approvals and sign-off into the job workflow
+  tower/       wires the floors, gates, approvals and sign-off into the job workflow (pipeline, dev_run, ...)
   interface/   CLI (API + dashboard later)
 ```
 
@@ -102,35 +117,35 @@ A single Python service on the Mac. Nine modules, each with one job and a narrow
 
 | Module | Responsibility | v1 implementation | Swap path |
 |---|---|---|---|
-| **Model Socket** | Single interface to any LLM; routes by task tier; enforces one-local-model-in-RAM | LiteLLM + Ollama | Add Claude/Gemini/etc. via config |
-| **Memory** | Agent context save/restore on idle; long-term memory; post-job lessons | SQLite | Postgres |
+| **Model Socket** | Single interface to any LLM; routes by task tier; enforces one-local-model-in-RAM | Direct httpx client to Ollama (loopback only) | A cloud client behind the same socket (deferred) |
+| **Memory** | Agent context save/restore on idle; long-term memory; post-job lessons | *Deferred (not built)*; lessons live in Knowledge | Postgres |
 | **Knowledge (RAG)** | Searchable store of Beacon findings and project files | SQLite FTS5 (BM25) with provenance; vectors later via Ollama embeddings (Chroma dropped: RAM) | pgvector / managed vector DB |
 | **Bus** | Messages and events between floors/agents/UI | Topics written to the audit log (one ordered, tamper-evident stream any process can read) | Redis |
 | **Scheduler** | Wakes/idles agents; concurrency limit across processes; pause/resume | Custom module (file-lock slots) | Distributed workers |
 | **Workflow** | Floor-to-floor job graph, gates, send-backs, checkpoints | LangGraph + SQLite checkpointer | Postgres checkpointer |
-| **Tool Hub** | MCP servers and tools (fs, git, browser, shell) with per-floor permissions | MCP client | Same |
+| **Tool Hub** | MCP servers and tools (fs, git, browser, shell) with per-floor permissions | *Deferred (not built)* | MCP client |
 | **Sandbox** | All agent-executed code runs isolated, never on owner's real files | Docker | Cloud runners |
-| **Governor** | Budgets (tokens/time/$), approval queue, secrets, append-only audit log | SQLite + macOS Keychain | Postgres + cloud secret manager |
+| **Governor** | Budgets (tokens/time/$), approval queue, secrets, append-only audit log | SQLite (secrets: *Deferred (not built)*) | Postgres + cloud secret manager |
 
 ### Model tiers (default config, all local, $0)
 - **tier-small** (glass filters, summarizing, classifying): ~3B local model (e.g. Llama 3.2 3B / Qwen 2.5 3B).
 - **tier-work** (coding, planning): best local model that fits RAM — Qwen2.5-Coder 7B by default (the only local coder whose apps passed their own tests on 8 GB); the 3B is the cooler fallback (`WATCHTOWER_WORK_MODEL`). The model is unloaded before each Sandbox run when free RAM is low.
-- **tier-review** (F5): a *different model family* from tier-work, loaded sequentially.
-- **tier-cloud** (optional, off): Claude / Gemini / others. Requires owner approval and a per-job $ cap.
+- **tier-review** (F5): *Deferred (not built)*. F5 roles run on tier-small, already a different family from tier-work.
+- **tier-cloud** (optional, off; *Deferred (not built)*: no cloud client): Claude / Gemini / others. Requires owner approval and a per-job $ cap.
 - **Free-tier privacy rule:** providers that may train on prompts never receive private code or secrets; the Glass layers enforce this.
 
 ### Crash safety
-Every step writes a checkpoint. On crash or restart, the Scheduler resumes each job from its last good checkpoint. Health check endpoint + auto-restart (launchd in v1).
+Every step writes a checkpoint. On crash or restart, the Scheduler resumes each job from its last good checkpoint. Health check endpoint + auto-restart (launchd): *Deferred (not built)*; `watchtower resume` restarts a job by hand.
 
 ---
 
 ## 5. Floor framework (shared by every floor)
 
-- **Roles as config:** each role is a YAML file — name, model tier, allowed tools, prompt, output schema. The org chart changes without code changes.
+- **Roles as config:** each role is a YAML file — name, model tier, prompt, output schema (allowed tools: *Deferred (not built)*). The org chart changes without code changes.
 - **Per floor:** 1 **Lead** (plans, splits work), N **Workers** (execute tasks), 1 **HR** (in-floor quality and process check before handoff).
 - **Tower-wide C-suite:** **CPO** (turns the owner's prompt into a spec via clarifying questions; an app spec carries 3–6 testable acceptance criteria — one re-ask when thin, then marked tower defaults), **CTO** (approves tech choices), **CEO** (final recommendation; the owner signs off). All report to the **Owner**.
 - **HR vs F5:** HR checks quality *inside* one floor. F5 checks *across* floors plus guardrails and security.
-- **Idle agents ("breaks"):** agents exist only when the Scheduler assigns a task. On completion they persist context to Memory and go idle (no compute, no tokens). Concurrency default = 1 active thinking agent (8 GB limit), configurable.
+- **Idle agents ("breaks"):** agents exist only when the Scheduler assigns a task. On completion they go idle (context persistence: *Deferred (not built)*) (no compute, no tokens). Concurrency default = 1 active thinking agent (8 GB limit), configurable.
 - **Work package (handoff contract):** structured output of each floor — `summary`, `artifacts` (files), `sources`, `checks_run` + results, `open_questions`. Validated against a schema; invalid packages are rejected.
 - **Gate:** F5 evaluates each package → `pass` or `send_back(reasons)`. Every floor handoff (F2→F3→F4→F5) gets a deterministic F5 gate (the floor's own reality checks, recorded as gate events); one cross-family model gate then reviews the whole package against the spec and guardrails. Max send-backs come from `guardrails.yaml` (default 3), then escalate to Owner.
 
@@ -155,11 +170,11 @@ Every step writes a checkpoint. On crash or restart, the Scheduler resumes each 
 - **Budget:** within the job's token/time/$ limits.
 - **Scope:** files touched only inside the job's workspace.
 
-Each rule maps to a deterministic check where possible, and to a tier-review model judgment only where not.
+Each rule maps to a deterministic check where possible, and to a model judgment (tier-small, the F5 roles) only where not.
 
 **Toolkits:** output-type specific tool bundles plugged into F2–F4. v1 ships the **web toolkit**. Later: mobile (simulators; store publishing needs paid accounts and owner approval), CLI, API, ML, docs.
 
-**Learning:** after each job, F5 writes a short retrospective to Memory; future jobs retrieve relevant lessons.
+**Learning:** after each job, F5 writes a short retrospective to Knowledge; future jobs retrieve relevant lessons.
 
 ---
 
@@ -187,18 +202,18 @@ Each glass has floor-specific rules in `beacon/glass_rules/fN.yaml` (owner-edita
 
 ## 8. Interface
 
-- **API:** FastAPI (REST) + WebSocket for live events.
+- **API:** FastAPI (REST) + WebSocket for live events. *Deferred (not built)*.
 - **CLI:** `watchtower run "<idea>"` (whole tower), `research "<topic>"` (Floor 1 brief), `ask` (one model), `status`, `approve <id>`, `pause`, `resume`, `logs`, `budget`, `deploy`/`rollback`/`undeploy`/`deployments`, `doctor`, `knowledge`, `beacon`.
-- **Dashboard (Next.js, localhost):** animated lighthouse — floors light when active, agents shown working/idle, beacon rotates while searching. Panels: approval queue, job timeline, work packages, audit log, budget meters.
-- **Auth from day one:** local login; data model has `user` and `workspace` scoping so multi-user/SaaS needs no schema rewrite.
+- **Dashboard (Next.js, localhost), *Deferred (not built)*:** animated lighthouse — floors light when active, agents shown working/idle, beacon rotates while searching. Panels: approval queue, job timeline, work packages, audit log, budget meters.
+- **Auth from day one:** local login (*Deferred (not built)*); data model has `user` and `workspace` scoping so multi-user/SaaS needs no schema rewrite.
 
 ---
 
 ## 9. Security
 
 - Sandbox for all agent code execution; owner's files are mounted read-only and only when allowed.
-- Per-floor, per-role tool permissions (least privilege).
-- Secrets in macOS Keychain; agents receive scoped handles, never raw values in prompts.
+- Per-floor, per-role tool permissions (least privilege): *Deferred (not built)* with the Tool Hub; agents have no tools.
+- Secrets in macOS Keychain; agents receive scoped handles, never raw values in prompts. *Deferred (not built)*; Glass and F5 scan for secret patterns.
 - Web content quarantine + injection scan (Glass).
 - **Owner approval required** for: deploy outside local Docker, deleting anything outside the Sandbox, any paid model spend, publishing, network calls to new domains from build code.
 - Append-only audit log of every agent action, tool call, and decision.
@@ -207,7 +222,7 @@ Each glass has floor-specific rules in `beacon/glass_rules/fN.yaml` (owner-edita
 
 - Retries with exponential backoff for transient failures.
 - Checkpoint resume after crash.
-- Model limit / rate limit → job pauses, resumes automatically when available.
+- Model limit / rate limit → job pauses, resumes automatically when available (automatic resume: *Deferred (not built)*).
 - Budget exhausted → hard stop, owner notified.
 - Gate retry limit hit or ambiguity → escalate to Owner via approval queue.
 
@@ -215,9 +230,9 @@ Each glass has floor-specific rules in `beacon/glass_rules/fN.yaml` (owner-edita
 
 - Unit tests per Engine module.
 - Contract tests on work-package schemas.
-- Golden jobs (e.g. "build a todo app") as end-to-end tests.
+- Golden jobs (e.g. "build a todo app") as end-to-end tests. *Deferred (not built)*.
 - Red-team suite: prompt-injection pages fed to Beacon/Glass must be blocked.
-- Load check: tower stays within 8 GB RAM during a golden job.
+- Load check: tower stays within 8 GB RAM during a golden job. *Deferred (not built)*.
 
 ---
 
@@ -226,9 +241,9 @@ Each glass has floor-specific rules in `beacon/glass_rules/fN.yaml` (owner-edita
 Each phase gets its own spec → plan → implementation cycle.
 
 1. **Ground Engine**, split into three sub-phases:
-   - **1a:** Model Socket + Memory + Governor (budgets, audit log, Keychain) + CLI skeleton
+   - **1a:** Model Socket + Memory + Governor (budgets, audit log, Keychain) + CLI skeleton (Memory and Keychain removed in 8d: never used)
    - **1b:** Scheduler + Bus + Workflow checkpoints (pause/resume)
-   - **1c:** Sandbox + Tool Hub (MCP) + Knowledge (RAG)
+   - **1c:** Sandbox + Tool Hub (MCP) + Knowledge (RAG) (Tool Hub removed in 8d: never used)
 2. **Floor framework** + Gate + C-suite (CPO spec step).
 3. **Beacon + Glass + F1 Research** → first real output (research brief).
 4. **F2 → F3 → F4** with the web toolkit.
