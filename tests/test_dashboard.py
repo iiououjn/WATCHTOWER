@@ -159,3 +159,39 @@ def test_both_read_only_layers_hold_on_their_own(conn, settings):
     ro.execute("PRAGMA query_only=OFF")  # even with that layer off, the read-only open itself refuses writes
     with pytest.raises(sqlite3.OperationalError):
         ro.execute("DELETE FROM jobs")
+
+
+def _deploy(conn, name, job_id, port, status="active"):
+    conn.execute("INSERT INTO deployments(name,job_id,image,port,status,created_at) VALUES(?,?,?,?,?,'2026-10-17T10:00:00')",
+                 (name, job_id, "img:1", port, status))
+
+
+def test_active_deployments_are_listed_without_the_image(conn, settings):
+    job = _job(conn)
+    _deploy(conn, "todo", job.id, 8100)
+    _deploy(conn, "old", job.id, 8101, status="replaced")
+    deps = state(settings.db_path)["deployments"]
+    assert [d["name"] for d in deps] == ["todo"]
+    assert set(deps[0]) == {"name", "job_id", "port", "status", "created_at", "ended_at"}
+    assert deps[0]["port"] == 8100 and deps[0]["ended_at"] is None
+
+
+def test_deployment_text_is_tidied_and_the_port_is_a_number(conn, settings):
+    home = str(Path.home())
+    _deploy(conn, "a\x1b[31m" + home + "x" * 5000, "j", "8100; <b>")
+    d = state(settings.db_path)["deployments"][0]
+    assert "\x1b" not in d["name"] and home not in d["name"] and len(d["name"]) <= 2003
+    assert d["port"] == 0
+
+
+def test_the_deployments_list_is_capped(conn, settings):
+    for i in range(70):
+        _deploy(conn, f"app{i}", "j", 8000 + i)
+    assert len(state(settings.db_path)["deployments"]) == 50
+
+
+def test_the_page_has_a_deployments_panel_with_text_only_127_0_0_1_port():
+    from watchtower.dashboard.page import render_page
+    html = render_page("n")
+    assert 'id="deployments"' in html and "s.deployments" in html and "127.0.0.1:' + " in html
+    assert "<a " not in html and ".href" not in html and "innerHTML" not in html

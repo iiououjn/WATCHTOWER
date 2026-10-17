@@ -14,6 +14,7 @@ from watchtower.interface.shell import clean
 CAP = 2000
 JOBS = 20
 AUDIT = 50
+DEPLOYMENTS = 50
 WINDOW = 3000
 
 
@@ -35,6 +36,11 @@ def _num(value: object) -> int | float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value or value in (float("inf"), float("-inf")):
         return 0
     return value
+
+
+def _port(value: object) -> int:
+    """A TCP port the page can show as text: anything that is not an int in 1..65535 becomes 0."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and 0 < value < 65536 else 0
 
 
 def _tidy(value: object) -> str:
@@ -94,7 +100,12 @@ def state(db_path: Path, check_chain: bool = True) -> dict:
                     "used_seconds": round(_num(r["used_seconds"]), 1), "max_seconds": _num(r["max_seconds"])}
                    for r in conn.execute("SELECT * FROM budgets WHERE job_id IN (SELECT id FROM jobs ORDER BY created_at"
                                          " DESC LIMIT ?)", (JOBS,)).fetchall()]
-        return {"jobs": jobs, "approvals": approvals, "audit": audit, "budgets": budgets,
+        deployments = [{"name": _tidy(r["name"]), "job_id": _tidy(r["job_id"]), "port": _port(r["port"]),
+                        "status": _tidy(r["status"]), "created_at": _tidy(r["created_at"]),
+                        "ended_at": _tidy(r["ended_at"]) or None}
+                       for r in conn.execute("SELECT name, job_id, port, status, created_at, ended_at FROM deployments"
+                                             " WHERE status='active' ORDER BY id DESC LIMIT ?", (DEPLOYMENTS,)).fetchall()]
+        return {"jobs": jobs, "approvals": approvals, "audit": audit, "budgets": budgets, "deployments": deployments,
                 "chain_ok": _chain_ok(conn) if check_chain else None, "now": now()}
     finally:
         conn.close()

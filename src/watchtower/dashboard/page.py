@@ -56,6 +56,8 @@ function render(s) {
     'Nothing waiting for you.'));
   fill($('jobs'), table(['job', 'status', 'floor', 'prompt'], s.jobs.map((j) =>
     [j.id, cellWith(el('span', j.status, 's-' + j.status)), j.floor || (j.status === 'done' || j.status === 'failed' ? '-' : 'planning'), j.prompt.slice(0, 120) + (j.error ? ' | ' + j.error.slice(0, 120) : '')]), 'No jobs yet.'));
+  fill($('deployments'), table(['app', 'job', 'address', 'since'], s.deployments.map((d) =>
+    [d.name, d.job_id, d.port ? '127.0.0.1:' + d.port : '-', d.created_at.slice(0, 19)]), 'No apps deployed.'));
   fill($('budgets'), table(['job', 'tokens', 'time'], s.budgets.map((b) => {
     const m = el('div', null, 'meter'), i = el('i'); i.style.width = Math.min(100, 100 * b.used_tokens / Math.max(1, b.max_tokens)) + '%'; m.append(i);
     return [b.job_id, cellWith((() => { const d = el('div'); d.append(el('span', b.used_tokens + ' / ' + b.max_tokens, 'mono'), m); return d; })()), b.used_seconds + ' / ' + b.max_seconds + ' s'];
@@ -81,6 +83,7 @@ BODY = """<header><h1>THE WATCHTOWER</h1><span id="status" class="empty">loading
 <main><section class="panel"><h2>Lighthouse</h2><div id="tower"><div id="beacon"></div></div><div id="engine"></div></section>
 <section><div class="panel"><h2>Waiting for you</h2><div id="approvals"></div></div>
 <div class="panel"><h2>Jobs</h2><div id="jobs"></div></div>
+<div class="panel"><h2>Deployed apps</h2><div id="deployments"></div></div>
 <div class="panel"><h2>Budgets</h2><div id="budgets"></div></div>
 <div class="panel"><h2>Audit log</h2><div id="audit"></div></div></section></main>"""
 
