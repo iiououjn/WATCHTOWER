@@ -37,9 +37,10 @@ def test_the_build_writes_only_javascript_and_the_licence_and_every_import_resol
     for f in (out / "static" / "app").glob("*.js"):
         for spec in re.findall(r"from\s+'(\./[^']+)'", f.read_text()):
             assert (f.parent / spec).resolve().is_file(), f"{f.name} imports missing {spec}"
-    for spec in re.findall(r"from\s+'(three(?:/addons/[^']+)?)'", (out / "static/app/main.js").read_text()):
-        target = out / "static/vendor/three" / ("three.module.js" if spec == "three" else "addons/" + spec[len("three/addons/"):])
-        assert target.is_file(), spec
+    for f in (out / "static" / "app").glob("*.js"):
+        for spec in re.findall(r"from\s+'(three(?:/addons/[^']+)?)'", f.read_text()):
+            target = out / "static/vendor/three" / ("three.module.js" if spec == "three" else "addons/" + spec[len("three/addons/"):])
+            assert target.is_file(), f"{f.name}: {spec}"
     assert sum(p.stat().st_size for p in out.rglob("*") if p.is_file()) < 6 * 1024 * 1024
 
 
@@ -73,8 +74,12 @@ def test_the_made_up_state_has_the_real_states_shape_and_only_real_agents(tmp_pa
     assert o["paused"] > 0 and o["appr"] > 0 and o["boats"] > 0 and o["maxAwake"] >= 3
 
 
-def test_the_pages_workflow_is_least_privilege_and_builds_with_the_script():
+def test_the_pages_workflow_is_least_privilege_pinned_and_gated_by_the_checks():
     wf = (ROOT / ".github" / "workflows" / "pages.yml").read_text()
-    assert "scripts/build_demo.py" in wf and "pages: write" in wf and "id-token: write" in wf and "contents: read" in wf
-    assert "pull_request" not in wf and "secrets." not in wf
-    assert all(re.search(r"uses: [\w./-]+@v\d+", line) for line in wf.splitlines() if "uses:" in line)
+    assert "scripts/build_demo.py" in wf and "uv run pytest -q" in wf and "uv run ruff check" in wf and "permissions: {}" in wf
+    build, deploy = wf.split("  deploy:")
+    assert "contents: read" in build and "pages: write" not in build and "id-token" not in build
+    assert "pages: write" in deploy and "id-token: write" in deploy and "needs: build" in deploy and "actions/checkout" not in deploy
+    assert "pull_request" not in wf and "secrets." not in wf and "cancel-in-progress: false" in wf
+    uses = [line for line in wf.splitlines() if "uses:" in line]
+    assert len(uses) == 4 and all(re.search(r"uses: [\w./-]+@[0-9a-f]{40} # v\d+", line) for line in uses)
